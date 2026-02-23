@@ -1,0 +1,987 @@
+// prisma/schema.prisma
+// Complete schema for On-Demand Delivery Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  CUSTOMER
+  DRIVER
+}
+
+enum SuperUserRole {
+  ADMIN
+  CUSTOMER_SERVICE
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum DriverStatus {
+  INCOMPLETE
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum OrderStatus {
+  DRAFT
+  SEARCHING_DRIVER
+  DRIVER_ASSIGNED
+  DRIVER_ARRIVED
+  PICKED_UP
+  DELIVERING
+  DELIVERED
+  CANCELLED
+  REFUNDED
+  FAILED
+  DISPUTED
+}
+
+enum PaymentType {
+  COD
+  WALLET
+}
+
+enum DriverTransactionType {
+  PLATFORM_FEE
+  WITHDRAWAL
+  BONUS
+  PENALTY
+  ADJUSTMENT
+  REFUND
+}
+
+enum WalletTransactionType {
+  TOP_UP
+  ORDER_PAYMENT
+  REFUND
+  WITHDRAWAL_REQUEST
+  WITHDRAWAL_APPROVED
+  WITHDRAWAL_REJECTED
+  BONUS
+  REFERRAL_REWARD
+  ADJUSTMENT
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum ReferenceType {
+  STRIPE_TOPUP
+  ORDER
+  REFERRAL
+  WITHDRAWAL
+  ADMIN_ADJUSTMENT
+}
+
+enum ResponseType {
+  PENDING
+  ACCEPTED
+  REJECTED
+  ON_REVIEW
+}
+
+enum DocumentType {
+  PASSPORT
+  ID_CARD
+  STUDENT_CARD
+}
+
+enum VerificationStatus {
+  INCOMPLETE
+  SUBMITTED
+  VERIFIED
+  REJECTED
+}
+
+enum RestrictionType {
+  SUSPENSION
+  BLOCK
+  WARNING
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum ReferralCodeType {
+  FIXED
+  PERCENTAGE
+}
+
+enum ReferralCommissionStatus {
+  PENDING
+  PAID
+}
+
+enum DisputeStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  CLOSED
+}
+
+enum SupportTicketCategory {
+  ORDER_ISSUE
+  PAYMENT
+  TECHNICAL
+  OTHER
+}
+
+enum SupportTicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum ChatStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum MessageSenderType {
+  CUSTOMER
+  DRIVER
+  SYSTEM
+}
+
+enum NotificationType {
+  ORDER_UPDATE
+  PAYMENT
+  REFERRAL
+  SYSTEM
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum AvailabilityStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ============================================
+// CORE USER ENTITIES
+// ============================================
+
+model User {
+  id         String     @id @default(uuid())
+  phone      String     @unique
+  firstName  String?    @map("first_name")
+  secondName String?    @map("second_name")
+  image      String?
+  myEmail    String?    @map("my_email")
+  role       UserRole
+  status     UserStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  // Relations
+  addresses        Address[]
+  customer         Customer?
+  driver           Driver?
+  userRestrictions UserRestriction[]
+  notifications    Notification[]
+  sentMessages     Message[]
+
+  @@map("users")
+}
+
+model SuperUser {
+  id        String        @id @default(uuid())
+  telephone String        @unique
+  pseudo    String        @unique
+  email     String        @unique
+  role      SuperUserRole
+  status    UserStatus    @default(ACTIVE)
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  admin           Admin?
+  customerService CustomerService?
+  actionLogs      ActionLog[]
+  notifications   Notification[]
+
+  @@map("super_users")
+}
+
+// ============================================
+// USER TYPES
+// ============================================
+
+model Customer {
+  id               String  @id @default(uuid())
+  userId           String  @unique @map("user_id")
+  completedOrders  Int     @default(0) @map("completed_orders")
+  myReferralCodeId String? @unique @map("my_referral_code_id")
+  referredByCodeId String? @map("referred_by_code_id")
+
+  // Relations
+  user                      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  myReferralCode            ReferralCode?        @relation("CustomerOwnedCode", fields: [myReferralCodeId], references: [id])
+  referredByCode            ReferralCode?        @relation("CustomerReferredBy", fields: [referredByCodeId], references: [id])
+  orders                    Order[]
+  wallet                    DigitalWallet?
+  supportTickets            SupportTicket[]
+  ratingsGiven              Rating[]             @relation("CustomerRatings")
+  commissionsAsReferrer     ReferralCommission[] @relation("ReferrerCommissions")
+  commissionsAsReferred     ReferralCommission[] @relation("ReferredCommissions")
+  chatRoomsAsCustomer       ChatRoom[]
+
+  @@map("customers")
+}
+
+model Driver {
+  id          String       @id @default(uuid())
+  userId      String       @unique @map("user_id")
+  vehicleType String?      @map("vehicle_type")
+  status      DriverStatus @default(INCOMPLETE)
+  approvedAt  DateTime?    @map("approved_at")
+  suspendedAt DateTime?    @map("suspended_at")
+  description String?
+
+  // Relations
+  user                     User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  driverAccount            DriverAccount?
+  weeklyAvailability       WeeklyAvailability?
+  driverVerification       DriverVerification?
+  assignments              DriverAssignment[]
+  cashTransactions         CashTransaction[]
+  ratingsReceived          Rating[]                  @relation("DriverRatings")
+  driverLocations          DriverLocation[]
+  performanceMetrics       DriverPerformanceMetrics?
+  chatRoomsAsDriver        ChatRoom[]
+
+  @@map("drivers")
+}
+
+model Admin {
+  id          String @id @default(uuid())
+  superUserId String @unique @map("super_user_id")
+
+  // Relations
+  superUser SuperUser @relation(fields: [superUserId], references: [id], onDelete: Cascade)
+
+  @@map("admins")
+}
+
+model CustomerService {
+  id          String @id @default(uuid())
+  superUserId String @unique @map("super_user_id")
+
+  // Relations
+  superUser      SuperUser       @relation(fields: [superUserId], references: [id], onDelete: Cascade)
+  disputes       Dispute[]
+  supportTickets SupportTicket[]
+
+  @@map("customer_services")
+}
+
+// ============================================
+// DRIVER FINANCIAL MANAGEMENT
+// ============================================
+
+model DriverAccount {
+  id                  String   @id @default(uuid())
+  driverId            String   @unique @map("driver_id")
+  balance             Decimal  @default(0) @db.Decimal(10, 2) // Can be negative (debt)
+  currency            String   @default("TND")
+  avgDeliveryTime     Int?     @map("avg_delivery_time") // in minutes
+  completedDeliveries Int      @default(0) @map("completed_deliveries")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  driver       Driver              @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  transactions DriverTransaction[]
+
+  @@map("driver_accounts")
+}
+
+model DriverTransaction {
+  id            String                @id @default(uuid())
+  accountId     String                @map("account_id")
+  type          DriverTransactionType
+  amount        Decimal               @db.Decimal(10, 2)
+  referenceId   String?               @map("reference_id") // Order ID, withdrawal ID, etc.
+  referenceType String?               @map("reference_type")
+  description   String?
+  balanceAfter  Decimal               @db.Decimal(10, 2) @map("balance_after")
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  // Relations
+  account DriverAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, createdAt])
+  @@map("driver_transactions")
+}
+
+// ============================================
+// DRIVER AVAILABILITY
+// ============================================
+
+model WeeklyAvailability {
+  id       String             @id @default(uuid())
+  driverId String             @unique @map("driver_id")
+  status   AvailabilityStatus @default(ACTIVE)
+
+  // Relations
+  driver            Driver             @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  dayAvailabilities DayAvailability[]
+
+  @@map("weekly_availabilities")
+}
+
+model DayAvailability {
+  id                   String    @id @default(uuid())
+  weeklyAvailabilityId String    @map("weekly_availability_id")
+  dayOfWeek            DayOfWeek @map("day_of_week")
+
+  // Relations
+  weeklyAvailability WeeklyAvailability @relation(fields: [weeklyAvailabilityId], references: [id], onDelete: Cascade)
+  timePeriods        TimePeriod[]
+
+  @@unique([weeklyAvailabilityId, dayOfWeek])
+  @@map("day_availabilities")
+}
+
+model TimePeriod {
+  id                String   @id @default(uuid())
+  dayAvailabilityId String   @map("day_availability_id")
+  startTime         DateTime @map("start_time") @db.Time()
+  endTime           DateTime @map("end_time") @db.Time()
+
+  // Relations
+  dayAvailability DayAvailability @relation(fields: [dayAvailabilityId], references: [id], onDelete: Cascade)
+
+  @@map("time_periods")
+}
+
+// ============================================
+// DRIVER VERIFICATION
+// ============================================
+
+model DriverVerification {
+  id           String       @id @default(uuid())
+  driverId     String       @unique @map("driver_id")
+  documentType DocumentType @map("document_type")
+  submittedAt  DateTime?    @map("submitted_at")
+  verifiedAt   DateTime?    @map("verified_at")
+
+  // Relations
+  driver    Driver     @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  documents Document[]
+
+  @@map("driver_verifications")
+}
+
+model Document {
+  id                 String             @id @default(uuid())
+  verificationId     String             @map("verification_id")
+  documentImage      String?            @map("document_image")
+  countryId          String?            @map("country_id")
+  selfieImage        String?            @map("selfie_image")
+  docImageTop        String?            @map("doc_image_top")
+  docImageBottom     String?            @map("doc_image_bottom")
+  selfieVerified     Boolean            @default(false) @map("selfie_verified")
+  verificationStatus VerificationStatus @default(INCOMPLETE) @map("verification_status")
+  firstName          String?            @map("first_name")
+  lastName           String?            @map("last_name")
+  dateOfBirth        DateTime?          @map("date_of_birth") @db.Date()
+  idNumber           String?            @map("id_number")
+  address            String?
+  cardPlace          String?            @map("card_place")
+  placeOfBirth       String?            @map("place_of_birth")
+  dateOfIssue        DateTime?          @map("date_of_issue") @db.Date()
+
+  // Relations
+  verification DriverVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+  identityCard IdentityCard?
+  passport     Passport?
+  studentCard  StudentCard?
+
+  @@map("documents")
+}
+
+model IdentityCard {
+  id         String  @id @default(uuid())
+  documentId String  @unique @map("document_id")
+  fatherName String? @map("father_name")
+  motherName String? @map("mother_name")
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("identity_cards")
+}
+
+model Passport {
+  id                   String    @id @default(uuid())
+  documentId           String    @unique @map("document_id")
+  nationality          String?
+  documentType         String?   @map("document_type")
+  gender               String?
+  expirationDate       DateTime? @map("expiration_date") @db.Date()
+  passportLongNumber   String?   @map("passport_long_number")
+  issuingAuthority     String?   @map("issuing_authority")
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("passports")
+}
+
+model StudentCard {
+  id         String  @id @default(uuid())
+  documentId String  @unique @map("document_id")
+  speciality String?
+  university String?
+  yearOfStudy String? @map("year_of_study")
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("student_cards")
+}
+
+// ============================================
+// DRIVER PERFORMANCE
+// ============================================
+
+model DriverPerformanceMetrics {
+  id                     String   @id @default(uuid())
+  driverId               String   @unique @map("driver_id")
+  totalOrders            Int      @default(0) @map("total_orders")
+  completedOrders        Int      @default(0) @map("completed_orders")
+  cancelledOrders        Int      @default(0) @map("cancelled_orders")
+  avgRating              Decimal? @db.Decimal(3, 2) @map("avg_rating")
+  avgDeliveryTimeMinutes Int?     @map("avg_delivery_time_minutes")
+  completionRate         Decimal? @db.Decimal(5, 2) @map("completion_rate") // percentage
+  onTimeRate             Decimal? @db.Decimal(5, 2) @map("on_time_rate") // percentage
+  lastCalculatedAt       DateTime @default(now()) @map("last_calculated_at")
+
+  // Relations
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@map("driver_performance_metrics")
+}
+
+// ============================================
+// GEOGRAPHY
+// ============================================
+
+model Country {
+  id             String  @id @default(uuid())
+  name           String
+  isoCode        String  @unique @map("iso_code")
+  currencyCode   String  @map("currency_code")
+  currencySymbol String  @map("currency_symbol")
+  isActive       Boolean @default(true) @map("is_active")
+
+  // Relations
+  governorates    Governorate[]
+  pricingPolicies CountryPricingPolicy[]
+  digitalWallets  DigitalWallet[]
+
+  @@map("countries")
+}
+
+model Governorate {
+  id              String @id @default(uuid())
+  nameGovernorate String @map("name_governorate")
+  countryId       String @map("country_id")
+
+  // Relations
+  country     Country      @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  delegations Delegation[]
+
+  @@map("governorates")
+}
+
+model Delegation {
+  id                          String @id @default(uuid())
+  nameDelegation              String @map("name_delegation")
+  maxConfirmationDelayMinutes Int    @map("max_confirmation_delay_minutes")
+  governorateId               String @map("governorate_id")
+
+  // Relations
+  governorate Governorate @relation(fields: [governorateId], references: [id], onDelete: Cascade)
+  addresses   Address[]
+
+  @@map("delegations")
+}
+
+model Address {
+  id           String  @id @default(uuid())
+  latitude     Float?
+  longitude    Float?
+  street       String?
+  delegationId String  @map("delegation_id")
+  userId       String  @map("user_id")
+
+  // Relations
+  delegation      Delegation @relation(fields: [delegationId], references: [id])
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ordersAsPickup  Order[]    @relation("PickupAddress")
+  ordersAsDropoff Order[]    @relation("DropoffAddress")
+
+  @@map("addresses")
+}
+
+// ============================================
+// PRICING
+// ============================================
+
+model CountryPricingPolicy {
+  id               String   @id @default(uuid())
+  pricePerKm       Decimal  @map("price_per_km") @db.Decimal(10, 2)
+  baseFee          Decimal  @map("base_fee") @db.Decimal(10, 2)
+  baseWeight       Decimal  @map("base_weight") @db.Decimal(10, 2)
+  extraWeightStep  Decimal  @map("extra_weight_step") @db.Decimal(10, 2)
+  extraWeightPrice Decimal  @map("extra_weight_price") @db.Decimal(10, 2)
+  nightFee         Decimal  @map("night_fee") @db.Decimal(10, 2)
+  platformFee      Decimal  @map("platform_fee") @db.Decimal(10, 2)
+  maxNegativeDays  Int      @map("max_negative_days")
+  isActive         Boolean  @default(true) @map("is_active")
+  countryId        String   @map("country_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  // Relations
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  orders  Order[]
+
+  @@map("country_pricing_policies")
+}
+
+// ============================================
+// ORDERS
+// ============================================
+
+model Order {
+  id                String      @id @default(uuid())
+  customerId        String      @map("customer_id")
+  pricingPolicyId   String      @map("pricing_policy_id")
+  pickupAddressId   String?     @map("pickup_address_id")
+  dropoffAddressId  String?     @map("dropoff_address_id")
+  status            OrderStatus @default(DRAFT)
+  paymentType       PaymentType
+  description       String?
+  weight            Decimal     @db.Decimal(10, 2)
+  distanceKm        Decimal     @db.Decimal(10, 2) @map("distance_km")
+  price             Decimal     @db.Decimal(10, 2)
+  nightFee          Decimal     @default(0) @db.Decimal(10, 2) @map("night_fee")
+  extraWeightFee    Decimal     @default(0) @db.Decimal(10, 2) @map("extra_weight_fee")
+  cancelAfterMinutes Int        @default(15) @map("cancel_after_minutes")
+  isNightDelivery   Boolean     @default(false) @map("is_night_delivery")
+  guestCheckout     Boolean     @default(false) @map("guest_checkout")
+  createdAt         DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  customer            Customer              @relation(fields: [customerId], references: [id])
+  pricingPolicy       CountryPricingPolicy  @relation(fields: [pricingPolicyId], references: [id])
+  pickupAddress       Address?              @relation("PickupAddress", fields: [pickupAddressId], references: [id])
+  dropoffAddress      Address?              @relation("DropoffAddress", fields: [dropoffAddressId], references: [id])
+  driverAssignment    DriverAssignment?
+  cashTransaction     CashTransaction?
+  walletTransactions  WalletTransaction[]
+  referralCommissions ReferralCommission[]
+  rating              Rating?
+  dispute             Dispute?
+  chatRoom            ChatRoom?
+  driverLocations     DriverLocation[]
+
+  @@index([customerId, status])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+model DriverAssignment {
+  id                String    @id @default(uuid())
+  orderId           String    @unique @map("order_id")
+  driverId          String    @map("driver_id")
+  acceptedAt        DateTime? @map("accepted_at")
+  rejectedAt        DateTime? @map("rejected_at")
+  arrivedAt         DateTime? @map("arrived_at")
+  pickedUpAt        DateTime? @map("picked_up_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  image1Proof       String?   @map("image1_proof")
+  image2Proof       String?   @map("image2_proof")
+  feedback          String?
+  cancelledBy       String?   @map("cancelled_by") // userId who cancelled
+  cancellationReason String?  @map("cancellation_reason")
+  notificationSentAt DateTime? @map("notification_sent_at")
+
+  // Relations
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([driverId, acceptedAt])
+  @@map("driver_assignments")
+}
+
+model CashTransaction {
+  id            String   @id @default(uuid())
+  orderId       String   @unique @map("order_id")
+  driverId      String   @map("driver_id")
+  cashCollected Decimal  @db.Decimal(10, 2) @map("cash_collected")
+  platformFee   Decimal  @db.Decimal(10, 2) @map("platform_fee")
+  driverNet     Decimal  @db.Decimal(10, 2) @map("driver_net")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@map("cash_transactions")
+}
+
+// ============================================
+// CUSTOMER WALLET
+// ============================================
+
+model DigitalWallet {
+  id         String  @id @default(uuid())
+  customerId String  @unique @map("customer_id")
+  balance    Decimal @default(0) @db.Decimal(10, 2)
+  currency   String  @default("TND")
+  countryId  String  @map("country_id")
+  discount   Decimal @default(0) @db.Decimal(10, 2)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  customer            Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  country             Country              @relation(fields: [countryId], references: [id])
+  transactions        WalletTransaction[]
+  withdrawalRequests  WithdrawalRequest[]
+
+  @@map("digital_wallets")
+}
+
+model WalletTransaction {
+  id            String                @id @default(uuid())
+  walletId      String                @map("wallet_id")
+  orderId       String?               @map("order_id")
+  type          WalletTransactionType
+  amount        Decimal               @db.Decimal(10, 2)
+  status        TransactionStatus     @default(PENDING)
+  referenceId   String?               @map("reference_id") // External payment reference (Stripe, etc.)
+  referenceType ReferenceType?        @map("reference_type")
+  balanceAfter  Decimal               @db.Decimal(10, 2) @map("balance_after")
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  // Relations
+  wallet DigitalWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  order  Order?        @relation(fields: [orderId], references: [id])
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+model WithdrawalRequest {
+  id                    String       @id @default(uuid())
+  walletId              String       @map("wallet_id")
+  amount                Decimal      @db.Decimal(10, 2)
+  status                ResponseType @default(PENDING)
+  descriptionOfCustomer String?      @map("description_of_customer")
+  descriptionOfAdmin    String?      @map("description_of_admin")
+  requestedAt           DateTime     @default(now()) @map("requested_at")
+  processedAt           DateTime?    @map("processed_at")
+
+  // Relations
+  wallet DigitalWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@map("withdrawal_requests")
+}
+
+// ============================================
+// REFERRAL SYSTEM
+// ============================================
+
+model ReferralCode {
+  id                  String             @id @default(uuid())
+  code                String             @unique
+  type                ReferralCodeType
+  value               Decimal            @db.Decimal(10, 2)
+  maxDiscountAmount   Decimal?           @db.Decimal(10, 2) @map("max_discount_amount")
+  minOrderAmount      Decimal?           @db.Decimal(10, 2) @map("min_order_amount")
+  usageLimit          Int?               @map("usage_limit")
+  usagePerUserLimit   Int?               @map("usage_per_user_limit")
+  validFrom           DateTime?          @map("valid_from")
+  validUntil          DateTime?          @map("valid_until")
+  active              Boolean            @default(true)
+  createdBy           String?            @map("created_by") // adminId or 'system'
+  ownerId             String?            @unique @map("owner_id") // customerId (nullable for admin codes)
+  totalUses           Int                @default(0) @map("total_uses")
+
+  // Relations - no fields/references here, defined on Customer side
+  owner               Customer?            @relation("CustomerOwnedCode")
+  usersReferred       Customer[]           @relation("CustomerReferredBy")
+  commissions         ReferralCommission[]
+
+  @@map("referral_codes")
+}
+
+model ReferralCommission {
+  id                  String                   @id @default(uuid())
+  referralCodeId      String                   @map("referral_code_id")
+  referrerCustomerId  String                   @map("referrer_customer_id")
+  referredCustomerId  String                   @map("referred_customer_id")
+  orderId             String                   @map("order_id")
+  commissionAmount    Decimal                  @db.Decimal(10, 2) @map("commission_amount")
+  status              ReferralCommissionStatus @default(PENDING)
+  createdAt           DateTime                 @default(now()) @map("created_at")
+
+  // Relations
+  referralCode       ReferralCode @relation(fields: [referralCodeId], references: [id])
+  referrerCustomer   Customer     @relation("ReferrerCommissions", fields: [referrerCustomerId], references: [id])
+  referredCustomer   Customer     @relation("ReferredCommissions", fields: [referredCustomerId], references: [id])
+  order              Order        @relation(fields: [orderId], references: [id])
+
+  @@map("referral_commissions")
+}
+
+// ============================================
+// RATINGS & REVIEWS
+// ============================================
+
+model Rating {
+  id         String   @id @default(uuid())
+  orderId    String   @unique @map("order_id")
+  customerId String   @map("customer_id")
+  driverId   String   @map("driver_id")
+  score      Int      @db.SmallInt // 0-10
+  comment    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer Customer @relation("CustomerRatings", fields: [customerId], references: [id])
+  driver   Driver   @relation("DriverRatings", fields: [driverId], references: [id])
+
+  @@index([driverId, score])
+  @@map("ratings")
+}
+
+// ============================================
+// CHAT SYSTEM
+// ============================================
+
+model ChatRoom {
+  id         String     @id @default(uuid())
+  orderId    String     @unique @map("order_id")
+  customerId String     @map("customer_id")
+  driverId   String     @map("driver_id")
+  status     ChatStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  // Relations
+  order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id])
+  driver   Driver    @relation(fields: [driverId], references: [id])
+  messages Message[]
+
+  @@map("chat_rooms")
+}
+
+model Message {
+  id         String            @id @default(uuid())
+  chatRoomId String            @map("chat_room_id")
+  senderId   String            @map("sender_id")
+  senderType MessageSenderType @map("sender_type")
+  content    String
+  image      String?
+  timestamp  DateTime          @default(now())
+  readAt     DateTime?         @map("read_at")
+
+  // Relations
+  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  sender   User     @relation(fields: [senderId], references: [id])
+
+  @@index([chatRoomId, timestamp])
+  @@map("messages")
+}
+
+// ============================================
+// GPS TRACKING
+// ============================================
+
+model DriverLocation {
+  id        String   @id @default(uuid())
+  driverId  String   @map("driver_id")
+  orderId   String?  @map("order_id") // Nullable: only set when actively delivering
+  latitude  Float
+  longitude Float
+  accuracy  Float?   // in meters
+  timestamp DateTime @default(now())
+
+  // Relations
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  order  Order? @relation(fields: [orderId], references: [id])
+
+  @@index([driverId, timestamp])
+  @@index([orderId, timestamp])
+  @@map("driver_locations")
+}
+
+// ============================================
+// DISPUTES & SUPPORT
+// ============================================
+
+model Dispute {
+  id                  String        @id @default(uuid())
+  orderId             String        @unique @map("order_id")
+  reportedBy          String        @map("reported_by") // customerId
+  assignedTo          String?       @map("assigned_to") // customerServiceId
+  reason              String
+  status              DisputeStatus @default(OPEN)
+  resolution          String?
+  createdAt           DateTime      @default(now()) @map("created_at")
+  resolvedAt          DateTime?     @map("resolved_at")
+
+  // Relations
+  order           Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerService CustomerService? @relation(fields: [assignedTo], references: [id])
+
+  @@map("disputes")
+}
+
+model SupportTicket {
+  id          String                @id @default(uuid())
+  customerId  String                @map("customer_id")
+  assignedTo  String?               @map("assigned_to") // customerServiceId
+  category    SupportTicketCategory
+  priority    SupportTicketPriority
+  status      SupportTicketStatus   @default(OPEN)
+  description String
+  createdAt   DateTime              @default(now()) @map("created_at")
+  resolvedAt  DateTime?             @map("resolved_at")
+
+  // Relations
+  customer        Customer         @relation(fields: [customerId], references: [id])
+  customerService CustomerService? @relation(fields: [assignedTo], references: [id])
+
+  @@index([status, priority])
+  @@map("support_tickets")
+}
+
+// ============================================
+// USER RESTRICTIONS
+// ============================================
+
+model UserRestriction {
+  id        String          @id @default(uuid())
+  userId    String          @map("user_id")
+  type      RestrictionType
+  reason    String
+  imposedBy String          @map("imposed_by") // adminId or 'system'
+  startDate DateTime        @default(now()) @map("start_date")
+  endDate   DateTime?       @map("end_date") // nullable = permanent
+  createdAt DateTime        @default(now()) @map("created_at")
+  liftedAt  DateTime?       @map("lifted_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, liftedAt])
+  @@map("user_restrictions")
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id                  String                     @id @default(uuid())
+  userId              String                     @map("user_id")
+  userType            String                     @map("user_type") // 'USER' or 'SUPER_USER'
+  title               String
+  body                String
+  type                NotificationType
+  relatedEntityType   String?                    @map("related_entity_type")
+  relatedEntityId     String?                    @map("related_entity_id")
+  sentAt              DateTime                   @default(now()) @map("sent_at")
+  readAt              DateTime?                  @map("read_at")
+  deliveryStatus      NotificationDeliveryStatus @default(PENDING) @map("delivery_status")
+
+  // Relations - manually handled based on userType in application code
+  // If userType == 'USER' -> lookup in users table
+  // If userType == 'SUPER_USER' -> lookup in super_users table
+  user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  superUser SuperUser? @relation(fields: [userId], references: [id], onDelete: Cascade, map: "notification_super_user_fk")
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+// ============================================
+// SYSTEM CONFIGURATION
+// ============================================
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  category    String
+  description String?
+  updatedBy   String?  @map("updated_by") // adminId
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("system_configs")
+}
+
+// ============================================
+// ACTION LOGS (AUDIT TRAIL)
+// ============================================
+
+model ActionLog {
+  id         String   @id @default(uuid())
+  actorId    String   @map("actor_id")
+  actorRole  String   @map("actor_role") // 'ADMIN' or 'CUSTOMER_SERVICE'
+  actionType String   @map("action_type")
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  oldValue   String?  @map("old_value")
+  newValue   String?  @map("new_value")
+  reason     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  superUser SuperUser @relation(fields: [actorId], references: [id])
+
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("action_logs")
+}
