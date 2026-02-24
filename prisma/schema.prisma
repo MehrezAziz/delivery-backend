@@ -194,6 +194,13 @@ enum AvailabilityStatus {
   INACTIVE
 }
 
+enum DeliveryZoneType {
+  SAME_DELEGATION
+  SAME_GOVERNORATE
+  DIFFERENT_GOVERNORATE
+  DIFFERENT_COUNTRY
+}
+
 // ============================================
 // CORE USER ENTITIES
 // ============================================
@@ -566,18 +573,19 @@ model Address {
 // ============================================
 
 model CountryPricingPolicy {
-  id               String   @id @default(uuid())
-  pricePerKm       Decimal  @map("price_per_km") @db.Decimal(10, 2)
-  baseFee          Decimal  @map("base_fee") @db.Decimal(10, 2)
-  baseWeight       Decimal  @map("base_weight") @db.Decimal(10, 2)
-  extraWeightStep  Decimal  @map("extra_weight_step") @db.Decimal(10, 2)
-  extraWeightPrice Decimal  @map("extra_weight_price") @db.Decimal(10, 2)
-  nightFee         Decimal  @map("night_fee") @db.Decimal(10, 2)
-  platformFee      Decimal  @map("platform_fee") @db.Decimal(10, 2)
-  maxNegativeDays  Int      @map("max_negative_days")
-  isActive         Boolean  @default(true) @map("is_active")
-  countryId        String   @map("country_id")
-  createdAt        DateTime @default(now()) @map("created_at")
+  id               String            @id @default(uuid())
+  pricePerKm       Decimal           @map("price_per_km") @db.Decimal(10, 2)
+  baseFee          Decimal           @map("base_fee") @db.Decimal(10, 2)
+  baseWeight       Decimal           @map("base_weight") @db.Decimal(10, 2)
+  extraWeightStep  Decimal           @map("extra_weight_step") @db.Decimal(10, 2)
+  extraWeightPrice Decimal           @map("extra_weight_price") @db.Decimal(10, 2)
+  nightFee         Decimal           @map("night_fee") @db.Decimal(10, 2)
+  platformFee      Decimal           @map("platform_fee") @db.Decimal(10, 2)
+  maxNegativeDays  Int               @map("max_negative_days")
+  deliveryZoneType DeliveryZoneType? @map("delivery_zone_type")
+  isActive         Boolean           @default(true) @map("is_active")
+  countryId        String            @map("country_id")
+  createdAt        DateTime          @default(now()) @map("created_at")
 
   // Relations
   country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
