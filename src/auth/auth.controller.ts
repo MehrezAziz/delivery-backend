@@ -11,6 +11,8 @@ import { AuthService } from './auth.service';
 import {
   SendOtpDto,
   VerifyOtpDto,
+  UserLoginDto,
+  UserRegisterDto,
   CompleteUserProfileDto,
   SuperUserLoginDto,
   AuthTokensDto,
@@ -48,6 +50,28 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async verifyOtp(@Body() dto: VerifyOtpDto): Promise<AuthTokensDto> {
     return this.authService.verifyOtp(dto);
+  }
+
+  /**
+   * POST /auth/user/register
+   * Register new user with phone and password
+   */
+  @Public()
+  @Post('user/register')
+  @HttpCode(HttpStatus.CREATED)
+  async userRegister(@Body() dto: UserRegisterDto): Promise<AuthTokensDto> {
+    return this.authService.userRegister(dto);
+  }
+
+  /**
+   * POST /auth/user/login
+   * Login with phone and password
+   */
+  @Public()
+  @Post('user/login')
+  @HttpCode(HttpStatus.OK)
+  async userLogin(@Body() dto: UserLoginDto): Promise<AuthTokensDto> {
+    return this.authService.userLogin(dto);
   }
 
   /**

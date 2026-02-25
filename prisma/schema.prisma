@@ -208,6 +208,7 @@ enum DeliveryZoneType {
 model User {
   id         String     @id @default(uuid())
   phone      String     @unique
+  password   String?    // Optional: for email/password login (nullable for OTP-only users)
   firstName  String?    @map("first_name")
   secondName String?    @map("second_name")
   image      String?
@@ -228,13 +229,14 @@ model User {
 }
 
 model SuperUser {
-  id        String        @id @default(uuid())
-  telephone String        @unique
-  pseudo    String        @unique
-  email     String        @unique
-  role      SuperUserRole
-  status    UserStatus    @default(ACTIVE)
-  createdAt DateTime      @default(now()) @map("created_at")
+  id            String        @id @default(uuid())
+  telephone     String        @unique
+  pseudo        String        @unique
+  email         String        @unique
+  superPassword String        @map("super_password") // Hashed password for admin/CS login
+  role          SuperUserRole
+  status        UserStatus    @default(ACTIVE)
+  createdAt     DateTime      @default(now()) @map("created_at")
 
   // Relations
   admin           Admin?

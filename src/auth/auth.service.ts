@@ -97,6 +97,123 @@ export class AuthService {
   }
 
   /**
+   * User registration with phone and password
+   */
+  async userRegister(dto: UserRegisterDto): Promise<AuthTokensDto> {
+    const { phone, password, role, firstName, secondName, myEmail } = dto;
+
+    // Check if user already exists
+    const existingUser = await this.prisma.user.findUnique({
+      where: { phone },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('User with this phone number already exists');
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user with profile
+    const user = await this.prisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
+        data: {
+          phone,
+          password: hashedPassword,
+          firstName,
+          secondName,
+          myEmail,
+          role,
+          status: UserStatus.ACTIVE,
+        },
+      });
+
+      // Create associated profile
+      if (role === UserRole.CUSTOMER) {
+        await tx.customer.create({
+          data: {
+            userId: newUser.id,
+          },
+        });
+      } else if (role === UserRole.DRIVER) {
+        await tx.driver.create({
+          data: {
+            userId: newUser.id,
+            status: 'INCOMPLETE',
+          },
+        });
+      }
+
+      return tx.user.findUnique({
+        where: { id: newUser.id },
+        include: {
+          customer: true,
+          driver: true,
+        },
+      });
+    });
+
+    if (!user) {
+      throw new Error('Failed to create user');
+    }
+
+    // Get profileId
+    const profileId = role === UserRole.CUSTOMER ? user.customer!.id : user.driver!.id;
+
+    // Generate JWT tokens
+    return this.generateUserTokens(user.id, phone, role, profileId);
+  }
+
+  /**
+   * User login with phone and password
+   */
+  async userLogin(dto: UserLoginDto): Promise<AuthTokensDto> {
+    const { phone, password, role } = dto;
+
+    // Find user
+    const user = await this.prisma.user.findUnique({
+      where: { phone },
+      include: {
+        customer: true,
+        driver: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Check role matches
+    if (user.role !== role) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Check if user has password set
+    if (!user.password) {
+      throw new BadRequestException(
+        'This account uses OTP login. Please use the OTP login method.',
+      );
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Check if blocked
+    if (user.status === UserStatus.BLOCKED) {
+      throw new UnauthorizedException('Your account has been blocked');
+    }
+
+    // Get profileId
+    const profileId = role === UserRole.CUSTOMER ? user.customer!.id : user.driver!.id;
+
+    // Generate JWT tokens
+    return this.generateUserTokens(user.id, phone, role, profileId);
+  }
+
+  /**
    * Complete user profile (optional step after registration)
    */
   async completeProfile(userId: string, dto: CompleteUserProfileDto) {
@@ -134,10 +251,8 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Verify password (assuming password is stored in a separate table or field)
-    // For now, we'll add a password field to SuperUser model later
-    // This is a placeholder - you'll need to add password field to schema
-    const isPasswordValid = await this.verifyPassword(password, superUser.email);
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, superUser.superPassword);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -294,5 +409,48 @@ export class AuthService {
   async hashPassword(password: string): Promise<string> {
     const saltRounds = 10;
     return bcrypt.hash(password, saltRounds);
+  }
+
+  /**
+   * Create SuperUser with hashed password (for admin use)
+   */
+  async createSuperUser(
+    email: string,
+    password: string,
+    telephone: string,
+    pseudo: string,
+    role: SuperUserRole,
+  ) {
+    const hashedPassword = await this.hashPassword(password);
+    
+    return this.prisma.$transaction(async (tx) => {
+      const superUser = await tx.superUser.create({
+        data: {
+          email,
+          superPassword: hashedPassword,
+          telephone,
+          pseudo,
+          role,
+          status: UserStatus.ACTIVE,
+        },
+      });
+
+      // Create associated profile
+      if (role === SuperUserRole.ADMIN) {
+        await tx.admin.create({
+          data: {
+            superUserId: superUser.id,
+          },
+        });
+      } else if (role === SuperUserRole.CUSTOMER_SERVICE) {
+        await tx.customerService.create({
+          data: {
+            superUserId: superUser.id,
+          },
+        });
+      }
+
+      return superUser;
+    });
   }
 }

@@ -35,6 +35,44 @@ export class VerifyOtpDto {
   role!: UserRole;
 }
 
+export class UserLoginDto {
+  @IsString()
+  @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Invalid phone number format' })
+  phone!: string;
+
+  @IsString()
+  @MinLength(8)
+  password!: string;
+
+  @IsEnum(UserRole)
+  role!: UserRole;
+}
+
+export class UserRegisterDto {
+  @IsString()
+  @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Invalid phone number format' })
+  phone!: string;
+
+  @IsString()
+  @MinLength(8)
+  password!: string;
+
+  @IsEnum(UserRole)
+  role!: UserRole;
+
+  @IsOptional()
+  @IsString()
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  secondName?: string;
+
+  @IsOptional()
+  @IsEmail()
+  myEmail?: string;
+}
+
 export class CompleteUserProfileDto {
   @IsString()
   firstName!: string;

@@ -1,3 +1,7 @@
+  // ============================================
+  // Testing
+  // ============================================
+
 import { PrismaClient, UserRole, SuperUserRole, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
@@ -100,14 +104,17 @@ async function main() {
   // ============================================
   console.log('Creating super users...');
   
-  // Note: Password hashing will be implemented when you add password field to schema
+  // Hash password for super users
+  const hashedPassword = await bcrypt.hash('admin123456', 10);
+  
   const adminUser = await prisma.superUser.upsert({
     where: { email: 'admin@delivery.com' },
-    update: {},
+    update: { superPassword: hashedPassword },
     create: {
       telephone: '+21611111111',
       pseudo: 'admin',
       email: 'admin@delivery.com',
+      superPassword: hashedPassword,
       role: SuperUserRole.ADMIN,
       status: UserStatus.ACTIVE,
     },
@@ -123,11 +130,12 @@ async function main() {
 
   const csUser = await prisma.superUser.upsert({
     where: { email: 'support@delivery.com' },
-    update: {},
+    update: { superPassword: hashedPassword },
     create: {
       telephone: '+21622222222',
       pseudo: 'support',
       email: 'support@delivery.com',
+      superPassword: hashedPassword,
       role: SuperUserRole.CUSTOMER_SERVICE,
       status: UserStatus.ACTIVE,
     },
@@ -251,10 +259,10 @@ async function main() {
   console.log('Customer Phone: +21612345678');
   console.log('Driver Phone: +21698765432');
   console.log('Admin Email: admin@delivery.com');
+  console.log('Admin Password: admin123456');
   console.log('Support Email: support@delivery.com');
+  console.log('Support Password: admin123456');
   console.log('─────────────────────────────────────');
-  console.log('\n💡 Note: SuperUser passwords are not set yet.');
-  console.log('   Add password field to SuperUser schema and update seed.');
 }
 
 main()
