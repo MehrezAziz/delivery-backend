@@ -1,0 +1,424 @@
+{
+  "info": {
+    "name": "Delivery App - Authentication API",
+    "description": "Complete authentication testing for delivery platform",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "userAccessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "superUserAccessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lastOtp",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "👤 User Auth (Customer & Driver)",
+      "item": [
+        {
+          "name": "1. Send OTP - Customer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    if (response.otp) {",
+                  "        pm.collectionVariables.set('lastOtp', response.otp);",
+                  "        console.log('OTP saved:', response.otp);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+21612345678\",\n  \"role\": \"CUSTOMER\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/send-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "send-otp"]
+            },
+            "description": "Send OTP to customer phone number. In dev mode, OTP is returned in response."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Verify OTP - Customer Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('userAccessToken', response.accessToken);",
+                  "    console.log('Access token saved!');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+21612345678\",\n  \"role\": \"CUSTOMER\",\n  \"otp\": \"{{lastOtp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/verify-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "verify-otp"]
+            },
+            "description": "Verify OTP and get JWT tokens. Auto-saves access token."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Get Current User Info",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "me"]
+            },
+            "description": "Get current authenticated user information"
+          },
+          "response": []
+        },
+        {
+          "name": "4. Complete User Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAccessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Ahmed\",\n  \"secondName\": \"Ben Ali\",\n  \"myEmail\": \"ahmed@example.com\",\n  \"image\": \"https://example.com/avatar.jpg\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/complete-profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "complete-profile"]
+            },
+            "description": "Update user profile information"
+          },
+          "response": []
+        },
+        {
+          "name": "5. Send OTP - Driver",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    if (response.otp) {",
+                  "        pm.collectionVariables.set('lastOtp', response.otp);",
+                  "        console.log('Driver OTP saved:', response.otp);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+21698765432\",\n  \"role\": \"DRIVER\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/send-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "send-otp"]
+            },
+            "description": "Send OTP to driver phone number"
+          },
+          "response": []
+        },
+        {
+          "name": "6. Verify OTP - Driver Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('userAccessToken', response.accessToken);",
+                  "    console.log('Driver access token saved!');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+21698765432\",\n  \"role\": \"DRIVER\",\n  \"otp\": \"{{lastOtp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/verify-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "verify-otp"]
+            },
+            "description": "Verify driver OTP and login"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "👨‍💼 SuperUser Auth (Admin & CS)",
+      "item": [
+        {
+          "name": "1. Admin Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('superUserAccessToken', response.accessToken);",
+                  "    console.log('Admin access token saved!');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@delivery.com\",\n  \"password\": \"admin123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/superuser/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "superuser", "login"]
+            },
+            "description": "Admin login with email/password (accepts any password in dev mode)"
+          },
+          "response": []
+        },
+        {
+          "name": "2. Customer Service Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('superUserAccessToken', response.accessToken);",
+                  "    console.log('CS access token saved!');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"support@delivery.com\",\n  \"password\": \"support123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/superuser/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "superuser", "login"]
+            },
+            "description": "Customer Service login"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "🧪 Test Scenarios",
+      "item": [
+        {
+          "name": "New Customer Registration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+21655555555\",\n  \"role\": \"CUSTOMER\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/send-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "send-otp"]
+            },
+            "description": "Test with a new phone number - will create new user on verify"
+          },
+          "response": []
+        },
+        {
+          "name": "Wrong Role Error",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+21612345678\",\n  \"role\": \"DRIVER\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/send-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "send-otp"]
+            },
+            "description": "Try to use existing customer phone as driver - should fail"
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+21612345678\",\n  \"role\": \"CUSTOMER\",\n  \"otp\": \"000000\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/verify-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "verify-otp"]
+            },
+            "description": "Test with wrong OTP - should show remaining attempts"
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid Phone Format",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"123\",\n  \"role\": \"CUSTOMER\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/send-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "send-otp"]
+            },
+            "description": "Test validation - should fail with phone format error"
+          },
+          "response": []
+        },
+        {
+          "name": "Missing Authorization Header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/user/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "user", "me"]
+            },
+            "description": "Try to access protected route without token - should fail"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
