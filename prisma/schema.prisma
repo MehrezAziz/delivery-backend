@@ -201,6 +201,19 @@ enum DeliveryZoneType {
   DIFFERENT_COUNTRY
 }
 
+enum CustomerServiceRole {
+  READ_DRIVER_PROFILE
+  READ_CUSTOMER_PROFILE
+  UPDATE_DRIVER_STATUS
+  UPDATE_CUSTOMER_STATUS
+  VERIFY_ACCOUNTS
+  ACCEPT_LOCAL_PAYMENT
+  VIEW_DELIVERIES
+  MANAGE_DISPUTES
+  MANAGE_SUPPORT_TICKETS
+  VIEW_FINANCIAL_REPORTS
+}
+
 // ============================================
 // CORE USER ENTITIES
 // ============================================
@@ -308,8 +321,9 @@ model Admin {
 }
 
 model CustomerService {
-  id          String @id @default(uuid())
-  superUserId String @unique @map("super_user_id")
+  id          String                 @id @default(uuid())
+  superUserId String                 @unique @map("super_user_id")
+  roles       CustomerServiceRole[]  @default([])
 
   // Relations
   superUser      SuperUser       @relation(fields: [superUserId], references: [id], onDelete: Cascade)

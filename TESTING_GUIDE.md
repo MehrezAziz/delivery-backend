@@ -1,460 +1,876 @@
-# 🧪 Step-by-Step Testing Guide with Postman
+# Complete Testing Guide
 
-## ✅ Prerequisites Checklist
+## Overview
+This guide provides step-by-step instructions to test all implemented features of the delivery backend system.
 
-- [x] Server running on `http://localhost:3000/api`
-- [x] PostgreSQL running
-- [x] Redis running
-- [x] Database seeded with test data
+## Prerequisites
+
+1. **Database Setup**
+   ```bash
+   # Run migrations
+   npx prisma migrate dev
+   
+   # Generate Prisma client
+   npx prisma generate
+   ```
+
+2. **Start the Server**
+   ```bash
+   npm run start:dev
+   ```
+
+3. **Base URL**
+   ```
+   http://localhost:3000
+   ```
 
 ---
 
-## 📥 Import Postman Collection
+## Testing Order
 
-1. Open Postman
-2. Click **Import** button (top left)
-3. Drag and drop `Delivery_Auth_API.postman_collection.json`
-4. Collection will appear in left sidebar
+Follow this order to test features properly:
+
+1. Admin Setup (Geography & Pricing)
+2. User Registration & Authentication
+3. Customer Service Management
+4. User Profile & Address Management
+5. Driver Verification
+6. Customer Management
+7. Order Creation & Management
+8. Driver Assignment & Order Flow
+9. Restrictions & Guards
 
 ---
 
-## 🎯 Test Flow 1: Customer Registration & Login
+## 1. Admin Setup
 
-### Step 1: Send OTP to New Customer
+### Step 1.1: Register Admin Account
+```bash
+POST http://localhost:3000/auth/superuser/register
+Content-Type: application/json
 
-**Request:** `1. Send OTP - Customer`
-
-**What happens:**
-- Generates 6-digit OTP
-- Stores in Redis (expires in 5 minutes)
-- In dev mode, returns OTP in response
-- OTP auto-saved to collection variable
-
-**Expected Response (200 OK):**
-```json
 {
-  "message": "OTP sent successfully",
-  "expiresInSeconds": 300,
-  "otp": "123456"
+  "telephone": "+21612345678",
+  "pseudo": "admin1",
+  "email": "admin@delivery.com",
+  "password": "Admin123456",
+  "role": "ADMIN"
 }
 ```
 
-**✅ Success:** You see the OTP in response  
-**❌ If fails:** Check Redis is running
+**Expected Response:** 200 OK with access_token
+
+**Save:** `ADMIN_TOKEN` from response
 
 ---
 
-### Step 2: Verify OTP & Get Token
+### Step 1.2: Create Country
+```bash
+POST http://localhost:3000/admin/geography/countries
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
 
-**Request:** `2. Verify OTP - Customer Login`
-
-**What happens:**
-- Verifies OTP from Redis
-- Checks if user exists (phone: +21612345678)
-- User exists from seed → logs in
-- Generates JWT tokens
-- Token auto-saved to collection variable
-
-**Expected Response (200 OK):**
-```json
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1dWlkLWhlcmUiLCJwaG9uZSI6IisyMTYxMjM0NTY3OCIsInJvbGUiOiJDVVNUT01FUiIsInByb2ZpbGVJZCI6ImN1c3RvbWVyLXV1aWQiLCJ0eXBlIjoiVVNFUiIsImlhdCI6MTcwOTU2NzgwMCwiZXhwIjoxNzEwMTcyNjAwfQ.signature",
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expiresIn": 604800
+  "name": "Tunisia",
+  "isoCode": "TN",
+  "currencyCode": "TND",
+  "currencySymbol": "د.ت",
+  "isActive": true
 }
 ```
 
-**✅ Success:** You receive accessToken and refreshToken  
-**❌ If "OTP expired":** Send OTP again (Step 1)  
-**❌ If "Invalid OTP":** Check you copied the correct OTP
+**Expected Response:** 201 Created with country object
+
+**Save:** `COUNTRY_ID` from response
 
 ---
 
-### Step 3: Access Protected Route
+### Step 1.3: Create Governorate
+```bash
+POST http://localhost:3000/admin/geography/governorates
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
 
-**Request:** `3. Get Current User Info`
-
-**What happens:**
-- Sends request with Bearer token
-- JWT strategy validates token
-- Returns user information
-
-**Expected Response (200 OK):**
-```json
 {
-  "id": "uuid-here",
-  "phone": "+21612345678",
-  "role": "CUSTOMER",
-  "status": "ACTIVE",
-  "profileId": "customer-uuid-here"
+  "nameGovernorate": "Tunis",
+  "countryId": "{{COUNTRY_ID}}"
 }
 ```
 
-**✅ Success:** You see user details  
-**❌ If 401 Unauthorized:** Token not saved correctly, check Authorization header
+**Expected Response:** 201 Created
+
+**Save:** `GOVERNORATE_ID` from response
 
 ---
 
-### Step 4: Complete Profile
+### Step 1.4: Create Delegation
+```bash
+POST http://localhost:3000/admin/geography/delegations
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
 
-**Request:** `4. Complete User Profile`
-
-**What happens:**
-- Updates user's firstName, secondName, email, image
-- Requires authentication
-
-**Expected Response (200 OK):**
-```json
 {
-  "id": "uuid-here",
-  "phone": "+21612345678",
+  "nameDelegation": "Tunis Centre",
+  "maxConfirmationDelayMinutes": 15,
+  "governorateId": "{{GOVERNORATE_ID}}"
+}
+```
+
+**Expected Response:** 201 Created
+
+**Save:** `DELEGATION_ID_1` from response
+
+---
+
+### Step 1.5: Create Another Delegation (for testing different zones)
+```bash
+POST http://localhost:3000/admin/geography/delegations
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "nameDelegation": "La Marsa",
+  "maxConfirmationDelayMinutes": 15,
+  "governorateId": "{{GOVERNORATE_ID}}"
+}
+```
+
+**Save:** `DELEGATION_ID_2` from response
+
+---
+
+### Step 1.6: Create Pricing Policies (All 4 Zone Types)
+
+**SAME_DELEGATION:**
+```bash
+POST http://localhost:3000/admin/pricing-policies
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "countryId": "{{COUNTRY_ID}}",
+  "deliveryZoneType": "SAME_DELEGATION",
+  "pricePerKm": 1.5,
+  "baseFee": 5.0,
+  "baseWeight": 5.0,
+  "extraWeightStep": 1.0,
+  "extraWeightPrice": 0.5,
+  "nightFee": 2.0,
+  "platformFee": 1.0,
+  "maxNegativeDays": 7,
+  "isActive": true
+}
+```
+
+**SAME_GOVERNORATE:**
+```bash
+POST http://localhost:3000/admin/pricing-policies
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "countryId": "{{COUNTRY_ID}}",
+  "deliveryZoneType": "SAME_GOVERNORATE",
+  "pricePerKm": 2.0,
+  "baseFee": 8.0,
+  "baseWeight": 5.0,
+  "extraWeightStep": 1.0,
+  "extraWeightPrice": 0.75,
+  "nightFee": 3.0,
+  "platformFee": 1.5,
+  "maxNegativeDays": 7,
+  "isActive": true
+}
+```
+
+**DIFFERENT_GOVERNORATE:**
+```bash
+POST http://localhost:3000/admin/pricing-policies
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "countryId": "{{COUNTRY_ID}}",
+  "deliveryZoneType": "DIFFERENT_GOVERNORATE",
+  "pricePerKm": 3.0,
+  "baseFee": 15.0,
+  "baseWeight": 5.0,
+  "extraWeightStep": 1.0,
+  "extraWeightPrice": 1.0,
+  "nightFee": 5.0,
+  "platformFee": 2.0,
+  "maxNegativeDays": 7,
+  "isActive": true
+}
+```
+
+**DIFFERENT_COUNTRY:**
+```bash
+POST http://localhost:3000/admin/pricing-policies
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "countryId": "{{COUNTRY_ID}}",
+  "deliveryZoneType": "DIFFERENT_COUNTRY",
+  "pricePerKm": 5.0,
+  "baseFee": 30.0,
+  "baseWeight": 5.0,
+  "extraWeightStep": 1.0,
+  "extraWeightPrice": 2.0,
+  "nightFee": 10.0,
+  "platformFee": 5.0,
+  "maxNegativeDays": 7,
+  "isActive": true
+}
+```
+
+**Expected Response:** 201 Created for each
+
+---
+
+## 2. User Registration & Authentication
+
+### Step 2.1: Register Customer
+```bash
+POST http://localhost:3000/auth/user/register
+Content-Type: application/json
+
+{
+  "phone": "+21698765432",
+  "password": "Customer123",
   "firstName": "Ahmed",
   "secondName": "Ben Ali",
-  "myEmail": "ahmed@example.com",
-  "image": "https://example.com/avatar.jpg",
-  "role": "CUSTOMER",
-  "status": "ACTIVE",
-  "createdAt": "2026-02-24T..."
+  "role": "CUSTOMER"
 }
 ```
 
+**Expected Response:** 201 Created with access_token
+
+**Save:** `CUSTOMER_TOKEN` and `CUSTOMER_USER_ID` from response
+
 ---
 
-## 🎯 Test Flow 2: Driver Registration
+### Step 2.2: Register Driver
+```bash
+POST http://localhost:3000/auth/user/register
+Content-Type: application/json
 
-### Step 1: Send OTP to Driver
-
-**Request:** `5. Send OTP - Driver`
-
-Change phone to a NEW number (not in database):
-```json
 {
-  "phone": "+21677777777",
+  "phone": "+21623456789",
+  "password": "Driver123",
+  "firstName": "Mohamed",
+  "secondName": "Trabelsi",
   "role": "DRIVER"
 }
 ```
 
-**Expected:** OTP sent successfully
+**Expected Response:** 201 Created with access_token
+
+**Save:** `DRIVER_TOKEN` and `DRIVER_USER_ID` from response
 
 ---
 
-### Step 2: Verify & Auto-Register
+## 3. Customer Service Management
 
-**Request:** `6. Verify OTP - Driver Login`
-
-Update phone and use the OTP:
-```json
-{
-  "phone": "+21677777777",
-  "role": "DRIVER",
-  "otp": "123456"
-}
-```
-
-**What happens:**
-- OTP verified
-- User doesn't exist → creates new User + Driver profile
-- Driver status set to "INCOMPLETE"
-- Returns JWT tokens
-
-**Expected Response (200 OK):**
-```json
-{
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expiresIn": 604800
-}
-```
-
----
-
-### Step 3: Check Driver Info
-
-**Request:** `3. Get Current User Info`
-
-**Expected Response:**
-```json
-{
-  "id": "new-uuid",
-  "phone": "+21677777777",
-  "role": "DRIVER",
-  "status": "ACTIVE",
-  "profileId": "driver-uuid"
-}
-```
-
----
-
-## 🎯 Test Flow 3: Admin Login
-
-### Step 1: Admin Login
-
-**Request:** `1. Admin Login`
-
-**What happens:**
-- Validates email/password
-- In dev mode, accepts any password
-- Returns JWT tokens for SuperUser
-
-**Expected Response (200 OK):**
-```json
-{
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expiresIn": 604800
-}
-```
-
-**Note:** Token is different from User tokens (has type: 'SUPER_USER')
-
----
-
-## 🧪 Test Flow 4: Error Scenarios
-
-### Test 1: Wrong Role Error
-
-**Request:** `Wrong Role Error` (in Test Scenarios folder)
-
-**What happens:**
-- Phone +21612345678 is registered as CUSTOMER
-- Try to send OTP with role DRIVER
-- Should fail
-
-**Expected Response (400 Bad Request):**
-```json
-{
-  "statusCode": 400,
-  "message": "This phone number is registered as CUSTOMER. Please use the correct role.",
-  "error": "Bad Request"
-}
-```
-
----
-
-### Test 2: Invalid OTP
-
-**Request:** `Invalid OTP`
-
-**What happens:**
-- Try to verify with wrong OTP code
-- Shows remaining attempts
-
-**Expected Response (400 Bad Request):**
-```json
-{
-  "statusCode": 400,
-  "message": "Invalid OTP. 4 attempts remaining.",
-  "error": "Bad Request"
-}
-```
-
----
-
-### Test 3: Invalid Phone Format
-
-**Request:** `Invalid Phone Format`
-
-**What happens:**
-- Validation pipe catches invalid phone
-- Returns validation error
-
-**Expected Response (400 Bad Request):**
-```json
-{
-  "statusCode": 400,
-  "message": ["Invalid phone number format"],
-  "error": "Bad Request"
-}
-```
-
----
-
-### Test 4: Missing Authorization
-
-**Request:** `Missing Authorization Header`
-
-**What happens:**
-- Try to access protected route without token
-- Guard blocks request
-
-**Expected Response (401 Unauthorized):**
-```json
-{
-  "statusCode": 401,
-  "message": "Authentication required"
-}
-```
-
----
-
-## 🔄 Test Flow 5: Rate Limiting
-
-### Test Rate Limit
-
-1. Send OTP to same phone 5 times quickly
-2. On 6th attempt, should get error
-
-**Expected Response (429 Too Many Requests):**
-```json
-{
-  "statusCode": 429,
-  "message": "Too many OTP requests. Please wait before requesting another."
-}
-```
-
-**To reset:** Wait 1 hour OR manually delete from Redis:
+### Step 3.1: Create Customer Service Account
 ```bash
-redis-cli
-> DEL otp_rate:+21612345678
-```
+POST http://localhost:3000/admin/customer-services
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
 
----
-
-## 🔄 Test Flow 6: OTP Expiration
-
-### Test Expired OTP
-
-1. Send OTP
-2. Wait 5+ minutes (or manually delete from Redis)
-3. Try to verify
-
-**Expected Response (400 Bad Request):**
-```json
 {
-  "statusCode": 400,
-  "message": "OTP expired or not found. Please request a new one.",
-  "error": "Bad Request"
+  "telephone": "+21655555555",
+  "pseudo": "cs_support1",
+  "email": "support1@delivery.com",
+  "password": "Support123",
+  "roles": [
+    "READ_DRIVER_PROFILE",
+    "READ_CUSTOMER_PROFILE",
+    "VERIFY_ACCOUNTS",
+    "MANAGE_SUPPORT_TICKETS"
+  ]
 }
 ```
 
-**To test quickly:**
+**Expected Response:** 201 Created
+
+**Save:** `CS_ID` from response
+
+---
+
+### Step 3.2: Get All Customer Services
 ```bash
-redis-cli
-> DEL otp:+21612345678:CUSTOMER
+GET http://localhost:3000/admin/customer-services
+Authorization: Bearer {{ADMIN_TOKEN}}
 ```
+
+**Expected Response:** 200 OK with array of CS accounts
 
 ---
 
-## 📊 Monitoring & Debugging
-
-### Check Redis Keys
-
+### Step 3.3: Add Role to CS
 ```bash
-redis-cli
-
-# List all OTP keys
-> KEYS otp:*
-
-# Check specific OTP
-> GET otp:+21612345678:CUSTOMER
-
-# Check rate limit
-> GET otp_rate:+21612345678
-
-# Check TTL (time to live)
-> TTL otp:+21612345678:CUSTOMER
+POST http://localhost:3000/admin/customer-services/{{CS_ID}}/roles/MANAGE_DISPUTES
+Authorization: Bearer {{ADMIN_TOKEN}}
 ```
 
-### Check Database
+**Expected Response:** 200 OK with updated CS object
 
+---
+
+### Step 3.4: Remove Role from CS
 ```bash
-# Connect to PostgreSQL
-psql -U postgres -d delivery_platform
-
-# Check users
-SELECT id, phone, role, status FROM users;
-
-# Check customers
-SELECT u.phone, c.id, c.completed_orders 
-FROM customers c 
-JOIN users u ON c.user_id = u.id;
-
-# Check drivers
-SELECT u.phone, d.status, d.vehicle_type 
-FROM drivers d 
-JOIN users u ON d.user_id = u.id;
+DELETE http://localhost:3000/admin/customer-services/{{CS_ID}}/roles/MANAGE_DISPUTES
+Authorization: Bearer {{ADMIN_TOKEN}}
 ```
 
-### Server Logs
-
-Watch the terminal where `npm run start:dev` is running:
-- OTP generation logs
-- Authentication attempts
-- Errors and warnings
+**Expected Response:** 200 OK
 
 ---
 
-## 🎯 Success Criteria
+## 4. User Profile & Address Management
 
-After testing, you should have:
+### Step 4.1: Get Customer Profile
+```bash
+GET http://localhost:3000/users/profile
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+```
 
-✅ Successfully sent OTP to customer phone  
-✅ Verified OTP and received JWT token  
-✅ Accessed protected route with token  
-✅ Completed user profile  
-✅ Registered new driver via OTP  
-✅ Admin logged in with email/password  
-✅ Tested error scenarios (wrong OTP, wrong role, etc.)  
-✅ Verified rate limiting works  
-✅ Confirmed OTP expiration works  
+**Expected Response:** 200 OK with user profile including customer data
 
 ---
 
-## 🐛 Common Issues & Solutions
+### Step 4.2: Update Customer Profile
+```bash
+PATCH http://localhost:3000/users/profile
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+Content-Type: application/json
 
-### Issue: "Cannot POST /auth/user/send-otp"
-**Solution:** Check base URL is `http://localhost:3000/api` (note the `/api` prefix)
+{
+  "firstName": "Ahmed Updated",
+  "myEmail": "ahmed@example.com"
+}
+```
 
-### Issue: OTP not auto-saved in Postman
-**Solution:** Check the "Tests" tab in request has the script to save OTP
-
-### Issue: Token not working
-**Solution:** 
-- Verify format: `Bearer <token>` (note the space)
-- Check token hasn't expired
-- Ensure you're using the right token (userAccessToken vs superUserAccessToken)
-
-### Issue: "User not found" after login
-**Solution:** Run seed script again: `npm run prisma:seed`
-
-### Issue: Redis connection refused
-**Solution:** Start Redis: `redis-server` or `docker run -d -p 6379:6379 redis:alpine`
+**Expected Response:** 200 OK with updated profile
 
 ---
 
-## 📝 Quick Reference
+### Step 4.3: Create Customer Address (Pickup)
+```bash
+POST http://localhost:3000/addresses
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+Content-Type: application/json
 
-### Test Phones (from seed)
-- Customer: `+21612345678`
-- Driver: `+21698765432`
-
-### Test Emails (from seed)
-- Admin: `admin@delivery.com`
-- Customer Service: `support@delivery.com`
-
-### Base URL
+{
+  "latitude": 36.8065,
+  "longitude": 10.1815,
+  "street": "Avenue Habib Bourguiba",
+  "delegationId": "{{DELEGATION_ID_1}}"
+}
 ```
-http://localhost:3000/api
+
+**Expected Response:** 201 Created
+
+**Save:** `CUSTOMER_ADDRESS_1` (pickup address)
+
+---
+
+### Step 4.4: Create Customer Address (Dropoff)
+```bash
+POST http://localhost:3000/addresses
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+Content-Type: application/json
+
+{
+  "latitude": 36.8500,
+  "longitude": 10.2000,
+  "street": "Avenue de la Liberté",
+  "delegationId": "{{DELEGATION_ID_2}}"
+}
 ```
 
-### Authorization Header Format
+**Expected Response:** 201 Created
+
+**Save:** `CUSTOMER_ADDRESS_2` (dropoff address)
+
+---
+
+### Step 4.5: Get All Customer Addresses
+```bash
+GET http://localhost:3000/addresses
+Authorization: Bearer {{CUSTOMER_TOKEN}}
 ```
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+**Expected Response:** 200 OK with array of addresses
+
+---
+
+### Step 4.6: Create Driver Address
+```bash
+POST http://localhost:3000/addresses
+Authorization: Bearer {{DRIVER_TOKEN}}
+Content-Type: application/json
+
+{
+  "latitude": 36.8100,
+  "longitude": 10.1900,
+  "street": "Rue de Marseille",
+  "delegationId": "{{DELEGATION_ID_1}}"
+}
+```
+
+**Expected Response:** 201 Created
+
+---
+
+## 5. Driver Verification
+
+### Step 5.1: Upload Driver Documents
+```bash
+POST http://localhost:3000/driver/documents
+Authorization: Bearer {{DRIVER_TOKEN}}
+Content-Type: application/json
+
+{
+  "documentType": "ID_CARD",
+  "documentImage": "https://example.com/id-front.jpg",
+  "selfieImage": "https://example.com/selfie.jpg",
+  "docImageTop": "https://example.com/id-top.jpg",
+  "docImageBottom": "https://example.com/id-bottom.jpg"
+}
+```
+
+**Expected Response:** 201 Created
+
+**Note:** Driver status should now be PENDING_REVIEW
+
+---
+
+### Step 5.2: Get Driver Verification Status
+```bash
+GET http://localhost:3000/driver/verification
+Authorization: Bearer {{DRIVER_TOKEN}}
+```
+
+**Expected Response:** 200 OK with verification status
+
+---
+
+### Step 5.3: Admin - Get Pending Drivers
+```bash
+GET http://localhost:3000/admin/drivers/pending
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+**Expected Response:** 200 OK with array of pending drivers
+
+**Save:** `DRIVER_ID` from response
+
+---
+
+### Step 5.4: Admin - Approve Driver
+```bash
+POST http://localhost:3000/admin/drivers/{{DRIVER_ID}}/approve
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+**Expected Response:** 200 OK
+
+**Note:** Driver status should now be VERIFIED
+
+---
+
+## 6. Customer Management
+
+### Step 6.1: Get Customer Profile (as customer)
+```bash
+GET http://localhost:3000/customers/me
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+```
+
+**Expected Response:** 200 OK with customer profile including referral codes
+
+---
+
+### Step 6.2: Admin - Get All Customers
+```bash
+GET http://localhost:3000/admin/customers?page=1&limit=20
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+**Expected Response:** 200 OK with paginated customers
+
+**Save:** `CUSTOMER_ID` from response
+
+---
+
+### Step 6.3: Admin - Get Customer Statistics
+```bash
+GET http://localhost:3000/admin/customers/stats
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+**Expected Response:** 200 OK with statistics
+
+---
+
+### Step 6.4: Admin - Search Customers
+```bash
+GET http://localhost:3000/admin/customers/search?q=Ahmed
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+**Expected Response:** 200 OK with matching customers
+
+---
+
+## 7. Order Creation & Management
+
+### Step 7.1: Create Order (SAME_GOVERNORATE)
+```bash
+POST http://localhost:3000/orders
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+Content-Type: application/json
+
+{
+  "pickupAddressId": "{{CUSTOMER_ADDRESS_1}}",
+  "dropoffAddressId": "{{CUSTOMER_ADDRESS_2}}",
+  "paymentType": "COD",
+  "weight": 3.5,
+  "description": "Fragile package",
+  "isNightDelivery": false
+}
+```
+
+**Expected Response:** 201 Created with order details including:
+- Calculated distance
+- Calculated price based on SAME_GOVERNORATE policy
+- Status: SEARCHING_DRIVER
+
+**Save:** `ORDER_ID` from response
+
+---
+
+### Step 7.2: Get Customer Orders
+```bash
+GET http://localhost:3000/orders/my-orders
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+```
+
+**Expected Response:** 200 OK with array of orders
+
+---
+
+### Step 7.3: Get Order by ID
+```bash
+GET http://localhost:3000/orders/{{ORDER_ID}}
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+```
+
+**Expected Response:** 200 OK with order details
+
+---
+
+## 8. Driver Assignment & Order Flow
+
+### Step 8.1: Driver - Get Available Orders
+```bash
+GET http://localhost:3000/driver/orders/available
+Authorization: Bearer {{DRIVER_TOKEN}}
+```
+
+**Expected Response:** 200 OK with orders categorized by zone:
+```json
+{
+  "sameDelegation": [],
+  "sameGovernorate": [/* order should be here */],
+  "differentGovernorate": [],
+  "differentCountry": []
+}
 ```
 
 ---
 
-## 🚀 Ready to Test!
+### Step 8.2: Driver - Accept Order
+```bash
+POST http://localhost:3000/driver/orders/{{ORDER_ID}}/accept
+Authorization: Bearer {{DRIVER_TOKEN}}
+```
 
-1. Import the Postman collection
-2. Start with "User Auth" folder
-3. Run requests in order (1 → 2 → 3 → 4)
-4. Check responses match expected results
-5. Try error scenarios
-6. Test admin login
+**Expected Response:** 200 OK
 
-**Pro tip:** Use Postman's Collection Runner to run all tests automatically!
+**Effects:**
+- Order status → DRIVER_ASSIGNED
+- Chat room created
+- Driver assignment created
 
 ---
 
-Good luck! 🎉
+### Step 8.3: Driver - Get My Orders
+```bash
+GET http://localhost:3000/driver/orders/my-orders
+Authorization: Bearer {{DRIVER_TOKEN}}
+```
+
+**Expected Response:** 200 OK with assigned orders
+
+---
+
+### Step 8.4: Get Order (should show driver assignment)
+```bash
+GET http://localhost:3000/orders/{{ORDER_ID}}
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+```
+
+**Expected Response:** 200 OK with driver assignment details
+
+---
+
+### Step 8.5: Cancel Assignment (by customer)
+```bash
+POST http://localhost:3000/driver/orders/{{ORDER_ID}}/cancel-assignment
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+Content-Type: application/json
+
+{
+  "reason": "Need to change delivery details"
+}
+```
+
+**Expected Response:** 200 OK
+
+**Effects:**
+- Order status → SEARCHING_DRIVER
+- Chat room closed
+- Order available to other drivers again
+
+---
+
+### Step 8.6: Driver - Accept Order Again
+```bash
+POST http://localhost:3000/driver/orders/{{ORDER_ID}}/accept
+Authorization: Bearer {{DRIVER_TOKEN}}
+```
+
+**Expected Response:** 200 OK
+
+---
+
+### Step 8.7: Cancel Assignment (by driver)
+```bash
+POST http://localhost:3000/driver/orders/{{ORDER_ID}}/cancel-assignment
+Authorization: Bearer {{DRIVER_TOKEN}}
+Content-Type: application/json
+
+{
+  "reason": "Cannot reach pickup location"
+}
+```
+
+**Expected Response:** 200 OK
+
+---
+
+## 9. Restrictions & Guards
+
+### Step 9.1: Admin - Block Customer
+```bash
+POST http://localhost:3000/admin/restrictions/block
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "userId": "{{CUSTOMER_USER_ID}}",
+  "reason": "Fraudulent activity"
+}
+```
+
+**Expected Response:** 201 Created
+
+---
+
+### Step 9.2: Try to Create Order (should fail)
+```bash
+POST http://localhost:3000/orders
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+Content-Type: application/json
+
+{
+  "pickupAddressId": "{{CUSTOMER_ADDRESS_1}}",
+  "dropoffAddressId": "{{CUSTOMER_ADDRESS_2}}",
+  "paymentType": "COD",
+  "weight": 2.0
+}
+```
+
+**Expected Response:** 403 Forbidden
+**Message:** "Your account is not active because Fraudulent activity"
+
+---
+
+### Step 9.3: Admin - Get Active Restrictions
+```bash
+GET http://localhost:3000/admin/restrictions/user/{{CUSTOMER_USER_ID}}
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+**Expected Response:** 200 OK with active restrictions
+
+**Save:** `RESTRICTION_ID` from response
+
+---
+
+### Step 9.4: Admin - Lift Restriction
+```bash
+DELETE http://localhost:3000/admin/restrictions/{{RESTRICTION_ID}}/lift
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+**Expected Response:** 200 OK
+
+---
+
+### Step 9.5: Try to Create Order Again (should succeed)
+```bash
+POST http://localhost:3000/orders
+Authorization: Bearer {{CUSTOMER_TOKEN}}
+Content-Type: application/json
+
+{
+  "pickupAddressId": "{{CUSTOMER_ADDRESS_1}}",
+  "dropoffAddressId": "{{CUSTOMER_ADDRESS_2}}",
+  "paymentType": "COD",
+  "weight": 2.0
+}
+```
+
+**Expected Response:** 201 Created
+
+---
+
+### Step 9.6: Admin - Suspend Driver
+```bash
+POST http://localhost:3000/admin/restrictions/suspend-driver
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "driverId": "{{DRIVER_ID}}",
+  "reason": "Multiple customer complaints",
+  "durationDays": 7
+}
+```
+
+**Expected Response:** 201 Created
+
+---
+
+### Step 9.7: Driver - Try to Accept Order (should fail)
+```bash
+POST http://localhost:3000/driver/orders/{{ORDER_ID}}/accept
+Authorization: Bearer {{DRIVER_TOKEN}}
+```
+
+**Expected Response:** 403 Forbidden
+**Message:** "Account restricted (SUSPENSION): Multiple customer complaints"
+
+---
+
+## 10. Additional Tests
+
+### Test 10.1: Update Pricing Policy
+```bash
+PATCH http://localhost:3000/admin/pricing-policies/{{POLICY_ID}}
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "pricePerKm": 1.8,
+  "baseFee": 6.0
+}
+```
+
+---
+
+### Test 10.2: Deactivate Pricing Policy
+```bash
+PATCH http://localhost:3000/admin/pricing-policies/{{POLICY_ID}}/deactivate
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+---
+
+### Test 10.3: Update Customer Service Roles
+```bash
+PATCH http://localhost:3000/admin/customer-services/{{CS_ID}}/roles
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "roles": [
+    "READ_DRIVER_PROFILE",
+    "READ_CUSTOMER_PROFILE",
+    "VERIFY_ACCOUNTS",
+    "UPDATE_DRIVER_STATUS",
+    "UPDATE_CUSTOMER_STATUS"
+  ]
+}
+```
+
+---
+
+### Test 10.4: Toggle CS Status
+```bash
+PATCH http://localhost:3000/admin/customer-services/{{CS_ID}}/toggle-status
+Authorization: Bearer {{ADMIN_TOKEN}}
+```
+
+---
+
+## Expected Results Summary
+
+✅ **Admin Setup:** Countries, governorates, delegations, and pricing policies created
+✅ **User Registration:** Customer and driver accounts created with JWT tokens
+✅ **CS Management:** CS account created with roles, roles can be added/removed
+✅ **Profile Management:** Users can view and update profiles
+✅ **Address Management:** Users can create and manage addresses
+✅ **Driver Verification:** Driver uploads documents, admin approves, status changes to VERIFIED
+✅ **Customer Management:** Admin can view customers, statistics, and search
+✅ **Order Creation:** Order created with automatic distance and price calculation
+✅ **Driver Assignment:** Driver sees prioritized orders, can accept orders
+✅ **Chat Room:** Automatically created when driver accepts order
+✅ **Cancellation:** Both parties can cancel assignment, order becomes available again
+✅ **Restrictions:** Blocked users cannot create orders, suspended drivers cannot accept orders
+✅ **Guards:** UserActiveGuard and UserRestrictionGuard enforce access control
+
+---
+
+## Troubleshooting
+
+### Issue: "Address coordinates are required"
+**Solution:** Ensure addresses have latitude and longitude
+
+### Issue: "No active pricing policy found"
+**Solution:** Create pricing policies for all 4 zone types
+
+### Issue: "Driver must be verified"
+**Solution:** Admin must approve driver verification first
+
+### Issue: "Your account is not active"
+**Solution:** Check if user is blocked, lift restriction if needed
+
+### Issue: "Order is not available for assignment"
+**Solution:** Order must be in SEARCHING_DRIVER status
+
+---
+
+## Next Steps
+
+After completing these tests:
+1. Test with multiple drivers to see order prioritization
+2. Test with different zone types (create addresses in different delegations/governorates)
+3. Test edge cases (invalid data, missing fields, etc.)
+4. Test concurrent operations (multiple drivers accepting same order)
+5. Performance testing with large datasets

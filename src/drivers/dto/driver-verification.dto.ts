@@ -1,0 +1,56 @@
+import { IsString, IsNotEmpty, IsEnum, IsOptional } from 'class-validator';
+import { DocumentType, VerificationStatus, DriverStatus } from '@prisma/client';
+
+export class UploadDocumentsDto {
+  @IsEnum(DocumentType)
+  @IsNotEmpty()
+  documentType: DocumentType;
+
+  @IsString()
+  @IsNotEmpty()
+  documentImage: string;
+
+  @IsString()
+  @IsNotEmpty()
+  selfieImage: string;
+
+  @IsString()
+  @IsOptional()
+  docImageTop?: string;
+
+  @IsString()
+  @IsOptional()
+  docImageBottom?: string;
+}
+
+export class DocumentResponseDto {
+  id: string;
+  documentImage: string | null;
+  selfieImage: string | null;
+  docImageTop: string | null;
+  docImageBottom: string | null;
+  verificationStatus: VerificationStatus;
+}
+
+export class DriverVerificationResponseDto {
+  driverId: string;
+  status: DriverStatus;
+  documentType: DocumentType | null;
+  submittedAt: Date | null;
+  verifiedAt: Date | null;
+  approvedAt: Date | null;
+  suspendedAt: Date | null;
+  documents: DocumentResponseDto[];
+}
+
+export class RejectDriverDto {
+  @IsString()
+  @IsNotEmpty()
+  reason: string;
+}
+
+export class SuspendDriverDto {
+  @IsString()
+  @IsNotEmpty()
+  reason: string;
+}

@@ -12,6 +12,8 @@ import * as bcrypt from 'bcrypt';
 import {
   SendOtpDto,
   VerifyOtpDto,
+  UserRegisterDto,
+  UserLoginDto,
   CompleteUserProfileDto,
   SuperUserLoginDto,
   AuthTokensDto,

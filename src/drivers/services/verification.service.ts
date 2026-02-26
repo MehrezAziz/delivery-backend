@@ -1,0 +1,108 @@
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { UploadDocumentsDto, DriverVerificationResponseDto } from '../dto/driver-verification.dto';
+import { UserRole, DriverStatus, VerificationStatus } from '@prisma/client';
+
+@Injectable()
+export class VerificationService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async uploadDocuments(userId: string, dto: UploadDocumentsDto): Promise<DriverVerificationResponseDto> {
+    // Check if user is a driver
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { driver: true },
+    });
+
+    if (!user || user.role !== UserRole.DRIVER || !user.driver) {
+      throw new ForbiddenException('Only drivers can upload verification documents');
+    }
+
+    const driverId = user.driver.id;
+
+    // Create or update driver verification
+    let verification = await this.prisma.driverVerification.findUnique({
+      where: { driverId },
+    });
+
+    if (!verification) {
+      verification = await this.prisma.driverVerification.create({
+        data: {
+          driverId,
+          documentType: dto.documentType,
+          submittedAt: new Date(),
+        },
+      });
+    } else {
+      verification = await this.prisma.driverVerification.update({
+        where: { driverId },
+        data: {
+          documentType: dto.documentType,
+          submittedAt: new Date(),
+        },
+      });
+    }
+
+    // Create document record
+    await this.prisma.document.create({
+      data: {
+        verificationId: verification.id,
+        documentImage: dto.documentImage,
+        selfieImage: dto.selfieImage,
+        docImageTop: dto.docImageTop,
+        docImageBottom: dto.docImageBottom,
+        verificationStatus: VerificationStatus.SUBMITTED,
+      },
+    });
+
+    // Update driver status to PENDING_REVIEW
+    await this.prisma.driver.update({
+      where: { id: driverId },
+      data: { status: DriverStatus.PENDING_REVIEW },
+    });
+
+    return this.getVerificationStatus(userId);
+  }
+
+  async getVerificationStatus(userId: string): Promise<DriverVerificationResponseDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        driver: {
+          include: {
+            driverVerification: {
+              include: {
+                documents: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user || !user.driver) {
+      throw new NotFoundException('Driver not found');
+    }
+
+    const driver = user.driver;
+    const verification = driver.driverVerification;
+
+    return {
+      driverId: driver.id,
+      status: driver.status,
+      documentType: verification?.documentType || null,
+      submittedAt: verification?.submittedAt || null,
+      verifiedAt: verification?.verifiedAt || null,
+      approvedAt: driver.approvedAt,
+      suspendedAt: driver.suspendedAt,
+      documents: verification?.documents.map(doc => ({
+        id: doc.id,
+        documentImage: doc.documentImage,
+        selfieImage: doc.selfieImage,
+        docImageTop: doc.docImageTop,
+        docImageBottom: doc.docImageBottom,
+        verificationStatus: doc.verificationStatus,
+      })) || [],
+    };
+  }
+}

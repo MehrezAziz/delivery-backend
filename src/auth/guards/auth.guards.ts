@@ -159,10 +159,20 @@ export class StaffGuard implements CanActivate {
  */
 @Injectable()
 export class UserActiveGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const user: AuthenticatedUser = context.switchToHttp().getRequest().user;
+    
     if (user?.status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException('Your account is not active');
+      // Get the most recent restriction reason
+      const restriction = await this.prisma.userRestriction.findFirst({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+      });
+      
+      const reason = restriction?.reason || 'account is blocked';
+      throw new ForbiddenException(`Your account is not active because ${reason}`);
     }
     return true;
   }
