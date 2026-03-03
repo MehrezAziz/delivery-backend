@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRestrictionResponseDto } from './dto/restriction.dto';
-import { RestrictionType, UserStatus, DriverStatus } from '@prisma/client';
+import { RestrictionType, DriverStatus, CustomerStatus } from '@prisma/client';
 
 @Injectable()
 export class RestrictionService {
@@ -9,7 +9,10 @@ export class RestrictionService {
 
   async blockUser(userId: string, reason: string, adminId: string): Promise<UserRestrictionResponseDto> {
     // Check if user exists
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { customer: true, driver: true },
+    });
     if (!user) {
       throw new NotFoundException('User not found');
     }
@@ -25,11 +28,18 @@ export class RestrictionService {
       },
     });
 
-    // Update user status to BLOCKED
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { status: UserStatus.BLOCKED },
-    });
+    // Update customer or driver status to BLOCKED/SUSPENDED
+    if (user.customer) {
+      await this.prisma.customer.update({
+        where: { id: user.customer.id },
+        data: { customerStatus: CustomerStatus.BLOCKED },
+      });
+    } else if (user.driver) {
+      await this.prisma.driver.update({
+        where: { id: user.driver.id },
+        data: { status: DriverStatus.SUSPENDED },
+      });
+    }
 
     return this.mapToResponseDto(restriction);
   }
@@ -125,21 +135,24 @@ export class RestrictionService {
     // Check if user has any other active restrictions
     const hasOtherActiveRestrictions = await this.hasActiveRestrictions(restriction.userId);
 
-    // If no other active restrictions, restore user status to ACTIVE
+    // If no other active restrictions, restore customer/driver status to ACTIVE/VERIFIED
     if (!hasOtherActiveRestrictions) {
-      await this.prisma.user.update({
+      const user = await this.prisma.user.findUnique({
         where: { id: restriction.userId },
-        data: { status: UserStatus.ACTIVE },
+        include: { customer: true, driver: true },
       });
+
+      if (user?.customer) {
+        await this.prisma.customer.update({
+          where: { id: user.customer.id },
+          data: { customerStatus: CustomerStatus.ACTIVE },
+        });
+      }
 
       // If it was a driver suspension, restore driver status to VERIFIED
-      const driver = await this.prisma.driver.findUnique({
-        where: { userId: restriction.userId },
-      });
-
-      if (driver && driver.status === DriverStatus.SUSPENDED && driver.approvedAt) {
+      if (user?.driver && user.driver.status === DriverStatus.SUSPENDED && user.driver.approvedAt) {
         await this.prisma.driver.update({
-          where: { id: driver.id },
+          where: { id: user.driver.id },
           data: { status: DriverStatus.VERIFIED },
         });
       }

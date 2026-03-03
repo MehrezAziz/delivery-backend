@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
@@ -12,6 +13,7 @@ import { WalletModule } from './wallet/wallet.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { RestrictionModule } from './restrictions/restriction.module';
 import { AdminModule } from './admin/admin.module';
+import { ReferralModule } from './referral/referral.module';
 
 @Module({
   imports: [
@@ -19,6 +21,7 @@ import { AdminModule } from './admin/admin.module';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    EventEmitterModule.forRoot(),
     PrismaModule,
     AuthModule,
     UsersModule,
@@ -29,6 +32,7 @@ import { AdminModule } from './admin/admin.module';
     NotificationsModule,
     RestrictionModule,
     AdminModule,
+    ReferralModule,
   ],
   controllers: [AppController],
   providers: [AppService],

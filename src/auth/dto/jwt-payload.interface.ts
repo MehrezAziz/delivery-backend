@@ -34,7 +34,6 @@ export interface AuthenticatedUser {
   id: string;
   phone: string;
   role: UserRole;
-  status: UserStatus;
   profileId: string;
   type: 'USER';
 }

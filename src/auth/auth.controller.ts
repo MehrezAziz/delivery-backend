@@ -18,6 +18,8 @@ import {
   AuthTokensDto,
   OtpResponseDto,
 } from './dto/auth.dto';
+import { RegisterCustomerDto } from './dto/register-customer.dto';
+import { RegisterCustomerResponseDto } from './dto/register-customer-response.dto';
 import { Public, CurrentUser, UserId } from './decorators/auth.decorators';
 import { JwtUserGuard } from './guards/auth.guards';
 import type { AuthenticatedUser } from './dto/jwt-payload.interface';
@@ -64,6 +66,17 @@ export class AuthController {
   }
 
   /**
+   * POST /auth/customer/register
+   * Register new customer with optional referral code
+   */
+  @Public()
+  @Post('customer/register')
+  @HttpCode(HttpStatus.CREATED)
+  async registerCustomer(@Body() dto: RegisterCustomerDto): Promise<RegisterCustomerResponseDto> {
+    return this.authService.registerCustomer(dto);
+  }
+
+  /**
    * POST /auth/user/login
    * Login with phone and password
    */
@@ -99,7 +112,6 @@ export class AuthController {
       id: user.id,
       phone: user.phone,
       role: user.role,
-      status: user.status,
       profileId: user.profileId,
     };
   }

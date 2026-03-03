@@ -30,7 +30,6 @@ export class RegistrationService {
         firstName: dto.firstName,
         secondName: dto.secondName,
         role: dto.role,
-        status: UserStatus.ACTIVE,
         ...(dto.role === UserRole.CUSTOMER && {
           customer: {
             create: {},

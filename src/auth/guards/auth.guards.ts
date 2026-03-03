@@ -154,7 +154,7 @@ export class StaffGuard implements CanActivate {
 // ============================================
 
 /**
- * Ensures the USER account is ACTIVE (not BLOCKED)
+ * Ensures the USER account is ACTIVE (not BLOCKED/SUSPENDED)
  * Use after JwtUserGuard for sensitive operations
  */
 @Injectable()
@@ -164,7 +164,21 @@ export class UserActiveGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const user: AuthenticatedUser = context.switchToHttp().getRequest().user;
     
-    if (user?.status !== UserStatus.ACTIVE) {
+    // Check customer or driver status
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      include: {
+        customer: true,
+        driver: true,
+      },
+    });
+
+    if (!dbUser) {
+      throw new ForbiddenException('User not found');
+    }
+
+    // Check if customer is blocked
+    if (dbUser.customer && dbUser.customer.customerStatus === 'BLOCKED') {
       // Get the most recent restriction reason
       const restriction = await this.prisma.userRestriction.findFirst({
         where: { userId: user.id },
@@ -174,6 +188,19 @@ export class UserActiveGuard implements CanActivate {
       const reason = restriction?.reason || 'account is blocked';
       throw new ForbiddenException(`Your account is not active because ${reason}`);
     }
+
+    // Check if driver is suspended
+    if (dbUser.driver && dbUser.driver.status === 'SUSPENDED') {
+      // Get the most recent restriction reason
+      const restriction = await this.prisma.userRestriction.findFirst({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+      });
+      
+      const reason = restriction?.reason || 'account is suspended';
+      throw new ForbiddenException(`Your account is not active because ${reason}`);
+    }
+
     return true;
   }
 }

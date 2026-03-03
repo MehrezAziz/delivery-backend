@@ -1,16 +1,14 @@
 import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
 
 export class UpdateCustomerDto {
-  @IsString()
-  @IsOptional()
-  myReferralCodeId?: string;
+  // Customer fields are now managed through relations
+  // No direct fields to update on Customer model
 }
 
 export class CustomerResponseDto {
   id: string;
   userId: string;
   completedOrders: number;
-  myReferralCodeId: string | null;
   referredByCodeId: string | null;
   user: {
     id: string;

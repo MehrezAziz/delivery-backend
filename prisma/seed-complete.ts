@@ -244,7 +244,6 @@ async function main() {
       firstName: 'Ahmed',
       secondName: 'Ben Ali',
       role: 'CUSTOMER',
-      status: 'ACTIVE',
       myEmail: 'ahmed@example.com',
     },
   });
@@ -262,7 +261,6 @@ async function main() {
       firstName: 'Fatma',
       secondName: 'Trabelsi',
       role: 'CUSTOMER',
-      status: 'ACTIVE',
       myEmail: 'fatma@example.com',
     },
   });
@@ -286,7 +284,6 @@ async function main() {
       firstName: 'Mohamed',
       secondName: 'Trabelsi',
       role: 'DRIVER',
-      status: 'ACTIVE',
     },
   });
 
@@ -314,7 +311,6 @@ async function main() {
       firstName: 'Karim',
       secondName: 'Mansour',
       role: 'DRIVER',
-      status: 'ACTIVE',
     },
   });
 

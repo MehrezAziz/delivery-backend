@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateCustomerDto, CustomerResponseDto, CustomerListResponseDto, CustomerStatsDto } from './dto/customer.dto';
-import { UserStatus } from '@prisma/client';
+import { CustomerStatus } from '@prisma/client';
 
 @Injectable()
 export class CustomersService {
@@ -22,7 +22,6 @@ export class CustomersService {
             secondName: true,
             image: true,
             myEmail: true,
-            status: true,
           },
         },
         myReferralCode: {
@@ -64,9 +63,10 @@ export class CustomersService {
       throw new NotFoundException('Customer profile not found');
     }
 
-    const updatedCustomer = await this.prisma.customer.update({
+    // Since Customer model has no direct updatable fields (only relations),
+    // we just fetch and return the current customer data
+    const updatedCustomer = await this.prisma.customer.findUnique({
       where: { userId },
-      data: dto,
       include: {
         user: {
           select: {
@@ -76,7 +76,6 @@ export class CustomersService {
             secondName: true,
             image: true,
             myEmail: true,
-            status: true,
           },
         },
         myReferralCode: {
@@ -123,7 +122,6 @@ export class CustomersService {
               phone: true,
               firstName: true,
               secondName: true,
-              status: true,
             },
           },
         },
@@ -159,7 +157,6 @@ export class CustomersService {
             secondName: true,
             image: true,
             myEmail: true,
-            status: true,
           },
         },
         myReferralCode: {
@@ -201,10 +198,10 @@ export class CustomersService {
       throw new NotFoundException('Customer not found');
     }
 
-    // Soft delete by setting user status to BLOCKED
-    await this.prisma.user.update({
-      where: { id: customer.userId },
-      data: { status: UserStatus.BLOCKED },
+    // Soft delete by setting customer status to BLOCKED
+    await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { customerStatus: CustomerStatus.BLOCKED },
     });
   }
 
@@ -216,16 +213,12 @@ export class CustomersService {
       this.prisma.customer.count(),
       this.prisma.customer.count({
         where: {
-          user: {
-            status: UserStatus.ACTIVE,
-          },
+          customerStatus: CustomerStatus.ACTIVE,
         },
       }),
       this.prisma.customer.count({
         where: {
-          user: {
-            status: UserStatus.BLOCKED,
-          },
+          customerStatus: CustomerStatus.BLOCKED,
         },
       }),
       this.prisma.customer.count({
@@ -276,7 +269,6 @@ export class CustomersService {
             phone: true,
             firstName: true,
             secondName: true,
-            status: true,
           },
         },
       },
@@ -291,7 +283,6 @@ export class CustomersService {
       id: customer.id,
       userId: customer.userId,
       completedOrders: customer.completedOrders,
-      myReferralCodeId: customer.myReferralCodeId,
       referredByCodeId: customer.referredByCodeId,
       user: customer.user,
       myReferralCode: customer.myReferralCode,

@@ -7,7 +7,6 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
-import { UserStatus } from '@prisma/client';
 import { JwtUserPayload, AuthenticatedUser } from '../dto/jwt-payload.interface';
 
 @Injectable()
@@ -31,21 +30,28 @@ export class JwtUserStrategy extends PassportStrategy(Strategy, 'jwt-user') {
 
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
+      include: {
+        customer: true,
+        driver: true,
+      },
     });
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    if (user.status === UserStatus.BLOCKED) {
+    // Check if customer is blocked or driver is suspended
+    if (user.customer && user.customer.customerStatus === 'BLOCKED') {
       throw new UnauthorizedException('Account has been blocked');
+    }
+    if (user.driver && user.driver.status === 'SUSPENDED') {
+      throw new UnauthorizedException('Account has been suspended');
     }
 
     return {
       id: user.id,
       phone: user.phone,
       role: user.role,
-      status: user.status,
       profileId: payload.profileId,
       type: 'USER',
     };

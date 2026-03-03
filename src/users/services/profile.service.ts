@@ -2,7 +2,6 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { UserResponseDto } from '../dto/user-response.dto';
-import { UserStatus } from '@prisma/client';
 
 @Injectable()
 export class ProfileService {
@@ -47,10 +46,28 @@ export class ProfileService {
   }
 
   async deleteAccount(userId: string): Promise<void> {
-    await this.prisma.user.update({
+    // Get user to determine role
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      data: { status: UserStatus.BLOCKED },
+      include: { customer: true, driver: true },
     });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Block customer or suspend driver based on role
+    if (user.customer) {
+      await this.prisma.customer.update({
+        where: { id: user.customer.id },
+        data: { customerStatus: 'BLOCKED' },
+      });
+    } else if (user.driver) {
+      await this.prisma.driver.update({
+        where: { id: user.driver.id },
+        data: { status: 'SUSPENDED' },
+      });
+    }
   }
 
   private mapToResponseDto(user: any): UserResponseDto {

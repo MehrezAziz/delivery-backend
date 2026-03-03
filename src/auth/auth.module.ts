@@ -7,6 +7,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { OtpService } from './otp.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { ReferralModule } from '../referral/referral.module';
 import { JwtUserStrategy } from './strategies/jwt-user.strategy';
 import { JwtSuperUserStrategy } from './strategies/jwt-superuser.strategy';
 import {
@@ -25,6 +26,7 @@ import {
 @Module({
   imports: [
     PrismaModule,
+    ReferralModule,
     PassportModule,
     ConfigModule,
     // JWT Module

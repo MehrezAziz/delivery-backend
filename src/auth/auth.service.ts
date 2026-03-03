@@ -8,6 +8,8 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpService } from './otp.service';
+import { ReferralService } from '../referral/services/referral.service';
+import { CodeGeneratorService } from '../referral/services/code-generator.service';
 import * as bcrypt from 'bcrypt';
 import {
   SendOtpDto,
@@ -19,7 +21,9 @@ import {
   AuthTokensDto,
   OtpResponseDto,
 } from './dto/auth.dto';
-import { UserRole, SuperUserRole, UserStatus } from '@prisma/client';
+import { RegisterCustomerDto } from './dto/register-customer.dto';
+import { RegisterCustomerResponseDto } from './dto/register-customer-response.dto';
+import { UserRole, SuperUserRole, UserStatus, ReferralCode } from '@prisma/client';
 import { JwtUserPayload, JwtSuperUserPayload } from './dto/jwt-payload.interface';
 
 @Injectable()
@@ -29,6 +33,8 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly otpService: OtpService,
+    private readonly referralService: ReferralService,
+    private readonly codeGeneratorService: CodeGeneratorService,
   ) {}
 
   // ============================================
@@ -86,9 +92,12 @@ export class AuthService {
       user = await this.createUserWithProfile(phone, role);
     }
 
-    // Check if user is blocked
-    if (user.status === UserStatus.BLOCKED) {
+    // Check if customer is blocked or driver is suspended
+    if (user.customer && user.customer.customerStatus === 'BLOCKED') {
       throw new UnauthorizedException('Your account has been blocked');
+    }
+    if (user.driver && user.driver.status === 'SUSPENDED') {
+      throw new UnauthorizedException('Your account has been suspended');
     }
 
     // Get profileId
@@ -96,6 +105,125 @@ export class AuthService {
 
     // Generate JWT tokens
     return this.generateUserTokens(user.id, phone, role, profileId);
+  }
+
+  /**
+   * Customer registration with optional referral code
+   */
+  async registerCustomer(dto: RegisterCustomerDto): Promise<RegisterCustomerResponseDto> {
+    const { phone, password, firstName, secondName, image, userGender, myEmail, referralCode } = dto;
+
+    // Check if user already exists
+    const existingUser = await this.prisma.user.findUnique({
+      where: { phone },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('User with this phone number already exists');
+    }
+
+    // Step 1: Validate referral code if provided
+    let validatedCode: ReferralCode | null = null;
+    if (referralCode) {
+      validatedCode = await this.referralService.validateReferralCode(
+        referralCode,
+        undefined // No customerId yet
+      );
+    }
+
+    // Step 2: Start transaction
+    return await this.prisma.$transaction(async (tx) => {
+      // Step 3: Create User with hashed password
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await tx.user.create({
+        data: {
+          phone,
+          password: hashedPassword,
+          firstName,
+          secondName,
+          image,
+          userGender,
+          myEmail,
+          role: UserRole.CUSTOMER,
+        },
+      });
+
+      // Step 4: Create Customer record with referredByCodeId if code validated
+      const customer = await tx.customer.create({
+        data: {
+          userId: user.id,
+          referredByCodeId: validatedCode?.id,
+        },
+      });
+
+      // Step 5: Check for self-referral after customer creation (ownerId === customerId)
+      if (validatedCode && validatedCode.ownerId === customer.id) {
+        throw new BadRequestException('Cannot use your own referral code');
+      }
+
+      // Step 6: Increment referralCode.totalUses if code was used
+      if (validatedCode) {
+        await tx.referralCode.update({
+          where: { id: validatedCode.id },
+          data: { totalUses: { increment: 1 } },
+        });
+      }
+
+      // Step 7: Generate referral code for new customer
+      const myReferralCode = await this.codeGeneratorService.generateForCustomer(
+        customer.id,
+        tx
+      );
+
+      // Step 8: Generate JWT token with user id, phone, and role
+      const accessToken = this.jwtService.sign({
+        sub: user.id,
+        phone: user.phone,
+        role: user.role,
+        profileId: customer.id,
+        type: 'USER',
+      } as JwtUserPayload);
+
+      // Step 9: Return RegisterCustomerResponseDto
+      return {
+        accessToken,
+        user: {
+          id: user.id,
+          phone: user.phone,
+          firstName: user.firstName,
+          secondName: user.secondName,
+          image: user.image,
+          myEmail: user.myEmail,
+          userGender: user.userGender,
+          role: user.role,
+          createdAt: user.createdAt,
+        },
+        customer: {
+          id: customer.id,
+          userId: customer.userId,
+          completedOrders: customer.completedOrders,
+          customerStatus: customer.customerStatus,
+          referredByCodeId: customer.referredByCodeId,
+        },
+        referralCode: {
+          id: myReferralCode.id,
+          code: myReferralCode.code,
+          type: myReferralCode.type,
+          value: Number(myReferralCode.value),
+          maxDiscountAmount: myReferralCode.maxDiscountAmount
+            ? Number(myReferralCode.maxDiscountAmount)
+            : undefined,
+          minOrderAmount: myReferralCode.minOrderAmount
+            ? Number(myReferralCode.minOrderAmount)
+            : undefined,
+          active: myReferralCode.active,
+          validFrom: myReferralCode.validFrom ?? undefined,
+          validUntil: myReferralCode.validUntil ?? undefined,
+          usageLimit: myReferralCode.usageLimit ?? undefined,
+          totalUses: myReferralCode.totalUses,
+        },
+      };
+    });
   }
 
   /**
@@ -126,7 +254,6 @@ export class AuthService {
           secondName,
           myEmail,
           role,
-          status: UserStatus.ACTIVE,
         },
       });
 
@@ -203,9 +330,12 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Check if blocked
-    if (user.status === UserStatus.BLOCKED) {
+    // Check if customer is blocked or driver is suspended
+    if (user.customer && user.customer.customerStatus === 'BLOCKED') {
       throw new UnauthorizedException('Your account has been blocked');
+    }
+    if (user.driver && user.driver.status === 'SUSPENDED') {
+      throw new UnauthorizedException('Your account has been suspended');
     }
 
     // Get profileId
@@ -293,7 +423,6 @@ export class AuthService {
         data: {
           phone,
           role,
-          status: UserStatus.ACTIVE,
         },
       });
 

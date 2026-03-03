@@ -164,7 +164,6 @@ async function main() {
       secondName: 'Ben Ali',
       myEmail: 'ahmed@example.com',
       role: UserRole.CUSTOMER,
-      status: UserStatus.ACTIVE,
     },
   });
 
@@ -200,7 +199,6 @@ async function main() {
       secondName: 'Trabelsi',
       myEmail: 'mohamed@example.com',
       role: UserRole.DRIVER,
-      status: UserStatus.ACTIVE,
     },
   });
 
