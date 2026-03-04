@@ -11,7 +11,7 @@ import {
   DefaultValuePipe,
 } from '@nestjs/common';
 import { CustomersService } from './customers.service';
-import type { UpdateCustomerDto } from './dto/customer.dto';
+import { UpdateCustomerDto } from './dto/customer.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, JwtSuperUserGuard, CustomerGuard, AdminGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';

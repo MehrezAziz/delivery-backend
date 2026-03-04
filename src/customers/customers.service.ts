@@ -22,6 +22,9 @@ export class CustomersService {
             secondName: true,
             image: true,
             myEmail: true,
+            userGender: true,
+            role: true,
+            createdAt: true,
           },
         },
         myReferralCode: {
@@ -63,8 +66,19 @@ export class CustomersService {
       throw new NotFoundException('Customer profile not found');
     }
 
-    // Since Customer model has no direct updatable fields (only relations),
-    // we just fetch and return the current customer data
+    // Update user fields
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        firstName: dto.firstName,
+        secondName: dto.secondName,
+        myEmail: dto.myEmail,
+        userGender: dto.userGender,
+        image: dto.image,
+      },
+    });
+
+    // Fetch and return updated customer data
     const updatedCustomer = await this.prisma.customer.findUnique({
       where: { userId },
       include: {
@@ -76,6 +90,9 @@ export class CustomersService {
             secondName: true,
             image: true,
             myEmail: true,
+            userGender: true,
+            role: true,
+            createdAt: true,
           },
         },
         myReferralCode: {
@@ -157,6 +174,9 @@ export class CustomersService {
             secondName: true,
             image: true,
             myEmail: true,
+            userGender: true,
+            role: true,
+            createdAt: true,
           },
         },
         myReferralCode: {
@@ -283,6 +303,7 @@ export class CustomersService {
       id: customer.id,
       userId: customer.userId,
       completedOrders: customer.completedOrders,
+      customerStatus: customer.customerStatus,
       referredByCodeId: customer.referredByCodeId,
       user: customer.user,
       myReferralCode: customer.myReferralCode,

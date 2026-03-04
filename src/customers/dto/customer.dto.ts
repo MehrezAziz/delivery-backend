@@ -1,14 +1,33 @@
-import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, Min, IsEnum } from 'class-validator';
+import { UserGender } from '@prisma/client';
 
 export class UpdateCustomerDto {
-  // Customer fields are now managed through relations
-  // No direct fields to update on Customer model
+  @IsString()
+  @IsOptional()
+  firstName?: string;
+
+  @IsString()
+  @IsOptional()
+  secondName?: string;
+
+  @IsString()
+  @IsOptional()
+  myEmail?: string;
+
+  @IsEnum(UserGender)
+  @IsOptional()
+  userGender?: UserGender;
+
+  @IsString()
+  @IsOptional()
+  image?: string;
 }
 
 export class CustomerResponseDto {
   id: string;
   userId: string;
   completedOrders: number;
+  customerStatus: string;
   referredByCodeId: string | null;
   user: {
     id: string;
@@ -17,7 +36,9 @@ export class CustomerResponseDto {
     secondName: string | null;
     image: string | null;
     myEmail: string | null;
-    status: string;
+    userGender: string | null;
+    role: string;
+    createdAt: Date;
   };
   myReferralCode?: {
     id: string;
@@ -42,7 +63,6 @@ export class CustomerListResponseDto {
     phone: string;
     firstName: string | null;
     secondName: string | null;
-    status: string;
   };
 }
 
