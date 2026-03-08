@@ -15,6 +15,7 @@ import {
   UserRegisterDto,
   CompleteUserProfileDto,
   SuperUserLoginDto,
+  GoogleAuthDto,
   AuthTokensDto,
   OtpResponseDto,
 } from './dto/auth.dto';
@@ -114,6 +115,17 @@ export class AuthController {
       role: user.role,
       profileId: user.profileId,
     };
+  }
+
+  /**
+   * POST /auth/google
+   * Google OAuth login/register
+   */
+  @Public()
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  async googleAuth(@Body() dto: GoogleAuthDto): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
+    return this.authService.googleAuth(dto.idToken, dto.role, dto.referralCode);
   }
 
   // ============================================

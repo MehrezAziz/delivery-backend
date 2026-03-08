@@ -230,16 +230,18 @@ enum CustomerServiceRole {
 // ============================================
 
 model User {
-  id         String      @id @default(uuid())
-  phone      String      @unique
-  password   String?     // Optional: for email/password login (nullable for OTP-only users)
-  firstName  String?     @map("first_name")
-  secondName String?     @map("second_name")
-  image      String?
-  myEmail    String?     @map("my_email")
-  userGender UserGender? @map("user_gender")
-  role       UserRole
-  createdAt  DateTime    @default(now()) @map("created_at")
+  id          String      @id @default(uuid())
+  phone       String      @unique
+  password    String?     // Optional: for email/password login (nullable for OTP-only users)
+  firstName   String?     @map("first_name")
+  secondName  String?     @map("second_name")
+  image       String?
+  myEmail     String?     @map("my_email")
+  userGender  UserGender? @map("user_gender")
+  googleId    String?     @unique @map("google_id") // Google's unique user ID
+  googleEmail String?     @unique @map("google_email") // Email from Google
+  role        UserRole
+  createdAt   DateTime    @default(now()) @map("created_at")
 
   // Relations
   addresses        Address[]

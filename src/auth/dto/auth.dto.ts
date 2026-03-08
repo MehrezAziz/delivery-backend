@@ -123,3 +123,20 @@ export class OtpResponseDto {
   // Only in development mode
   otp?: string;
 }
+
+
+// ============================================
+// GOOGLE OAUTH DTOs
+// ============================================
+
+export class GoogleAuthDto {
+  @IsString()
+  idToken!: string; // Google ID token from frontend
+
+  @IsEnum(UserRole)
+  role!: UserRole; // CUSTOMER or DRIVER
+
+  @IsOptional()
+  @IsString()
+  referralCode?: string; // Optional referral code for customer registration
+}

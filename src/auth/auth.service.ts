@@ -584,4 +584,241 @@ export class AuthService {
       return superUser;
     });
   }
+
+  // ============================================
+  // GOOGLE OAUTH AUTH
+  // ============================================
+
+  /**
+   * Google OAuth login/register
+   */
+  async googleAuth(idToken: string, role: UserRole, referralCode?: string): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
+    const { OAuth2Client } = require('google-auth-library');
+    const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
+
+    try {
+      // Verify the Google ID token
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: this.configService.get('GOOGLE_CLIENT_ID'),
+      });
+
+      const payload = ticket.getPayload();
+      const googleId = payload.sub;
+      const googleEmail = payload.email;
+      const firstName = payload.given_name;
+      const secondName = payload.family_name;
+      const image = payload.picture;
+
+      // Check if user exists with this Google ID
+      let user = await this.prisma.user.findUnique({
+        where: { googleId },
+        include: {
+          customer: true,
+          driver: true,
+        },
+      });
+
+      // If user doesn't exist, check by email
+      if (!user && googleEmail) {
+        user = await this.prisma.user.findUnique({
+          where: { googleEmail },
+          include: {
+            customer: true,
+            driver: true,
+          },
+        });
+      }
+
+      // If user exists, login
+      if (user) {
+        // Check role matches
+        if (user.role !== role) {
+          throw new UnauthorizedException(
+            `This Google account is registered as ${user.role}. Please use the correct role.`,
+          );
+        }
+
+        // Check if customer is blocked or driver is suspended
+        if (user.customer && user.customer.customerStatus === 'BLOCKED') {
+          throw new UnauthorizedException('Your account has been blocked');
+        }
+        if (user.driver && user.driver.status === 'SUSPENDED') {
+          throw new UnauthorizedException('Your account has been suspended');
+        }
+
+        // Get profileId
+        const profileId = role === UserRole.CUSTOMER ? user.customer!.id : user.driver!.id;
+
+        // Generate JWT tokens
+        return this.generateUserTokens(user.id, googleEmail || '', role, profileId);
+      }
+
+      // If user doesn't exist, register new user
+      if (role === UserRole.CUSTOMER) {
+        // For customers, use the full registration flow with referral code support
+        return await this.registerCustomerWithGoogle(
+          googleId,
+          googleEmail,
+          firstName,
+          secondName,
+          image,
+          referralCode,
+        );
+      } else {
+        // For drivers, create basic account
+        const newUser = await this.prisma.$transaction(async (tx) => {
+          const createdUser = await tx.user.create({
+            data: {
+              googleId,
+              googleEmail,
+              firstName,
+              secondName,
+              image,
+              phone: googleEmail || `google_${googleId}`, // Use email or generate unique phone
+              role,
+            },
+          });
+
+          await tx.driver.create({
+            data: {
+              userId: createdUser.id,
+              status: 'INCOMPLETE',
+            },
+          });
+
+          return tx.user.findUnique({
+            where: { id: createdUser.id },
+            include: {
+              driver: true,
+            },
+          });
+        });
+
+        if (!newUser) {
+          throw new Error('Failed to create user');
+        }
+
+        return this.generateUserTokens(newUser.id, googleEmail || '', role, newUser.driver!.id);
+      }
+    } catch (error: any) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Invalid Google token');
+    }
+  }
+
+  /**
+   * Register customer with Google OAuth
+   */
+  private async registerCustomerWithGoogle(
+    googleId: string,
+    googleEmail: string | undefined,
+    firstName: string | undefined,
+    secondName: string | undefined,
+    image: string | undefined,
+    referralCode?: string,
+  ): Promise<RegisterCustomerResponseDto> {
+    // Step 1: Validate referral code if provided
+    let validatedCode: ReferralCode | null = null;
+    if (referralCode) {
+      validatedCode = await this.referralService.validateReferralCode(
+        referralCode,
+        undefined,
+      );
+    }
+
+    // Step 2: Start transaction
+    return await this.prisma.$transaction(async (tx) => {
+      // Step 3: Create User
+      const user = await tx.user.create({
+        data: {
+          googleId,
+          googleEmail,
+          firstName,
+          secondName,
+          image,
+          phone: googleEmail || `google_${googleId}`, // Use email or generate unique phone
+          role: UserRole.CUSTOMER,
+        },
+      });
+
+      // Step 4: Create Customer record with referredByCodeId if code validated
+      const customer = await tx.customer.create({
+        data: {
+          userId: user.id,
+          referredByCodeId: validatedCode?.id,
+        },
+      });
+
+      // Step 5: Check for self-referral
+      if (validatedCode && validatedCode.ownerId === customer.id) {
+        throw new BadRequestException('Cannot use your own referral code');
+      }
+
+      // Step 6: Increment referralCode.totalUses if code was used
+      if (validatedCode) {
+        await tx.referralCode.update({
+          where: { id: validatedCode.id },
+          data: { totalUses: { increment: 1 } },
+        });
+      }
+
+      // Step 7: Generate referral code for new customer
+      const myReferralCode = await this.codeGeneratorService.generateForCustomer(
+        customer.id,
+        tx,
+      );
+
+      // Step 8: Generate JWT token
+      const accessToken = this.jwtService.sign({
+        sub: user.id,
+        phone: user.phone,
+        role: user.role,
+        profileId: customer.id,
+        type: 'USER',
+      } as JwtUserPayload);
+
+      // Step 9: Return RegisterCustomerResponseDto
+      return {
+        accessToken,
+        user: {
+          id: user.id,
+          phone: user.phone,
+          firstName: user.firstName,
+          secondName: user.secondName,
+          image: user.image,
+          myEmail: user.myEmail,
+          userGender: user.userGender,
+          role: user.role,
+          createdAt: user.createdAt,
+        },
+        customer: {
+          id: customer.id,
+          userId: customer.userId,
+          completedOrders: customer.completedOrders,
+          customerStatus: customer.customerStatus,
+          referredByCodeId: customer.referredByCodeId,
+        },
+        referralCode: {
+          id: myReferralCode.id,
+          code: myReferralCode.code,
+          type: myReferralCode.type,
+          value: Number(myReferralCode.value),
+          maxDiscountAmount: myReferralCode.maxDiscountAmount
+            ? Number(myReferralCode.maxDiscountAmount)
+            : undefined,
+          minOrderAmount: myReferralCode.minOrderAmount
+            ? Number(myReferralCode.minOrderAmount)
+            : undefined,
+          active: myReferralCode.active,
+          validFrom: myReferralCode.validFrom ?? undefined,
+          validUntil: myReferralCode.validUntil ?? undefined,
+          usageLimit: myReferralCode.usageLimit ?? undefined,
+          totalUses: myReferralCode.totalUses,
+        },
+      };
+    });
+  }
 }
