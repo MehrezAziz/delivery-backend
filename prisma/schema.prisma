@@ -231,7 +231,7 @@ enum CustomerServiceRole {
 
 model User {
   id          String      @id @default(uuid())
-  phone       String      @unique
+  phone       String?      @unique
   password    String?     // Optional: for email/password login (nullable for OTP-only users)
   firstName   String?     @map("first_name")
   secondName  String?     @map("second_name")

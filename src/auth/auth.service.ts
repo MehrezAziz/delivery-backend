@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ConflictException,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -309,7 +310,7 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new NotFoundException('Account not found. Please register first.');
     }
 
     // Check role matches
@@ -672,10 +673,11 @@ export class AuthService {
             data: {
               googleId,
               googleEmail,
+              myEmail: googleEmail, // Set myEmail to the same value as googleEmail
               firstName,
               secondName,
               image,
-              phone: googleEmail || `google_${googleId}`, // Use email or generate unique phone
+              phone: null, // Phone is NULL for Google users
               role,
             },
           });
@@ -710,6 +712,77 @@ export class AuthService {
   }
 
   /**
+   * Google OAuth login only (does not auto-register)
+   */
+  async googleLogin(idToken: string, role: UserRole): Promise<AuthTokensDto> {
+    const { OAuth2Client } = require('google-auth-library');
+    const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
+
+    try {
+      // Verify the Google ID token
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: this.configService.get('GOOGLE_CLIENT_ID'),
+      });
+
+      const payload = ticket.getPayload();
+      const googleId = payload.sub;
+      const googleEmail = payload.email;
+
+      // Check if user exists with this Google ID
+      let user = await this.prisma.user.findUnique({
+        where: { googleId },
+        include: {
+          customer: true,
+          driver: true,
+        },
+      });
+
+      // If user doesn't exist, check by email
+      if (!user && googleEmail) {
+        user = await this.prisma.user.findUnique({
+          where: { googleEmail },
+          include: {
+            customer: true,
+            driver: true,
+          },
+        });
+      }
+
+      // If user doesn't exist, throw error
+      if (!user) {
+        throw new NotFoundException('Account not found. Please register first.');
+      }
+
+      // Check role matches
+      if (user.role !== role) {
+        throw new UnauthorizedException(
+          `This Google account is registered as ${user.role}. Please use the correct role.`,
+        );
+      }
+
+      // Check if customer is blocked or driver is suspended
+      if (user.customer && user.customer.customerStatus === 'BLOCKED') {
+        throw new UnauthorizedException('Your account has been blocked');
+      }
+      if (user.driver && user.driver.status === 'SUSPENDED') {
+        throw new UnauthorizedException('Your account has been suspended');
+      }
+
+      // Get profileId
+      const profileId = role === UserRole.CUSTOMER ? user.customer!.id : user.driver!.id;
+
+      // Generate JWT tokens
+      return this.generateUserTokens(user.id, googleEmail || '', role, profileId);
+    } catch (error: any) {
+      if (error instanceof UnauthorizedException || error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Invalid Google token');
+    }
+  }
+
+  /**
    * Register customer with Google OAuth
    */
   private async registerCustomerWithGoogle(
@@ -736,10 +809,11 @@ export class AuthService {
         data: {
           googleId,
           googleEmail,
+          myEmail: googleEmail, // Set myEmail to the same value as googleEmail
           firstName,
           secondName,
           image,
-          phone: googleEmail || `google_${googleId}`, // Use email or generate unique phone
+          phone: null, // Phone is NULL for Google users
           role: UserRole.CUSTOMER,
         },
       });

@@ -3,7 +3,7 @@ import { ReferralCodeDto } from '../../referral/dto/referral-code.dto';
 
 export class UserDto {
   id!: string;
-  phone!: string;
+  phone!: string | null;
   firstName?: string | null;
   secondName?: string | null;
   image?: string | null;

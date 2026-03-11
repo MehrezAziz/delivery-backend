@@ -119,13 +119,24 @@ export class AuthController {
 
   /**
    * POST /auth/google
-   * Google OAuth login/register
+   * Google OAuth register (creates new account if doesn't exist)
    */
   @Public()
   @Post('google')
   @HttpCode(HttpStatus.OK)
   async googleAuth(@Body() dto: GoogleAuthDto): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
     return this.authService.googleAuth(dto.idToken, dto.role, dto.referralCode);
+  }
+
+  /**
+   * POST /auth/google/login
+   * Google OAuth login only (does not auto-register)
+   */
+  @Public()
+  @Post('google/login')
+  @HttpCode(HttpStatus.OK)
+  async googleLogin(@Body() dto: GoogleAuthDto): Promise<AuthTokensDto> {
+    return this.authService.googleLogin(dto.idToken, dto.role);
   }
 
   // ============================================

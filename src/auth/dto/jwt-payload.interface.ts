@@ -6,7 +6,7 @@ import { UserRole, SuperUserRole, UserStatus } from '@prisma/client';
 
 export interface JwtUserPayload {
   sub: string;       // User.id
-  phone: string;
+  phone: string | null;
   role: UserRole;    // CUSTOMER | DRIVER
   profileId: string; // Customer.id or Driver.id
   type: 'USER';
@@ -32,7 +32,7 @@ export type JwtPayload = JwtUserPayload | JwtSuperUserPayload;
 
 export interface AuthenticatedUser {
   id: string;
-  phone: string;
+  phone: string | null;
   role: UserRole;
   profileId: string;
   type: 'USER';
