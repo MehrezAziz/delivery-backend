@@ -4,15 +4,16 @@ import { DriversService } from './drivers.service';
 import { VerificationService } from './services/verification.service';
 import { AdminApprovalService } from './services/admin-approval.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { DocumentsModule } from '../documents/documents.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, DocumentsModule],
   controllers: [DriversController, AdminDriverController],
   providers: [
     DriversService,
     VerificationService,
     AdminApprovalService,
   ],
-  exports: [VerificationService, AdminApprovalService],
+  exports: [DriversService, VerificationService, AdminApprovalService],
 })
 export class DriversModule {}

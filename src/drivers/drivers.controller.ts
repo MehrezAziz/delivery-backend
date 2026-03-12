@@ -6,17 +6,30 @@ import {
   Param, 
   UseGuards 
 } from '@nestjs/common';
+import { DriversService } from './drivers.service';
 import { VerificationService } from './services/verification.service';
 import { AdminApprovalService } from './services/admin-approval.service';
 import type { UploadDocumentsDto, RejectDriverDto, SuspendDriverDto } from './dto/driver-verification.dto';
-import { CurrentUser } from '../auth/decorators/auth.decorators';
+import { CurrentUser, UserId } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, JwtSuperUserGuard, DriverGuard, AdminGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
 
-@Controller('driver')
+@Controller('drivers')
 @UseGuards(JwtUserGuard, DriverGuard)
 export class DriversController {
-  constructor(private readonly verificationService: VerificationService) {}
+  constructor(
+    private readonly driversService: DriversService,
+    private readonly verificationService: VerificationService,
+  ) {}
+
+  /**
+   * GET /drivers/me
+   * Get authenticated driver profile
+   */
+  @Get('me')
+  async getMyProfile(@UserId() userId: string) {
+    return this.driversService.getDriverProfile(userId);
+  }
 
   @Post('documents')
   async uploadDocuments(

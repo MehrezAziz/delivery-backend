@@ -6,8 +6,13 @@ import {
   HttpStatus,
   UseGuards,
   Patch,
+  UseInterceptors,
+  UploadedFile,
+  UploadedFiles,
 } from '@nestjs/common';
+import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { AuthService } from './auth.service';
+import { DriversService } from '../drivers/drivers.service';
 import {
   SendOtpDto,
   VerifyOtpDto,
@@ -21,13 +26,21 @@ import {
 } from './dto/auth.dto';
 import { RegisterCustomerDto } from './dto/register-customer.dto';
 import { RegisterCustomerResponseDto } from './dto/register-customer-response.dto';
+import { RegisterDriverStep1Dto } from './dto/register-driver-step1.dto';
+import { RegisterDriverStep2Dto } from './dto/register-driver-step2.dto';
+import { RegisterDriverStep3Dto } from './dto/register-driver-step3.dto';
+import { DriverLoginDto } from './dto/driver-login.dto';
+import { GoogleDriverAuthDto } from './dto/google-driver-auth.dto';
 import { Public, CurrentUser, UserId } from './decorators/auth.decorators';
 import { JwtUserGuard } from './guards/auth.guards';
 import type { AuthenticatedUser } from './dto/jwt-payload.interface';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly driversService: DriversService,
+  ) {}
 
   // ============================================
   // USER AUTH ENDPOINTS (Customer & Driver)
@@ -126,6 +139,109 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async googleAuth(@Body() dto: GoogleAuthDto): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
     return this.authService.googleAuth(dto.idToken, dto.role, dto.referralCode);
+  }
+
+  // ============================================
+  // DRIVER REGISTRATION ENDPOINTS (3-STEP PROCESS)
+  // ============================================
+
+  /**
+   * POST /auth/driver/register/step1
+   * Driver registration step 1: User information with optional profile picture
+   */
+  @Public()
+  @Post('driver/register/step1')
+  @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(FileInterceptor('image'))
+  async registerDriverStep1(
+    @Body() dto: RegisterDriverStep1Dto,
+    @UploadedFile() image?: Express.Multer.File,
+  ) {
+    return this.authService.registerDriverStep1(dto, image);
+  }
+
+  /**
+   * POST /auth/driver/google
+   * Driver registration with Google OAuth
+   */
+  @Public()
+  @Post('driver/google')
+  @HttpCode(HttpStatus.CREATED)
+  async registerDriverWithGoogle(@Body() dto: GoogleDriverAuthDto) {
+    return this.authService.registerDriverWithGoogle(dto.idToken, dto.referralCode);
+  }
+
+  /**
+   * POST /auth/driver/register/step2
+   * Driver registration step 2: Driver profile (vehicle, location)
+   */
+  @UseGuards(JwtUserGuard)
+  @Post('driver/register/step2')
+  @HttpCode(HttpStatus.OK)
+  async registerDriverStep2(
+    @UserId() userId: string,
+    @Body() dto: RegisterDriverStep2Dto,
+  ) {
+    return this.driversService.completeDriverProfile(userId, dto);
+  }
+
+  /**
+   * POST /auth/driver/register/step3
+   * Driver registration step 3: Document verification
+   */
+  @UseGuards(JwtUserGuard)
+  @Post('driver/register/step3')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'selfieImage', maxCount: 1 },
+      { name: 'docImageTop', maxCount: 1 },
+      { name: 'docImageBottom', maxCount: 1 },
+    ]),
+  )
+  async registerDriverStep3(
+    @UserId() userId: string,
+    @Body() dto: RegisterDriverStep3Dto,
+    @UploadedFiles()
+    files: {
+      selfieImage?: Express.Multer.File[];
+      docImageTop?: Express.Multer.File[];
+      docImageBottom?: Express.Multer.File[];
+    },
+  ) {
+    const documentFiles = {
+      selfieImage: files.selfieImage?.[0]!,
+      docImageTop: files.docImageTop?.[0]!,
+      docImageBottom: files.docImageBottom?.[0],
+    };
+
+    return this.driversService.submitDocumentVerification(userId, dto, documentFiles);
+  }
+
+  // ============================================
+  // DRIVER AUTHENTICATION ENDPOINTS
+  // ============================================
+
+  /**
+   * POST /auth/driver/login
+   * Driver login with phone and password
+   */
+  @Public()
+  @Post('driver/login')
+  @HttpCode(HttpStatus.OK)
+  async driverLogin(@Body() dto: DriverLoginDto): Promise<AuthTokensDto> {
+    return this.authService.driverLogin(dto);
+  }
+
+  /**
+   * POST /auth/driver/google/login
+   * Driver login with Google OAuth
+   */
+  @Public()
+  @Post('driver/google/login')
+  @HttpCode(HttpStatus.OK)
+  async driverGoogleLogin(@Body() dto: GoogleDriverAuthDto): Promise<AuthTokensDto> {
+    return this.authService.driverGoogleLogin(dto.idToken);
   }
 
   // ============================================
