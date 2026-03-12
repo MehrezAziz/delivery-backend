@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsEnum, IsOptional, MinLength, Matches, Length } from 'class-validator';
+import { IsString, IsEmail, IsEnum, IsOptional, MinLength, Matches } from 'class-validator';
 import { UserGender } from '@prisma/client';
 
 export class RegisterDriverStep1Dto {
@@ -28,12 +28,4 @@ export class RegisterDriverStep1Dto {
   @IsEnum(UserGender, { message: 'Gender must be either MALE or FEMALE' })
   @IsOptional()
   userGender?: UserGender;
-
-  @IsString()
-  @Length(6, 12, { message: 'Referral code must be between 6 and 12 characters' })
-  @Matches(/^[A-Z0-9]+$/, {
-    message: 'Referral code must contain only uppercase letters and numbers',
-  })
-  @IsOptional()
-  referralCode?: string;
 }

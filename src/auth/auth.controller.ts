@@ -168,7 +168,7 @@ export class AuthController {
   @Post('driver/google')
   @HttpCode(HttpStatus.CREATED)
   async registerDriverWithGoogle(@Body() dto: GoogleDriverAuthDto) {
-    return this.authService.registerDriverWithGoogle(dto.idToken, dto.referralCode);
+    return this.authService.registerDriverWithGoogle(dto.idToken);
   }
 
   /**

@@ -836,7 +836,7 @@ export class AuthService {
     dto: RegisterDriverStep1Dto,
     imageFile?: Express.Multer.File,
   ): Promise<RegisterDriverStep1ResponseDto> {
-    const { phone, password, firstName, secondName, myEmail, userGender, referralCode } = dto;
+    const { phone, password, firstName, secondName, myEmail, userGender } = dto;
 
     // Check if user already exists
     const existingUser = await this.prisma.user.findUnique({
@@ -845,15 +845,6 @@ export class AuthService {
 
     if (existingUser) {
       throw new ConflictException('User with this phone number already exists');
-    }
-
-    // Validate referral code if provided
-    let validatedCode: ReferralCode | null = null;
-    if (referralCode) {
-      validatedCode = await this.referralService.validateReferralCode(
-        referralCode,
-        undefined,
-      );
     }
 
     // Upload profile image if provided
@@ -889,14 +880,6 @@ export class AuthService {
           status: 'INCOMPLETE',
         },
       });
-
-      // Increment referral code usage if provided
-      if (validatedCode) {
-        await tx.referralCode.update({
-          where: { id: validatedCode.id },
-          data: { totalUses: { increment: 1 } },
-        });
-      }
 
       // Generate JWT token
       const accessToken = this.jwtService.sign({
@@ -936,7 +919,6 @@ export class AuthService {
    */
   async registerDriverWithGoogle(
     idToken: string,
-    referralCode?: string,
   ): Promise<RegisterDriverStep1ResponseDto> {
     const { OAuth2Client } = require('google-auth-library');
     const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
@@ -975,15 +957,6 @@ export class AuthService {
         }
       }
 
-      // Validate referral code if provided
-      let validatedCode: ReferralCode | null = null;
-      if (referralCode) {
-        validatedCode = await this.referralService.validateReferralCode(
-          referralCode,
-          undefined,
-        );
-      }
-
       // Create user and driver
       return await this.prisma.$transaction(async (tx) => {
         const newUser = await tx.user.create({
@@ -1004,14 +977,6 @@ export class AuthService {
             status: 'INCOMPLETE',
           },
         });
-
-        // Increment referral code usage if provided
-        if (validatedCode) {
-          await tx.referralCode.update({
-            where: { id: validatedCode.id },
-            data: { totalUses: { increment: 1 } },
-          });
-        }
 
         // Generate JWT token
         const accessToken = this.jwtService.sign({
