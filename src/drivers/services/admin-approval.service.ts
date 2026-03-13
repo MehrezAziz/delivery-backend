@@ -2,10 +2,14 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { DriverVerificationResponseDto } from '../dto/driver-verification.dto';
 import { DriverStatus, VerificationStatus } from '@prisma/client';
+import { DriverInitializationService } from './driver-initialization.service';
 
 @Injectable()
 export class AdminApprovalService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly driverInitializationService: DriverInitializationService,
+  ) {}
 
   async getPendingDrivers(): Promise<DriverVerificationResponseDto[]> {
     const drivers = await this.prisma.driver.findMany({
@@ -74,6 +78,9 @@ export class AdminApprovalService {
         data: { verificationStatus: VerificationStatus.VERIFIED },
       });
     }
+
+    // Initialize driver entities (DriverPerformanceMetrics, DriverAccount, WeeklyAvailability)
+    await this.driverInitializationService.initializeVerifiedDriver(driverId);
 
     return this.getDriverVerification(driverId);
   }

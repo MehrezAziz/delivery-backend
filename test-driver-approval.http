@@ -1,0 +1,25 @@
+### Test Driver Approval Flow
+
+# 1. Get list of pending drivers
+GET http://localhost:3000/api/admin/drivers/pending
+Authorization: Bearer YOUR_ADMIN_TOKEN_HERE
+
+###
+
+# 2. Approve a specific driver (replace DRIVER_ID with actual ID)
+POST http://localhost:3000/api/admin/drivers/DRIVER_ID/approve
+Authorization: Bearer YOUR_ADMIN_TOKEN_HERE
+
+###
+
+# 3. Check driver profile after approval
+GET http://localhost:3000/api/drivers/me
+Authorization: Bearer DRIVER_TOKEN_HERE
+
+###
+
+# Alternative: Direct database update (for testing only)
+# Run this SQL in your database client:
+# UPDATE drivers SET status = 'VERIFIED', approved_at = NOW() WHERE id = 'YOUR_DRIVER_ID';
+# Then manually call the initialization:
+# You'll need to create a test endpoint for this
