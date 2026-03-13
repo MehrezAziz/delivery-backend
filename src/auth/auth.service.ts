@@ -24,6 +24,9 @@ import {
 } from './dto/auth.dto';
 import { RegisterCustomerDto } from './dto/register-customer.dto';
 import { RegisterCustomerResponseDto } from './dto/register-customer-response.dto';
+import { RegisterDriverStep1Dto } from './dto/register-driver-step1.dto';
+import { RegisterDriverStep1ResponseDto } from './dto/register-driver-step1-response.dto';
+import { DriverLoginDto } from './dto/driver-login.dto';
 import { UserRole, SuperUserRole, UserStatus, ReferralCode } from '@prisma/client';
 import { JwtUserPayload, JwtSuperUserPayload } from './dto/jwt-payload.interface';
 
@@ -179,7 +182,7 @@ export class AuthService {
       // Step 8: Generate JWT token with user id, phone, and role
       const accessToken = this.jwtService.sign({
         sub: user.id,
-        phone: user.phone,
+        phone: user.phone!,
         role: user.role,
         profileId: customer.id,
         type: 'USER',
@@ -190,7 +193,7 @@ export class AuthService {
         accessToken,
         user: {
           id: user.id,
-          phone: user.phone,
+          phone: user.phone!,
           firstName: user.firstName,
           secondName: user.secondName,
           image: user.image,
@@ -848,7 +851,7 @@ export class AuthService {
       // Step 8: Generate JWT token
       const accessToken = this.jwtService.sign({
         sub: user.id,
-        phone: user.phone,
+        phone: user.phone!,
         role: user.role,
         profileId: customer.id,
         type: 'USER',
@@ -859,7 +862,7 @@ export class AuthService {
         accessToken,
         user: {
           id: user.id,
-          phone: user.phone,
+          phone: user.phone!,
           firstName: user.firstName,
           secondName: user.secondName,
           image: user.image,
@@ -894,5 +897,298 @@ export class AuthService {
         },
       };
     });
+  }
+
+  // ============================================
+  // DRIVER REGISTRATION (3-STEP PROCESS)
+  // ============================================
+
+  /**
+   * Driver Registration Step 1: User Information
+   */
+  async registerDriverStep1(
+    dto: RegisterDriverStep1Dto,
+    imageFile?: Express.Multer.File,
+  ): Promise<RegisterDriverStep1ResponseDto> {
+    const { phone, password, firstName, secondName, myEmail, userGender } = dto;
+
+    // Check if user already exists
+    const existingUser = await this.prisma.user.findUnique({
+      where: { phone },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('User with this phone number already exists');
+    }
+
+    // Upload profile image if provided
+    let imagePath: string | undefined;
+    if (imageFile) {
+      const documentsService = new (require('../documents/documents.service').DocumentsService)();
+      imagePath = await documentsService.uploadProfileImage(imageFile, phone);
+    }
+
+    // Start transaction
+    return await this.prisma.$transaction(async (tx) => {
+      // Hash password if provided
+      const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
+
+      // Create User with role=DRIVER
+      const user = await tx.user.create({
+        data: {
+          phone,
+          password: hashedPassword,
+          firstName,
+          secondName,
+          myEmail,
+          userGender,
+          image: imagePath,
+          role: UserRole.DRIVER,
+        },
+      });
+
+      // Create Driver with status=INCOMPLETE
+      const driver = await tx.driver.create({
+        data: {
+          userId: user.id,
+          status: 'INCOMPLETE',
+        },
+      });
+
+      // Generate JWT token
+      const accessToken = this.jwtService.sign({
+        sub: user.id,
+        phone: user.phone,
+        role: user.role,
+        profileId: driver.id,
+        type: 'USER',
+      } as JwtUserPayload);
+
+      // Return response
+      return {
+        accessToken,
+        user: {
+          id: user.id,
+          phone: user.phone!,
+          firstName: user.firstName ?? undefined,
+          secondName: user.secondName ?? undefined,
+          image: user.image ?? undefined,
+          myEmail: user.myEmail ?? undefined,
+          userGender: user.userGender ?? undefined,
+          role: 'DRIVER',
+          createdAt: user.createdAt,
+        },
+        driver: {
+          id: driver.id,
+          userId: driver.userId,
+          status: 'INCOMPLETE',
+        },
+        nextStep: 'step2',
+      };
+    });
+  }
+
+  /**
+   * Driver Registration with Google OAuth
+   */
+  async registerDriverWithGoogle(
+    idToken: string,
+  ): Promise<RegisterDriverStep1ResponseDto> {
+    const { OAuth2Client } = require('google-auth-library');
+    const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
+
+    try {
+      // Verify the Google ID token
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: this.configService.get('GOOGLE_CLIENT_ID'),
+      });
+
+      const payload = ticket.getPayload();
+      const googleId = payload.sub;
+      const googleEmail = payload.email;
+      const firstName = payload.given_name;
+      const secondName = payload.family_name;
+      const image = payload.picture;
+
+      // Check if user exists with this Google ID
+      let user = await this.prisma.user.findUnique({
+        where: { googleId },
+      });
+
+      if (user) {
+        throw new ConflictException('This Google account is already registered');
+      }
+
+      // Check by email
+      if (googleEmail) {
+        user = await this.prisma.user.findUnique({
+          where: { googleEmail },
+        });
+
+        if (user) {
+          throw new ConflictException('This email is already registered');
+        }
+      }
+
+      // Create user and driver
+      return await this.prisma.$transaction(async (tx) => {
+        const newUser = await tx.user.create({
+          data: {
+            googleId,
+            googleEmail,
+            firstName,
+            secondName,
+            image,
+            phone: googleEmail || `google_${googleId}`,
+            role: UserRole.DRIVER,
+          },
+        });
+
+        const driver = await tx.driver.create({
+          data: {
+            userId: newUser.id,
+            status: 'INCOMPLETE',
+          },
+        });
+
+        // Generate JWT token
+        const accessToken = this.jwtService.sign({
+          sub: newUser.id,
+          phone: newUser.phone!,
+          role: newUser.role,
+          profileId: driver.id,
+          type: 'USER',
+        } as JwtUserPayload);
+
+        return {
+          accessToken,
+          user: {
+            id: newUser.id,
+            phone: newUser.phone!,
+            firstName: newUser.firstName ?? undefined,
+            secondName: newUser.secondName ?? undefined,
+            image: newUser.image ?? undefined,
+            myEmail: newUser.myEmail ?? undefined,
+            userGender: newUser.userGender ?? undefined,
+            role: 'DRIVER',
+            createdAt: newUser.createdAt,
+          },
+          driver: {
+            id: driver.id,
+            userId: driver.userId,
+            status: 'INCOMPLETE',
+          },
+          nextStep: 'step2',
+        };
+      });
+    } catch (error: any) {
+      if (error instanceof ConflictException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Invalid Google token');
+    }
+  }
+
+  // ============================================
+  // DRIVER AUTHENTICATION
+  // ============================================
+
+  /**
+   * Driver Login with phone and password
+   */
+  async driverLogin(dto: DriverLoginDto): Promise<AuthTokensDto> {
+    const { phone, password } = dto;
+
+    // Find user by phone and role=DRIVER
+    const user = await this.prisma.user.findFirst({
+      where: {
+        phone,
+        role: UserRole.DRIVER,
+      },
+      include: {
+        driver: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Check if user has password set
+    if (!user.password) {
+      throw new BadRequestException(
+        'This account uses Google OAuth. Please use Google sign-in.',
+      );
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Check if driver is suspended
+    if (user.driver && user.driver.status === 'SUSPENDED') {
+      throw new UnauthorizedException('Your account has been suspended');
+    }
+
+    // Generate JWT tokens
+    return this.generateUserTokens(user.id, phone, UserRole.DRIVER, user.driver!.id);
+  }
+
+  /**
+   * Driver Google OAuth Login
+   */
+  async driverGoogleLogin(idToken: string): Promise<AuthTokensDto> {
+    const { OAuth2Client } = require('google-auth-library');
+    const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
+
+    try {
+      // Verify the Google ID token
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: this.configService.get('GOOGLE_CLIENT_ID'),
+      });
+
+      const payload = ticket.getPayload();
+      const googleId = payload.sub;
+      const googleEmail = payload.email;
+
+      // Find user by googleId and role=DRIVER
+      const user = await this.prisma.user.findFirst({
+        where: {
+          googleId,
+          role: UserRole.DRIVER,
+        },
+        include: {
+          driver: true,
+        },
+      });
+
+      if (!user) {
+        throw new UnauthorizedException(
+          'This Google account is not registered. Please create an account first.',
+        );
+      }
+
+      // Check if driver is suspended
+      if (user.driver && user.driver.status === 'SUSPENDED') {
+        throw new UnauthorizedException('Your account has been suspended');
+      }
+
+      // Generate JWT tokens
+      return this.generateUserTokens(
+        user.id,
+        googleEmail || user.phone,
+        UserRole.DRIVER,
+        user.driver!.id,
+      );
+    } catch (error: any) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Invalid Google token');
+    }
   }
 }
