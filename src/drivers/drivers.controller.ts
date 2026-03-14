@@ -1,7 +1,8 @@
 import { 
   Controller, 
   Get, 
-  Post, 
+  Post,
+  Put,
   Body, 
   Param, 
   UseGuards 
@@ -9,6 +10,8 @@ import {
 import { DriversService } from './drivers.service';
 import { VerificationService } from './services/verification.service';
 import { AdminApprovalService } from './services/admin-approval.service';
+import { AvailabilityService } from './services/availability.service';
+import type { WeeklyAvailabilityDto } from './services/availability.service';
 import type { UploadDocumentsDto, RejectDriverDto, SuspendDriverDto } from './dto/driver-verification.dto';
 import { CurrentUser, UserId } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, JwtSuperUserGuard, DriverGuard, AdminGuard } from '../auth/guards/auth.guards';
@@ -20,6 +23,7 @@ export class DriversController {
   constructor(
     private readonly driversService: DriversService,
     private readonly verificationService: VerificationService,
+    private readonly availabilityService: AvailabilityService,
   ) {}
 
   /**
@@ -42,6 +46,36 @@ export class DriversController {
   @Get('verification')
   async getVerificationStatus(@CurrentUser() user: AuthenticatedUser) {
     return this.verificationService.getVerificationStatus(user.id);
+  }
+
+  /**
+   * GET /drivers/availability
+   * Get driver's weekly availability schedule
+   */
+  @Get('availability')
+  async getAvailability(@CurrentUser() user: AuthenticatedUser) {
+    return this.availabilityService.getDriverAvailability(user.profileId);
+  }
+
+  /**
+   * PUT /drivers/availability
+   * Update driver's weekly availability schedule
+   */
+  @Put('availability')
+  async updateAvailability(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: WeeklyAvailabilityDto,
+  ) {
+    return this.availabilityService.updateDriverAvailability(user.profileId, dto);
+  }
+
+  /**
+   * POST /drivers/availability/toggle
+   * Toggle availability status (ACTIVE/INACTIVE)
+   */
+  @Post('availability/toggle')
+  async toggleAvailability(@CurrentUser() user: AuthenticatedUser) {
+    return this.availabilityService.toggleAvailabilityStatus(user.profileId);
   }
 }
 
