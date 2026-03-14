@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Patch,
+  Post,
   Delete,
   Body,
   Param,
@@ -12,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { CustomersService } from './customers.service';
 import { UpdateCustomerDto } from './dto/customer.dto';
+import { SetupCustomerDto } from './dto/setup-customer.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, JwtSuperUserGuard, CustomerGuard, AdminGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
@@ -39,6 +41,19 @@ export class CustomersController {
     @Body() dto: UpdateCustomerDto,
   ) {
     return this.customersService.updateCustomerProfile(user.id, dto);
+  }
+
+  /**
+   * POST /customers/me/setup
+   * Choose country (creates wallet) + optional address. Status: CREATED → VERIFIED.
+   */
+  @UseGuards(JwtUserGuard, CustomerGuard)
+  @Post('me/setup')
+  async setupCustomer(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SetupCustomerDto,
+  ) {
+    return this.customersService.setupCustomer(user.id, dto);
   }
 }
 

@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateCustomerDto, CustomerResponseDto, CustomerListResponseDto, CustomerStatsDto } from './dto/customer.dto';
+import { SetupCustomerDto } from './dto/setup-customer.dto';
 import { CustomerStatus } from '@prisma/client';
 
 @Injectable()
@@ -296,6 +297,69 @@ export class CustomersService {
     });
 
     return customers.map(c => this.mapToListDto(c));
+  }
+
+  /**
+   * Customer setup: choose country (creates wallet) + optional address.
+   * Transitions status from CREATED → VERIFIED.
+   */
+  async setupCustomer(userId: string, dto: SetupCustomerDto) {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) throw new NotFoundException('Customer not found');
+
+    if (customer.customerStatus !== CustomerStatus.CREATED) {
+      throw new BadRequestException('Setup already completed');
+    }
+
+    // Validate country
+    const country = await this.prisma.country.findUnique({ where: { id: dto.countryId } });
+    if (!country || !country.isActive) throw new NotFoundException('Country not found');
+
+    // Validate delegation if address provided
+    if (dto.address) {
+      const delegation = await this.prisma.delegation.findUnique({
+        where: { id: dto.address.delegationId },
+        include: { governorate: true },
+      });
+      if (!delegation) throw new NotFoundException('Delegation not found');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Create wallet
+      const existingWallet = await tx.digitalWallet.findUnique({ where: { customerId: customer.id } });
+      if (existingWallet) throw new ConflictException('Wallet already exists');
+
+      await tx.digitalWallet.create({
+        data: {
+          customerId: customer.id,
+          countryId: dto.countryId,
+          balance: 0,
+          currency: country.currencyCode,
+          discount: 0,
+        },
+      });
+
+      // Create address if provided
+      if (dto.address) {
+        await tx.address.create({
+          data: {
+            latitude: dto.address.latitude,
+            longitude: dto.address.longitude,
+            street: dto.address.street,
+            delegationId: dto.address.delegationId,
+            userId,
+          },
+        });
+      }
+
+      // Transition status to VERIFIED
+      await tx.customer.update({
+        where: { id: customer.id },
+        data: { customerStatus: CustomerStatus.ACTIVE },
+      });
+
+      return { message: 'Setup completed. Wallet created successfully.' };
+    });
   }
 
   private mapToResponseDto(customer: any): CustomerResponseDto {

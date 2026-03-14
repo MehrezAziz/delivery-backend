@@ -596,7 +596,7 @@ export class AuthService {
   /**
    * Google OAuth login/register
    */
-  async googleAuth(idToken: string, role: UserRole, referralCode?: string): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
+  async googleAuth(idToken: string, role: UserRole, referralCode?: string, isLoginOnly: boolean = false): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
     const { OAuth2Client } = require('google-auth-library');
     const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
 
@@ -636,6 +636,11 @@ export class AuthService {
 
       // If user exists, login
       if (user) {
+        // If called from register screen, reject — account already exists
+        if (!isLoginOnly) {
+          throw new ConflictException('ACCOUNT_EXISTS');
+        }
+
         // Check role matches
         if (user.role !== role) {
           throw new UnauthorizedException(
@@ -656,6 +661,11 @@ export class AuthService {
 
         // Generate JWT tokens
         return this.generateUserTokens(user.id, googleEmail || '', role, profileId);
+      }
+
+      // If user doesn't exist and this is login-only, reject
+      if (isLoginOnly) {
+        throw new NotFoundException('Account not found. Please register first.');
       }
 
       // If user doesn't exist, register new user
@@ -707,7 +717,11 @@ export class AuthService {
         return this.generateUserTokens(newUser.id, googleEmail || '', role, newUser.driver!.id);
       }
     } catch (error: any) {
-      if (error instanceof UnauthorizedException) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
+      ) {
         throw error;
       }
       throw new UnauthorizedException('Invalid Google token');

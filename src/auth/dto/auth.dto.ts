@@ -139,4 +139,7 @@ export class GoogleAuthDto {
   @IsOptional()
   @IsString()
   referralCode?: string; // Optional referral code for customer registration
+
+  @IsOptional()
+  isLoginOnly?: boolean; // If true, reject if account doesn't exist (login screen)
 }

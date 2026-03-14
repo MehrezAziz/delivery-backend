@@ -35,6 +35,8 @@ enum UserStatus {
 }
 
 enum CustomerStatus {
+  CREATED
+  VERIFIED
   ACTIVE
   SUSPENDED
   BLOCKED
@@ -281,7 +283,7 @@ model Customer {
   id               String         @id @default(uuid())
   userId           String         @unique @map("user_id")
   completedOrders  Int            @default(0) @map("completed_orders")
-  customerStatus   CustomerStatus @default(ACTIVE) @map("customer_status")
+  customerStatus   CustomerStatus @default(CREATED) @map("customer_status")
   referredByCodeId String?        @map("referred_by_code_id")
 
   // Relations

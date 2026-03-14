@@ -14,6 +14,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RestrictionModule } from './restrictions/restriction.module';
 import { AdminModule } from './admin/admin.module';
 import { ReferralModule } from './referral/referral.module';
+import { GeographyModule } from './geography/geography.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { ReferralModule } from './referral/referral.module';
     RestrictionModule,
     AdminModule,
     ReferralModule,
+    GeographyModule,
   ],
   controllers: [AppController],
   providers: [AppService],
