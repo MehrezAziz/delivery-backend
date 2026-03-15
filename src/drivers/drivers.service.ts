@@ -1,71 +1,101 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentsService, DocumentFiles } from '../documents/documents.service';
+import { JwtService } from '@nestjs/jwt';
 import { RegisterDriverStep2Dto } from '../auth/dto/register-driver-step2.dto';
 import { RegisterDriverStep3Dto } from '../auth/dto/register-driver-step3.dto';
 import { RegisterDriverStep2ResponseDto } from '../auth/dto/register-driver-step2-response.dto';
 import { RegisterDriverStep3ResponseDto } from '../auth/dto/register-driver-step3-response.dto';
 import { DriverProfileDto } from './dto/driver-profile.dto';
-import { DriverStatus } from '@prisma/client';
+import { DriverStatus, UserRole } from '@prisma/client';
+import { JwtUserPayload } from '../auth/dto/jwt-payload.interface';
+import { DriverPendingPayload } from '../auth/dto/driver-pending-payload.interface';
 
 @Injectable()
 export class DriversService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly documentsService: DocumentsService,
+    private readonly jwtService: JwtService,
   ) {}
 
   /**
-   * Driver Registration Step 2: Complete Driver Profile
+   * Driver Registration Step 2: Decode pending token, create user+driver+address atomically.
+   * Returns a real access token on success.
    */
   async completeDriverProfile(
-    userId: string,
+    pendingToken: string,
     dto: RegisterDriverStep2Dto,
   ): Promise<RegisterDriverStep2ResponseDto> {
-    const { vehicleType, description, latitude, longitude } = dto;
+    const { vehicleType, description, delegationId, street } = dto;
 
-    // Find driver by userId
-    const driver = await this.prisma.driver.findUnique({
-      where: { userId },
-    });
-
-    if (!driver) {
-      throw new NotFoundException('Driver not found. Please complete step 1 first.');
+    // Decode and verify the pending token
+    let pending: DriverPendingPayload;
+    try {
+      pending = this.jwtService.verify<DriverPendingPayload>(pendingToken);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired registration session. Please start over.');
     }
 
-    // Update driver profile and create location in transaction
+    if (pending.type !== 'DRIVER_PENDING') {
+      throw new UnauthorizedException('Invalid registration token.');
+    }
+
+    // Validate delegation exists
+    const delegation = await this.prisma.delegation.findUnique({ where: { id: delegationId } });
+    if (!delegation) throw new NotFoundException('Delegation not found');
+
+    // Commit everything in one transaction
     return await this.prisma.$transaction(async (tx) => {
-      // Update driver with vehicleType and description
-      const updatedDriver = await tx.driver.update({
-        where: { id: driver.id },
+      // Create User
+      const user = await tx.user.create({
         data: {
-          vehicleType,
-          description,
+          phone: pending.phone ?? null,
+          password: pending.hashedPassword ?? null,
+          firstName: pending.firstName ?? null,
+          secondName: pending.secondName ?? null,
+          myEmail: pending.myEmail ?? null,
+          userGender: (pending.userGender as any) ?? null,
+          image: pending.image ?? null,
+          googleId: pending.googleId ?? null,
+          googleEmail: pending.googleEmail ?? null,
+          role: UserRole.DRIVER,
         },
       });
 
-      // Create driver location
-      const driverLocation = await tx.driverLocation.create({
+      // Create Driver
+      const driver = await tx.driver.create({
+        data: { userId: user.id, vehicleType, description, status: 'INCOMPLETE' },
+      });
+
+      // Create Address (lat/lng/street are null — only delegation is required)
+      await tx.address.create({
         data: {
-          driverId: driver.id,
-          latitude,
-          longitude,
+          delegationId,
+          street: street ?? null,
+          latitude: null,
+          longitude: null,
+          userId: user.id,
         },
       });
+
+      // Issue real access token
+      const accessToken = this.jwtService.sign({
+        sub: user.id,
+        phone: user.phone,
+        role: user.role,
+        profileId: driver.id,
+        type: 'USER',
+      } as JwtUserPayload);
 
       return {
+        accessToken,
         driver: {
-          id: updatedDriver.id,
-          userId: updatedDriver.userId,
-          vehicleType: updatedDriver.vehicleType!,
-          description: updatedDriver.description ?? undefined,
+          id: driver.id,
+          userId: driver.userId,
+          vehicleType: driver.vehicleType!,
+          description: driver.description ?? undefined,
           status: 'INCOMPLETE',
-        },
-        driverLocation: {
-          id: driverLocation.id,
-          driverId: driverLocation.driverId,
-          latitude: driverLocation.latitude,
-          longitude: driverLocation.longitude,
         },
         nextStep: 'step3',
       };

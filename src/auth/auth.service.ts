@@ -918,7 +918,8 @@ export class AuthService {
   // ============================================
 
   /**
-   * Driver Registration Step 1: User Information
+   * Driver Registration Step 1: Validate input, return a short-lived pending token.
+   * NO database record is created here — everything is committed atomically in step 2.
    */
   async registerDriverStep1(
     dto: RegisterDriverStep1Dto,
@@ -926,84 +927,53 @@ export class AuthService {
   ): Promise<RegisterDriverStep1ResponseDto> {
     const { phone, password, firstName, secondName, myEmail, userGender } = dto;
 
-    // Check if user already exists
-    const existingUser = await this.prisma.user.findUnique({
-      where: { phone },
-    });
-
+    // Check phone not already taken
+    const existingUser = await this.prisma.user.findUnique({ where: { phone } });
     if (existingUser) {
       throw new ConflictException('User with this phone number already exists');
     }
 
-    // Upload profile image if provided
+    // Upload profile image if provided (safe to do before DB write)
     let imagePath: string | undefined;
     if (imageFile) {
       const documentsService = new (require('../documents/documents.service').DocumentsService)();
       imagePath = await documentsService.uploadProfileImage(imageFile, phone);
     }
 
-    // Start transaction
-    return await this.prisma.$transaction(async (tx) => {
-      // Hash password if provided
-      const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
+    // Hash password now so we can embed it in the pending token
+    const hashedPassword = password ? await bcrypt.hash(password, 10) : undefined;
 
-      // Create User with role=DRIVER
-      const user = await tx.user.create({
-        data: {
-          phone,
-          password: hashedPassword,
-          firstName,
-          secondName,
-          myEmail,
-          userGender,
-          image: imagePath,
-          role: UserRole.DRIVER,
-        },
-      });
+    // Issue a short-lived pending token (15 min) — no DB write
+    const pendingToken = this.jwtService.sign(
+      {
+        type: 'DRIVER_PENDING',
+        phone,
+        hashedPassword,
+        firstName,
+        secondName,
+        myEmail,
+        userGender,
+        image: imagePath,
+      },
+      { expiresIn: '15m' },
+    );
 
-      // Create Driver with status=INCOMPLETE
-      const driver = await tx.driver.create({
-        data: {
-          userId: user.id,
-          status: 'INCOMPLETE',
-        },
-      });
-
-      // Generate JWT token
-      const accessToken = this.jwtService.sign({
-        sub: user.id,
-        phone: user.phone,
-        role: user.role,
-        profileId: driver.id,
-        type: 'USER',
-      } as JwtUserPayload);
-
-      // Return response
-      return {
-        accessToken,
-        user: {
-          id: user.id,
-          phone: user.phone!,
-          firstName: user.firstName ?? undefined,
-          secondName: user.secondName ?? undefined,
-          image: user.image ?? undefined,
-          myEmail: user.myEmail ?? undefined,
-          userGender: user.userGender ?? undefined,
-          role: 'DRIVER',
-          createdAt: user.createdAt,
-        },
-        driver: {
-          id: driver.id,
-          userId: driver.userId,
-          status: 'INCOMPLETE',
-        },
-        nextStep: 'step2',
-      };
-    });
+    return {
+      pendingToken,
+      preview: {
+        firstName: firstName ?? undefined,
+        secondName: secondName ?? undefined,
+        image: imagePath,
+        myEmail: myEmail ?? undefined,
+        userGender: userGender ?? undefined,
+      },
+      nextStep: 'step2',
+    };
   }
 
   /**
-   * Driver Registration with Google OAuth
+   * Driver Registration with Google OAuth — Step 1.
+   * Verifies the Google token, returns a short-lived pending token. No DB write.
    */
   async registerDriverWithGoogle(
     idToken: string,
@@ -1012,7 +982,6 @@ export class AuthService {
     const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
 
     try {
-      // Verify the Google ID token
       const ticket = await client.verifyIdToken({
         idToken,
         audience: this.configService.get('GOOGLE_CLIENT_ID'),
@@ -1025,81 +994,40 @@ export class AuthService {
       const secondName = payload.family_name;
       const image = payload.picture;
 
-      // Check if user exists with this Google ID
-      let user = await this.prisma.user.findUnique({
-        where: { googleId },
+      // Reject if already registered
+      const existing = await this.prisma.user.findFirst({
+        where: { OR: [{ googleId }, ...(googleEmail ? [{ googleEmail }] : [])] },
       });
-
-      if (user) {
+      if (existing) {
         throw new ConflictException('This Google account is already registered');
       }
 
-      // Check by email
-      if (googleEmail) {
-        user = await this.prisma.user.findUnique({
-          where: { googleEmail },
-        });
+      // Issue short-lived pending token — no DB write
+      const pendingToken = this.jwtService.sign(
+        {
+          type: 'DRIVER_PENDING',
+          googleId,
+          googleEmail,
+          firstName,
+          secondName,
+          image,
+          myEmail: googleEmail,
+        },
+        { expiresIn: '15m' },
+      );
 
-        if (user) {
-          throw new ConflictException('This email is already registered');
-        }
-      }
-
-      // Create user and driver
-      return await this.prisma.$transaction(async (tx) => {
-        const newUser = await tx.user.create({
-          data: {
-            googleId,
-            googleEmail,
-            firstName,
-            secondName,
-            image,
-            phone: googleEmail || `google_${googleId}`,
-            role: UserRole.DRIVER,
-          },
-        });
-
-        const driver = await tx.driver.create({
-          data: {
-            userId: newUser.id,
-            status: 'INCOMPLETE',
-          },
-        });
-
-        // Generate JWT token
-        const accessToken = this.jwtService.sign({
-          sub: newUser.id,
-          phone: newUser.phone!,
-          role: newUser.role,
-          profileId: driver.id,
-          type: 'USER',
-        } as JwtUserPayload);
-
-        return {
-          accessToken,
-          user: {
-            id: newUser.id,
-            phone: newUser.phone!,
-            firstName: newUser.firstName ?? undefined,
-            secondName: newUser.secondName ?? undefined,
-            image: newUser.image ?? undefined,
-            myEmail: newUser.myEmail ?? undefined,
-            userGender: newUser.userGender ?? undefined,
-            role: 'DRIVER',
-            createdAt: newUser.createdAt,
-          },
-          driver: {
-            id: driver.id,
-            userId: driver.userId,
-            status: 'INCOMPLETE',
-          },
-          nextStep: 'step2',
-        };
-      });
+      return {
+        pendingToken,
+        preview: {
+          firstName: firstName ?? undefined,
+          secondName: secondName ?? undefined,
+          image: image ?? undefined,
+          myEmail: googleEmail ?? undefined,
+        },
+        nextStep: 'step2',
+      };
     } catch (error: any) {
-      if (error instanceof ConflictException) {
-        throw error;
-      }
+      if (error instanceof ConflictException) throw error;
       throw new UnauthorizedException('Invalid Google token');
     }
   }

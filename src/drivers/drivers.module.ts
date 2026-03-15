@@ -8,9 +8,23 @@ import { DriverInitializationService } from './services/driver-initialization.se
 import { AvailabilityService } from './services/availability.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { DocumentsModule } from '../documents/documents.module';
+import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
-  imports: [PrismaModule, DocumentsModule],
+  imports: [
+    PrismaModule,
+    DocumentsModule,
+    ConfigModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET'),
+        signOptions: { expiresIn: '7d' },
+      }),
+    }),
+  ],
   controllers: [DriversController, AdminDriverController, TestDriverController],
   providers: [
     DriversService,

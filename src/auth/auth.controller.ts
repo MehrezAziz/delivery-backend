@@ -184,16 +184,16 @@ export class AuthController {
 
   /**
    * POST /auth/driver/register/step2
-   * Driver registration step 2: Driver profile (vehicle, location)
+   * Driver registration step 2: Commits user+driver+address atomically using the pending token.
    */
-  @UseGuards(JwtUserGuard)
+  @Public()
   @Post('driver/register/step2')
-  @HttpCode(HttpStatus.OK)
+  @HttpCode(HttpStatus.CREATED)
   async registerDriverStep2(
-    @UserId() userId: string,
     @Body() dto: RegisterDriverStep2Dto,
+    @Body('pendingToken') pendingToken: string,
   ) {
-    return this.driversService.completeDriverProfile(userId, dto);
+    return this.driversService.completeDriverProfile(pendingToken, dto);
   }
 
   /**
