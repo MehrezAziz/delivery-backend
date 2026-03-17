@@ -15,37 +15,45 @@ export class AdminApprovalService {
     const drivers = await this.prisma.driver.findMany({
       where: { status: DriverStatus.PENDING_REVIEW },
       include: {
-        driverVerification: {
-          include: {
-            documents: true,
-          },
+        driverVerifications: {
+          include: { documents: true },
+          orderBy: { submittedAt: 'desc' },
+          take: 1,
         },
       },
     });
 
-    return drivers.map(driver => ({
-      driverId: driver.id,
-      status: driver.status,
-      documentType: driver.driverVerification?.documentType || null,
-      submittedAt: driver.driverVerification?.submittedAt || null,
-      verifiedAt: driver.driverVerification?.verifiedAt || null,
-      approvedAt: driver.approvedAt,
-      suspendedAt: driver.suspendedAt,
-      documents: driver.driverVerification?.documents.map(doc => ({
-        id: doc.id,
-        documentImage: doc.documentImage,
-        selfieImage: doc.selfieImage,
-        docImageTop: doc.docImageTop,
-        docImageBottom: doc.docImageBottom,
-        verificationStatus: doc.verificationStatus,
-      })) || [],
-    }));
+    return drivers.map(driver => {
+      const latest = driver.driverVerifications[0] ?? null;
+      return {
+        driverId: driver.id,
+        status: driver.status,
+        documentType: latest?.documentType || null,
+        submittedAt: latest?.submittedAt || null,
+        verifiedAt: latest?.verifiedAt || null,
+        approvedAt: driver.approvedAt,
+        suspendedAt: driver.suspendedAt,
+        documents: latest?.documents.map(doc => ({
+          id: doc.id,
+          documentImage: doc.documentImage,
+          selfieImage: doc.selfieImage,
+          docImageTop: doc.docImageTop,
+          docImageBottom: doc.docImageBottom,
+          verificationStatus: doc.verificationStatus,
+        })) || [],
+      };
+    });
   }
 
   async approveDriver(driverId: string): Promise<DriverVerificationResponseDto> {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: { driverVerification: true },
+      include: {
+        driverVerifications: {
+          orderBy: { submittedAt: 'desc' },
+          take: 1,
+        },
+      },
     });
 
     if (!driver) {
@@ -65,16 +73,17 @@ export class AdminApprovalService {
       },
     });
 
-    // Update verification record
-    if (driver.driverVerification) {
+    // Update the latest verification record
+    const latestVerification = driver.driverVerifications[0];
+    if (latestVerification) {
       await this.prisma.driverVerification.update({
-        where: { id: driver.driverVerification.id },
+        where: { id: latestVerification.id },
         data: { verifiedAt: new Date() },
       });
 
-      // Update all documents to VERIFIED
+      // Update all documents in this verification to VERIFIED
       await this.prisma.document.updateMany({
-        where: { verificationId: driver.driverVerification.id },
+        where: { verificationId: latestVerification.id },
         data: { verificationStatus: VerificationStatus.VERIFIED },
       });
     }
@@ -88,7 +97,12 @@ export class AdminApprovalService {
   async rejectDriver(driverId: string, reason: string): Promise<DriverVerificationResponseDto> {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: { driverVerification: true },
+      include: {
+        driverVerifications: {
+          orderBy: { submittedAt: 'desc' },
+          take: 1,
+        },
+      },
     });
 
     if (!driver) {
@@ -105,10 +119,11 @@ export class AdminApprovalService {
       data: { status: DriverStatus.REJECTED },
     });
 
-    // Update all documents to REJECTED
-    if (driver.driverVerification) {
+    // Update all documents in the latest verification to REJECTED
+    const latestVerification = driver.driverVerifications[0];
+    if (latestVerification) {
       await this.prisma.document.updateMany({
-        where: { verificationId: driver.driverVerification.id },
+        where: { verificationId: latestVerification.id },
         data: { verificationStatus: VerificationStatus.REJECTED },
       });
     }
@@ -141,10 +156,10 @@ export class AdminApprovalService {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
       include: {
-        driverVerification: {
-          include: {
-            documents: true,
-          },
+        driverVerifications: {
+          include: { documents: true },
+          orderBy: { submittedAt: 'desc' },
+          take: 1,
         },
       },
     });
@@ -153,15 +168,16 @@ export class AdminApprovalService {
       throw new NotFoundException('Driver not found');
     }
 
+    const latest = driver.driverVerifications[0] ?? null;
     return {
       driverId: driver.id,
       status: driver.status,
-      documentType: driver.driverVerification?.documentType || null,
-      submittedAt: driver.driverVerification?.submittedAt || null,
-      verifiedAt: driver.driverVerification?.verifiedAt || null,
+      documentType: latest?.documentType || null,
+      submittedAt: latest?.submittedAt || null,
+      verifiedAt: latest?.verifiedAt || null,
       approvedAt: driver.approvedAt,
       suspendedAt: driver.suspendedAt,
-      documents: driver.driverVerification?.documents.map(doc => ({
+      documents: latest?.documents.map(doc => ({
         id: doc.id,
         documentImage: doc.documentImage,
         selfieImage: doc.selfieImage,

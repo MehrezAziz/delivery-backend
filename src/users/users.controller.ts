@@ -10,8 +10,8 @@ import {
 } from '@nestjs/common';
 import { ProfileService } from './services/profile.service';
 import { AddressService } from './services/address.service';
-import type { UpdateProfileDto } from './dto/update-profile.dto';
-import type { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';

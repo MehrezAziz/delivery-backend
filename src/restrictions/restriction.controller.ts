@@ -9,9 +9,24 @@ import {
 } from '@nestjs/common';
 import { RestrictionService } from './restriction.service';
 import type { BlockUserDto, SuspendUserDto, SuspendDriverDto } from './dto/restriction.dto';
-import { JwtSuperUserGuard, AdminGuard } from '../auth/guards/auth.guards';
-import { CurrentSuperUser } from '../auth/decorators/auth.decorators';
-import type { AuthenticatedSuperUser } from '../auth/dto/jwt-payload.interface';
+import { JwtSuperUserGuard, AdminGuard, JwtUserGuard } from '../auth/guards/auth.guards';
+import { CurrentSuperUser, CurrentUser } from '../auth/decorators/auth.decorators';
+import type { AuthenticatedSuperUser, AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
+
+/**
+ * User-facing restriction endpoint
+ * Allows users to see their own active restrictions
+ */
+@Controller('restrictions')
+@UseGuards(JwtUserGuard)
+export class UserRestrictionController {
+  constructor(private readonly restrictionService: RestrictionService) {}
+
+  @Get('me')
+  async getMyRestrictions(@CurrentUser() user: AuthenticatedUser) {
+    return this.restrictionService.getActiveRestrictions(user.id);
+  }
+}
 
 @Controller('admin/restrictions')
 @UseGuards(JwtSuperUserGuard, AdminGuard)

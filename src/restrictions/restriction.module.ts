@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
-import { RestrictionController } from './restriction.controller';
+import { RestrictionController, UserRestrictionController } from './restriction.controller';
 import { RestrictionService } from './restriction.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [RestrictionController],
+  controllers: [RestrictionController, UserRestrictionController],
   providers: [RestrictionService],
   exports: [RestrictionService],
 })

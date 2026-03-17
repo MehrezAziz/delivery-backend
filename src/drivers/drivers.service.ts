@@ -196,13 +196,15 @@ export class DriversService {
           orderBy: { timestamp: 'desc' },
           take: 1,
         },
-        driverVerification: {
+        driverVerifications: {
           include: {
             documents: {
               take: 1,
               orderBy: { id: 'desc' },
             },
           },
+          orderBy: { submittedAt: 'desc' },
+          take: 1,
         },
       },
     });
@@ -210,6 +212,8 @@ export class DriversService {
     if (!driver) {
       throw new NotFoundException('Driver not found');
     }
+
+    const latestVerification = driver.driverVerifications[0] ?? null;
 
     return {
       id: driver.id,
@@ -234,15 +238,15 @@ export class DriversService {
             longitude: driver.driverLocations[0].longitude,
           }
         : undefined,
-      verification: driver.driverVerification
+      verification: latestVerification
         ? {
-            documentType: driver.driverVerification.documentType,
-            submittedAt: driver.driverVerification.submittedAt ?? undefined,
-            verifiedAt: driver.driverVerification.verifiedAt ?? undefined,
-            document: driver.driverVerification.documents[0]
+            documentType: latestVerification.documentType,
+            submittedAt: latestVerification.submittedAt ?? undefined,
+            verifiedAt: latestVerification.verifiedAt ?? undefined,
+            document: latestVerification.documents[0]
               ? {
                   verificationStatus:
-                    driver.driverVerification.documents[0].verificationStatus,
+                    latestVerification.documents[0].verificationStatus,
                 }
               : undefined,
           }

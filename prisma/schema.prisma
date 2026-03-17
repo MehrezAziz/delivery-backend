@@ -314,7 +314,7 @@ model Driver {
   user                     User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   driverAccount            DriverAccount?
   weeklyAvailability       WeeklyAvailability?
-  driverVerification       DriverVerification?
+  driverVerifications      DriverVerification[]
   assignments              DriverAssignment[]
   cashTransactions         CashTransaction[]
   ratingsReceived          Rating[]                  @relation("DriverRatings")
@@ -434,7 +434,7 @@ model TimePeriod {
 
 model DriverVerification {
   id           String       @id @default(uuid())
-  driverId     String       @unique @map("driver_id")
+  driverId     String       @map("driver_id")
   documentType DocumentType @map("document_type")
   submittedAt  DateTime?    @map("submitted_at")
   verifiedAt   DateTime?    @map("verified_at")
@@ -443,6 +443,7 @@ model DriverVerification {
   driver    Driver     @relation(fields: [driverId], references: [id], onDelete: Cascade)
   documents Document[]
 
+  @@index([driverId])
   @@map("driver_verifications")
 }
 

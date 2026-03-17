@@ -27,7 +27,9 @@ export class AddressService {
       include: {
         delegation: {
           include: {
-            governorate: true,
+            governorate: {
+              include: { country: true },
+            },
           },
         },
       },
@@ -42,7 +44,9 @@ export class AddressService {
       include: {
         delegation: {
           include: {
-            governorate: true,
+            governorate: {
+              include: { country: true },
+            },
           },
         },
       },
@@ -82,7 +86,9 @@ export class AddressService {
       include: {
         delegation: {
           include: {
-            governorate: true,
+            governorate: {
+              include: { country: true },
+            },
           },
         },
       },
@@ -105,6 +111,12 @@ export class AddressService {
       throw new ForbiddenException('You do not own this address');
     }
 
+    // Prevent deleting the last address
+    const count = await this.prisma.address.count({ where: { userId } });
+    if (count <= 1) {
+      throw new BadRequestException('You must have at least one address');
+    }
+
     await this.prisma.address.delete({
       where: { id: addressId },
     });
@@ -123,6 +135,12 @@ export class AddressService {
         governorate: {
           id: address.delegation.governorate.id,
           nameGovernorate: address.delegation.governorate.nameGovernorate,
+          country: address.delegation.governorate.country
+            ? {
+                id: address.delegation.governorate.country.id,
+                name: address.delegation.governorate.country.name,
+              }
+            : undefined,
         },
       },
     };

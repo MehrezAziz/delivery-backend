@@ -2,16 +2,16 @@ import { IsString, IsNotEmpty, IsNumber, IsOptional } from 'class-validator';
 
 export class CreateAddressDto {
   @IsNumber()
-  @IsNotEmpty()
-  latitude: number;
+  @IsOptional()
+  latitude?: number;
 
   @IsNumber()
-  @IsNotEmpty()
-  longitude: number;
+  @IsOptional()
+  longitude?: number;
 
   @IsString()
-  @IsNotEmpty()
-  street: string;
+  @IsOptional()
+  street?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -48,6 +48,10 @@ export class AddressResponseDto {
     governorate: {
       id: string;
       nameGovernorate: string;
+      country?: {
+        id: string;
+        name: string;
+      };
     };
   };
 }

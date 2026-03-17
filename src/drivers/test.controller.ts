@@ -33,25 +33,30 @@ export class TestDriverController {
             myEmail: true,
           },
         },
-        driverVerification: {
+        driverVerifications: {
           include: {
             documents: true,
           },
+          orderBy: { submittedAt: 'desc' as const },
+          take: 1,
         },
       },
     });
 
-    return drivers.map(driver => ({
-      driverId: driver.id,
-      userId: driver.userId,
-      status: driver.status,
-      user: driver.user,
-      vehicleType: driver.vehicleType,
-      description: driver.description,
-      documentType: driver.driverVerification?.documentType,
-      submittedAt: driver.driverVerification?.submittedAt,
-      documentsCount: driver.driverVerification?.documents.length || 0,
-    }));
+    return drivers.map(driver => {
+      const latest = driver.driverVerifications[0] ?? null;
+      return {
+        driverId: driver.id,
+        userId: driver.userId,
+        status: driver.status,
+        user: driver.user,
+        vehicleType: driver.vehicleType,
+        description: driver.description,
+        documentType: latest?.documentType,
+        submittedAt: latest?.submittedAt,
+        documentsCount: latest?.documents.length || 0,
+      };
+    });
   }
 
   /**
@@ -193,10 +198,11 @@ export class TestDriverController {
             },
           },
         },
-        driverVerification: {
+        driverVerifications: {
           include: {
             documents: true,
           },
+          orderBy: { submittedAt: 'desc' as const },
         },
       },
     });
@@ -230,7 +236,7 @@ export class TestDriverController {
           timePeriods: day.timePeriods,
         })),
       } : null,
-      verification: driver.driverVerification,
+      verifications: driver.driverVerifications,
     };
   }
 }

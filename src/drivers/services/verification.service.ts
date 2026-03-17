@@ -20,28 +20,14 @@ export class VerificationService {
 
     const driverId = user.driver.id;
 
-    // Create or update driver verification
-    let verification = await this.prisma.driverVerification.findUnique({
-      where: { driverId },
+    // Always create a new DriverVerification (1:* relation)
+    const verification = await this.prisma.driverVerification.create({
+      data: {
+        driverId,
+        documentType: dto.documentType,
+        submittedAt: new Date(),
+      },
     });
-
-    if (!verification) {
-      verification = await this.prisma.driverVerification.create({
-        data: {
-          driverId,
-          documentType: dto.documentType,
-          submittedAt: new Date(),
-        },
-      });
-    } else {
-      verification = await this.prisma.driverVerification.update({
-        where: { driverId },
-        data: {
-          documentType: dto.documentType,
-          submittedAt: new Date(),
-        },
-      });
-    }
 
     // Create document record
     await this.prisma.document.create({
@@ -70,10 +56,11 @@ export class VerificationService {
       include: {
         driver: {
           include: {
-            driverVerification: {
+            driverVerifications: {
               include: {
                 documents: true,
               },
+              orderBy: { submittedAt: 'desc' },
             },
           },
         },
@@ -85,17 +72,17 @@ export class VerificationService {
     }
 
     const driver = user.driver;
-    const verification = driver.driverVerification;
+    const latestVerification = driver.driverVerifications[0] ?? null;
 
     return {
       driverId: driver.id,
       status: driver.status,
-      documentType: verification?.documentType || null,
-      submittedAt: verification?.submittedAt || null,
-      verifiedAt: verification?.verifiedAt || null,
+      documentType: latestVerification?.documentType || null,
+      submittedAt: latestVerification?.submittedAt || null,
+      verifiedAt: latestVerification?.verifiedAt || null,
       approvedAt: driver.approvedAt,
       suspendedAt: driver.suspendedAt,
-      documents: verification?.documents.map(doc => ({
+      documents: latestVerification?.documents.map(doc => ({
         id: doc.id,
         documentImage: doc.documentImage,
         selfieImage: doc.selfieImage,
