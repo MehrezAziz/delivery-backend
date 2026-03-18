@@ -252,6 +252,7 @@ model User {
   userRestrictions UserRestriction[]
   notifications    Notification[]
   sentMessages     Message[]
+  supportTickets   SupportTicket[]
 
   @@map("users")
 }
@@ -292,7 +293,6 @@ model Customer {
   referredByCode            ReferralCode?        @relation("CustomerReferredBy", fields: [referredByCodeId], references: [id])
   orders                    Order[]
   wallet                    DigitalWallet?
-  supportTickets            SupportTicket[]
   ratingsGiven              Rating[]             @relation("CustomerRatings")
   commissionsAsReferrer     ReferralCommission[] @relation("ReferrerCommissions")
   commissionsAsReferred     ReferralCommission[] @relation("ReferredCommissions")
@@ -920,7 +920,7 @@ model Dispute {
 
 model SupportTicket {
   id          String                @id @default(uuid())
-  customerId  String                @map("customer_id")
+  userId      String                @map("user_id")
   assignedTo  String?               @map("assigned_to") // customerServiceId
   category    SupportTicketCategory
   priority    SupportTicketPriority
@@ -930,11 +930,30 @@ model SupportTicket {
   resolvedAt  DateTime?             @map("resolved_at")
 
   // Relations
-  customer        Customer         @relation(fields: [customerId], references: [id])
+  user            User             @relation(fields: [userId], references: [id])
   customerService CustomerService? @relation(fields: [assignedTo], references: [id])
+  messages        SupportMessage[]
 
   @@index([status, priority])
+  @@index([userId])
   @@map("support_tickets")
+}
+
+model SupportMessage {
+  id         String   @id @default(uuid())
+  ticketId   String   @map("ticket_id")
+  senderId   String   @map("sender_id")
+  senderType String   @map("sender_type") // 'USER' or 'CUSTOMER_SERVICE'
+  content    String
+  image      String?
+  timestamp  DateTime @default(now())
+  readAt     DateTime? @map("read_at")
+
+  // Relations
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, timestamp])
+  @@map("support_messages")
 }
 
 // ============================================

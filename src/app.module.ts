@@ -15,6 +15,7 @@ import { RestrictionModule } from './restrictions/restriction.module';
 import { AdminModule } from './admin/admin.module';
 import { ReferralModule } from './referral/referral.module';
 import { GeographyModule } from './geography/geography.module';
+import { SupportModule } from './support/support.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { GeographyModule } from './geography/geography.module';
     AdminModule,
     ReferralModule,
     GeographyModule,
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [AppService],

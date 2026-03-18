@@ -38,7 +38,7 @@ import {
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET') as string,
         signOptions: {
-          expiresIn: '7d',
+          expiresIn: '30d',
         },
       }),
     }),

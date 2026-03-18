@@ -488,7 +488,7 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      expiresIn: 7 * 24 * 60 * 60, // 7 days in seconds
+      expiresIn: 30 * 24 * 60 * 60, // 30 days in seconds
     };
   }
 
@@ -517,7 +517,7 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      expiresIn: 7 * 24 * 60 * 60,
+      expiresIn: 30 * 24 * 60 * 60, // 30 days in seconds
     };
   }
 
