@@ -27,6 +27,74 @@ export class CreateOrderDto {
   isNightDelivery?: boolean;
 }
 
+export class PreviewOrderDto {
+  @IsString()
+  @IsNotEmpty()
+  pickupAddressId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  dropoffAddressId: string;
+
+  @IsEnum(PaymentType)
+  @IsNotEmpty()
+  paymentType: PaymentType;
+
+  @IsNumber()
+  @Min(0)
+  weight: number;
+}
+
+export class ChangePaymentMethodDto {
+  @IsEnum(PaymentType)
+  @IsNotEmpty()
+  paymentType: PaymentType;
+}
+
+export class UpdateOrderStatusDto {
+  @IsEnum(OrderStatus)
+  @IsNotEmpty()
+  status: OrderStatus;
+}
+
+export class UploadProofDto {
+  @IsString()
+  @IsNotEmpty()
+  image1Proof?: string;
+
+  @IsString()
+  @IsOptional()
+  image2Proof?: string;
+}
+
+export class CancelOrderDto {
+  @IsString()
+  @IsNotEmpty()
+  reason: string;
+}
+
+export class CreateDisputeDto {
+  @IsString()
+  @IsNotEmpty()
+  reason: string;
+}
+
+export class RequestAssistanceDto {
+  @IsString()
+  @IsOptional()
+  message?: string;
+}
+
+export class SendChatMessageDto {
+  @IsString()
+  @IsNotEmpty()
+  content: string;
+
+  @IsString()
+  @IsOptional()
+  image?: string;
+}
+
 export class OrderResponseDto {
   id: string;
   customerId: string;
@@ -41,55 +109,11 @@ export class OrderResponseDto {
   isNightDelivery: boolean;
   deliveryZoneType: DeliveryZoneType | null;
   createdAt: Date;
-  pickupAddress: {
-    id: string;
-    street: string | null;
-    latitude: number | null;
-    longitude: number | null;
-    delegation: {
-      nameDelegation: string;
-      governorate: {
-        nameGovernorate: string;
-        country: {
-          name: string;
-        };
-      };
-    };
-  } | null;
-  dropoffAddress: {
-    id: string;
-    street: string | null;
-    latitude: number | null;
-    longitude: number | null;
-    delegation: {
-      nameDelegation: string;
-      governorate: {
-        nameGovernorate: string;
-        country: {
-          name: string;
-        };
-      };
-    };
-  } | null;
-  driverAssignment?: {
-    id: string;
-    driverId: string;
-    acceptedAt: Date | null;
-    driver: {
-      userId: string;
-      user: {
-        firstName: string | null;
-        secondName: string | null;
-        phone: string;
-      };
-    };
-  } | null;
-}
-
-export class CancelOrderDto {
-  @IsString()
-  @IsNotEmpty()
-  reason: string;
+  pickupAddress: any;
+  dropoffAddress: any;
+  driverAssignment?: any;
+  chatRoom?: any;
+  dispute?: any;
 }
 
 export class AvailableOrdersResponseDto {

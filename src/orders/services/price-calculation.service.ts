@@ -195,9 +195,12 @@ export class PriceCalculationService {
       );
     }
 
+    // Round distance up: <1km → 1km, <2km → 2km, etc.
+    const billingDistanceKm = Math.max(1, Math.ceil(distanceKm));
+
     // Calculate fees
     const baseFee = Number(pricingPolicy.baseFee);
-    const distanceFee = Number(pricingPolicy.pricePerKm) * distanceKm;
+    const distanceFee = Number(pricingPolicy.pricePerKm) * billingDistanceKm;
 
     // Calculate extra weight fee
     let extraWeightFee = 0;

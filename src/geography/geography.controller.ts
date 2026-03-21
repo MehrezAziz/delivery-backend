@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { GeographyService } from './geography.service';
 
 @Controller('geography')
@@ -22,4 +22,17 @@ export class GeographyController {
   getDelegations(@Param('id') governorateId: string) {
     return this.geographyService.getDelegations(governorateId);
   }
+
+  /** GET /geography/delegations/by-coordinates?lat=X&lng=Y — find nearest delegation */
+  @Get('delegations/by-coordinates')
+  getDelegationByCoordinates(
+    @Query('lat') lat: string,
+    @Query('lng') lng: string,
+  ) {
+    return this.geographyService.getDelegationByCoordinates(
+      parseFloat(lat),
+      parseFloat(lng),
+    );
+  }
 }
+
