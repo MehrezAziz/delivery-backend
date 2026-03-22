@@ -305,26 +305,95 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
     if (order.dispute) throw new BadRequestException('Dispute already exists');
+
+    // Find an available CS agent to auto-assign
+    const csAgent = await this.prisma.customerService.findFirst({
+      where: { superUser: { status: 'ACTIVE' } },
+    });
+
     return this.prisma.$transaction(async (tx) => {
-      const d = await tx.dispute.create({ data: { orderId, reportedBy: order.customerId, reason } });
+      const d = await tx.dispute.create({
+        data: {
+          orderId,
+          reportedBy: order.customerId,
+          reason,
+          assignedTo: csAgent?.id || null,
+        },
+      });
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.DISPUTED } });
+
+      // Create a support ticket for the dispute chat
+      const ticket = await tx.supportTicket.create({
+        data: {
+          userId,
+          category: 'ORDER_ISSUE',
+          priority: 'HIGH',
+          description: `Dispute for Order #${orderId}\n\nReason: ${reason}`,
+          assignedTo: csAgent?.id || null,
+          status: csAgent ? 'IN_PROGRESS' : 'OPEN',
+        },
+      });
+      await tx.supportMessage.create({
+        data: {
+          ticketId: ticket.id,
+          senderId: userId,
+          senderType: 'USER',
+          content: `⚠️ Dispute opened for Order #${orderId}\n\nReason: ${reason}`,
+        },
+      });
+
       return d;
     });
   }
 
-  async requestAssistance(orderId: string, userId: string, message?: string) {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { customer: true, driverAssignment: { include: { driver: true } } } });
+  async cancelDispute(orderId: string, userId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true, dispute: true },
+    });
     if (!order) throw new NotFoundException('Order not found');
-    const isCust = order.customer.userId === userId;
-    const isDrv = order.driverAssignment?.driver.userId === userId;
-    if (!isCust && !isDrv) throw new ForbiddenException('Not authorized');
-    const desc = `Assistance requested for Order #${orderId}`;
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (!order.dispute) throw new BadRequestException('No dispute exists');
+    if (order.dispute.status === 'RESOLVED' || order.dispute.status === 'CLOSED') {
+      throw new BadRequestException('Dispute is already resolved/closed');
+    }
+
     return this.prisma.$transaction(async (tx) => {
-      const t = await tx.supportTicket.create({ data: { userId, category: 'ORDER_ISSUE', priority: 'MEDIUM', description: message ? `${desc}\n\n${message}` : desc } });
-      await tx.supportMessage.create({ data: { ticketId: t.id, senderId: userId, senderType: 'USER', content: `🔗 Order ID: ${orderId}\n\n${message || 'I need assistance with this order.'}` } });
-      return t;
+      await tx.dispute.update({
+        where: { id: order.dispute!.id },
+        data: { status: 'CLOSED', resolution: 'Cancelled by customer', resolvedAt: new Date() },
+      });
+      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.DELIVERED } });
+      return { message: 'Dispute cancelled successfully' };
     });
   }
+
+  async requestAssistance(orderId: string, userId: string, message?: string) {
+      const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { customer: true, driverAssignment: { include: { driver: true } } } });
+      if (!order) throw new NotFoundException('Order not found');
+      const isCust = order.customer.userId === userId;
+      const isDrv = order.driverAssignment?.driver.userId === userId;
+      if (!isCust && !isDrv) throw new ForbiddenException('Not authorized');
+
+      // Check for existing open/in-progress ticket for this order
+      const existingTicket = await this.prisma.supportTicket.findFirst({
+        where: {
+          userId,
+          description: { contains: orderId },
+          status: { in: ['OPEN', 'IN_PROGRESS'] },
+        },
+        include: { messages: { orderBy: { timestamp: 'asc' } } },
+      });
+      if (existingTicket) return existingTicket;
+
+      const desc = `Assistance requested for Order #${orderId}`;
+      return this.prisma.$transaction(async (tx) => {
+        const t = await tx.supportTicket.create({ data: { userId, category: 'ORDER_ISSUE', priority: 'MEDIUM', description: message ? `${desc}\n\n${message}` : desc } });
+        await tx.supportMessage.create({ data: { ticketId: t.id, senderId: userId, senderType: 'USER', content: `🔗 Order ID: ${orderId}\n\n${message || 'I need assistance with this order.'}` } });
+        return t;
+      });
+    }
+
 
   async getChatRoom(orderId: string, userId: string) {
     const order = await this.prisma.order.findUnique({
@@ -414,7 +483,7 @@ export class OrdersService {
         } : null,
       } : null,
       chatRoom: order.chatRoom ? { id: order.chatRoom.id, status: order.chatRoom.status } : null,
-      dispute: order.dispute ? { id: order.dispute.id, status: order.dispute.status, reason: order.dispute.reason } : null,
+      dispute: order.dispute ? { id: order.dispute.id, status: order.dispute.status, reason: order.dispute.reason, resolution: order.dispute.resolution || null } : null,
     };
   }
 }

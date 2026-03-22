@@ -68,6 +68,12 @@ export class OrdersController {
     return this.ordersService.createDispute(orderId, user.id, dto.reason);
   }
 
+  @Delete(':id/dispute')
+  @UseGuards(CustomerGuard)
+  async cancelDispute(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
+    return this.ordersService.cancelDispute(orderId, user.id);
+  }
+
   @Post(':id/assistance')
   async requestAssistance(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: RequestAssistanceDto) {
     return this.ordersService.requestAssistance(orderId, user.id, dto.message);
