@@ -6,7 +6,7 @@ import { CreateAddressDto, UpdateAddressDto, AddressResponseDto } from '../dto/a
 export class AddressService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createAddress(userId: string, dto: CreateAddressDto): Promise<AddressResponseDto> {
+  async createAddress(userId: string | null, dto: CreateAddressDto): Promise<AddressResponseDto> {
     // Validate delegation exists
     const delegation = await this.prisma.delegation.findUnique({
       where: { id: dto.delegationId },
@@ -18,7 +18,7 @@ export class AddressService {
 
     const address = await this.prisma.address.create({
       data: {
-        userId,
+        ...(userId ? { userId } : {}),
         latitude: dto.latitude,
         longitude: dto.longitude,
         street: dto.street,
@@ -65,7 +65,7 @@ export class AddressService {
       throw new NotFoundException('Address not found');
     }
 
-    if (address.userId !== userId) {
+    if (address.userId && address.userId !== userId) {
       throw new ForbiddenException('You do not own this address');
     }
 
@@ -107,7 +107,7 @@ export class AddressService {
       throw new NotFoundException('Address not found');
     }
 
-    if (address.userId !== userId) {
+    if (address.userId && address.userId !== userId) {
       throw new ForbiddenException('You do not own this address');
     }
 

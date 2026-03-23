@@ -51,9 +51,6 @@ export class OrdersService {
       }),
     ]);
     if (!pickupAddr || !dropoffAddr) throw new NotFoundException('Address not found');
-    if (pickupAddr.userId !== userId || dropoffAddr.userId !== userId) {
-      throw new ForbiddenException('You can only use your own addresses');
-    }
 
     const country = pickupAddr.delegation.governorate.country;
     const isNight = this.isNightInCountry(country.isoCode);
@@ -102,9 +99,6 @@ export class OrdersService {
       }),
     ]);
     if (!pickupAddr || !dropoffAddr) throw new NotFoundException('Address not found');
-    if (pickupAddr.userId !== userId || dropoffAddr.userId !== userId) {
-      throw new ForbiddenException('You can only use your own addresses');
-    }
     if (dto.paymentType === PaymentType.WALLET && !customer.wallet) {
       throw new BadRequestException('You do not have a digital wallet');
     }
@@ -181,6 +175,16 @@ export class OrdersService {
       throw new BadRequestException('Order cannot be cancelled at this stage');
     }
     await this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+    await this.closeChatRoomForOrder(orderId);
+    // Close related support tickets
+    await this.prisma.supportTicket.updateMany({
+      where: {
+        userId,
+        description: { contains: orderId },
+        status: { in: ['OPEN', 'IN_PROGRESS'] },
+      },
+      data: { status: 'CLOSED', resolvedAt: new Date() },
+    });
   }
 
   async completeOrder(orderId: string, driverId: string): Promise<OrderResponseDto> {
@@ -192,14 +196,7 @@ export class OrdersService {
           include: {
             driver: {
               include: {
-                user: {
-                  include: {
-                    addresses: {
-                      include: { delegation: { include: { governorate: { include: { country: true } } } } },
-                      take: 1,
-                    },
-                  },
-                },
+                user: true,
               },
             },
           },
@@ -231,28 +228,35 @@ export class OrdersService {
       }
 
       if (order.customer.referredByCode?.ownerId) {
-        const dAddr = order.driverAssignment.driver?.user?.addresses?.[0];
-        if (dAddr) {
-          const cId = dAddr.delegation.governorate.country.id;
-          const pr = await tx.countryPricingPolicy.findFirst({ where: { countryId: cId, isActive: true }, orderBy: { createdAt: 'desc' } });
-          if (pr) {
-            const ex = await tx.referralCommission.findFirst({ where: { orderId } });
-            if (!ex) {
-              const ca = Number(pr.baseFee);
-              await tx.referralCommission.create({ data: { referralCodeId: order.customer.referredByCode.id, referrerCustomerId: order.customer.referredByCode.ownerId, referredCustomerId: order.customerId, orderId, commissionAmount: ca, status: ReferralCommissionStatus.PENDING } });
-              const rw = await tx.digitalWallet.findUnique({ where: { customerId: order.customer.referredByCode.ownerId } });
-              if (rw) {
-                const nbl = Number(rw.balance) + ca;
-                await tx.digitalWallet.update({ where: { id: rw.id }, data: { balance: nbl } });
-                await tx.walletTransaction.create({ data: { walletId: rw.id, orderId, type: WalletTransactionType.REFERRAL_REWARD, amount: ca, status: TransactionStatus.SUCCESS, referenceId: orderId, referenceType: ReferenceType.REFERRAL, balanceAfter: nbl } });
-              }
-            }
+        const ex = await tx.referralCommission.findFirst({ where: { orderId } });
+        if (!ex && order.pricingPolicy) {
+          const ca = Number(order.pricingPolicy.baseFee);
+          await tx.referralCommission.create({ data: { referralCodeId: order.customer.referredByCode.id, referrerCustomerId: order.customer.referredByCode.ownerId, referredCustomerId: order.customerId, orderId, commissionAmount: ca, status: ReferralCommissionStatus.PAID } });
+          const rw = await tx.digitalWallet.findUnique({ where: { customerId: order.customer.referredByCode.ownerId } });
+          if (rw) {
+            const nbl = Number(rw.balance) + ca;
+            await tx.digitalWallet.update({ where: { id: rw.id }, data: { balance: nbl } });
+            await tx.walletTransaction.create({ data: { walletId: rw.id, orderId, type: WalletTransactionType.REFERRAL_REWARD, amount: ca, status: TransactionStatus.SUCCESS, referenceId: orderId, referenceType: ReferenceType.REFERRAL, balanceAfter: nbl } });
           }
         }
       }
 
       await tx.driverPerformanceMetrics.updateMany({ where: { driverId: order.driverAssignment.driverId }, data: { totalOrders: { increment: 1 }, completedOrders: { increment: 1 }, lastCalculatedAt: new Date() } });
       await tx.driverAccount.updateMany({ where: { driverId: order.driverAssignment.driverId }, data: { completedDeliveries: { increment: 1 } } });
+
+      // Close chat room on delivery
+      await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
+
+      // Close support tickets related to this order (customer-CS conversation)
+      await tx.supportTicket.updateMany({
+        where: {
+          userId: order.customer.userId,
+          description: { contains: orderId },
+          status: { in: ['OPEN', 'IN_PROGRESS'] },
+        },
+        data: { status: 'CLOSED', resolvedAt: new Date() },
+      });
+
       return updatedOrder;
     });
     return this.mapToResponseDto(result as any);
@@ -430,6 +434,14 @@ export class OrdersService {
       await this.prisma.chatRoom.updateMany({ where: { id: { in: expired.map(c => c.id) } }, data: { status: 'CLOSED' } });
     }
     return { closed: expired.length };
+  }
+
+  /** Close the chat room for an order (used on CANCELLED, DELIVERED, REFUNDED) */
+  private async closeChatRoomForOrder(orderId: string) {
+    await this.prisma.chatRoom.updateMany({
+      where: { orderId, status: 'ACTIVE' },
+      data: { status: 'CLOSED' },
+    });
   }
 
   async getAllOrders(status?: OrderStatus) {

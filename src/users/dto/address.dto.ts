@@ -41,7 +41,7 @@ export class AddressResponseDto {
   latitude: number | null;
   longitude: number | null;
   street: string | null;
-  userId: string;
+  userId: string | null;
   delegation: {
     id: string;
     nameDelegation: string;

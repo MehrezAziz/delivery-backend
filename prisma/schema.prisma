@@ -590,11 +590,11 @@ model Address {
   longitude    Float?
   street       String?
   delegationId String  @map("delegation_id")
-  userId       String  @map("user_id")
+  userId       String? @map("user_id")
 
   // Relations
   delegation      Delegation @relation(fields: [delegationId], references: [id])
-  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
   ordersAsPickup  Order[]    @relation("PickupAddress")
   ordersAsDropoff Order[]    @relation("DropoffAddress")
 
@@ -802,7 +802,7 @@ model ReferralCommission {
   referredCustomerId  String                   @map("referred_customer_id")
   orderId             String                   @map("order_id")
   commissionAmount    Decimal                  @db.Decimal(10, 2) @map("commission_amount")
-  status              ReferralCommissionStatus @default(PENDING)
+  status              ReferralCommissionStatus @default(PAID)
   createdAt           DateTime                 @default(now()) @map("created_at")
 
   // Relations

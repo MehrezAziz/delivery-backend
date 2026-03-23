@@ -56,6 +56,15 @@ export class AddressController {
     return this.addressService.createAddress(user.id, dto);
   }
 
+  @Post('order')
+  async createOrderAddress(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateAddressDto,
+  ) {
+    // Create address without userId — for order pickup/dropoff only
+    return this.addressService.createAddress(null, dto);
+  }
+
   @Get()
   async getAddresses(@CurrentUser() user: AuthenticatedUser) {
     return this.addressService.getAddresses(user.id);
