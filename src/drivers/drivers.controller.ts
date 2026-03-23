@@ -5,6 +5,9 @@ import {
   Put,
   Body, 
   Param, 
+  Query,
+  DefaultValuePipe,
+  ParseIntPipe,
   UseGuards 
 } from '@nestjs/common';
 import { DriversService } from './drivers.service';
@@ -33,6 +36,19 @@ export class DriversController {
   @Get('me')
   async getMyProfile(@UserId() userId: string) {
     return this.driversService.getDriverProfile(userId);
+  }
+
+  /**
+   * GET /drivers/me/transactions
+   * Get driver transaction history
+   */
+  @Get('me/transactions')
+  async getMyTransactions(
+    @UserId() userId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.driversService.getDriverTransactions(userId, page, limit);
   }
 
   @Post('documents')

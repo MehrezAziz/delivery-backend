@@ -77,6 +77,7 @@ enum DriverTransactionType {
   ADJUSTMENT
   REFUND
   DISPUTE_DEBIT
+  DEPOSIT
 }
 
 enum WalletTransactionType {
@@ -226,6 +227,7 @@ enum CustomerServiceRole {
   MANAGE_DISPUTES
   MANAGE_SUPPORT_TICKETS
   VIEW_FINANCIAL_REPORTS
+  MANAGE_FINANCIAL_REPORTS
 }
 
 // ============================================

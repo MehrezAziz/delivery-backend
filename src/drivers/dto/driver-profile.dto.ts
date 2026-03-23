@@ -29,4 +29,9 @@ export class DriverProfileDto {
       verificationStatus: VerificationStatus;
     };
   };
+  account?: {
+    balance: number;
+    currency: string;
+    completedDeliveries: number;
+  };
 }

@@ -1,0 +1,1 @@
+ALTER TYPE "DriverTransactionType" ADD VALUE IF NOT EXISTS 'DEPOSIT';

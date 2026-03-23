@@ -221,6 +221,34 @@ export class OrdersService {
         const pFee = Number(order.pricingPolicy.platformFee);
         const cash = Number(order.price);
         await tx.cashTransaction.create({ data: { orderId, driverId: order.driverAssignment.driverId, cashCollected: cash, platformFee: pFee, driverNet: cash - pFee } });
+
+        // Calculate referral commission if applicable
+        let referralAmount = 0;
+        if (order.customer.referredByCode?.ownerId) {
+          const ex = await tx.referralCommission.findFirst({ where: { orderId } });
+          if (!ex && order.pricingPolicy) {
+            referralAmount = Number(order.pricingPolicy.baseFee);
+          }
+        }
+
+        // Debit driver account: platformFee + referralCommission
+        const totalDebit = pFee + referralAmount;
+        const driverAccount = await tx.driverAccount.findUnique({ where: { driverId: order.driverAssignment.driverId } });
+        if (driverAccount) {
+          const newBalance = Number(driverAccount.balance) - totalDebit;
+          await tx.driverAccount.update({ where: { id: driverAccount.id }, data: { balance: newBalance } });
+          await tx.driverTransaction.create({
+            data: {
+              accountId: driverAccount.id,
+              type: 'PLATFORM_FEE',
+              amount: -totalDebit,
+              referenceId: orderId,
+              referenceType: 'ORDER',
+              description: `COD order #${orderId.slice(0, 8)} — platform fee${referralAmount > 0 ? ' + referral commission' : ''}`,
+              balanceAfter: newBalance,
+            },
+          });
+        }
       } else if (order.customer.wallet) {
         const nb = Number(order.customer.wallet.balance) - Number(order.price);
         await tx.digitalWallet.update({ where: { id: order.customer.wallet.id }, data: { balance: nb } });

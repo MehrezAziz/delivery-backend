@@ -210,6 +210,7 @@ export class DriversService {
       where: { userId },
       include: {
         user: true,
+        driverAccount: true,
         driverLocations: {
           orderBy: { timestamp: 'desc' },
           take: 1,
@@ -269,8 +270,57 @@ export class DriversService {
               : undefined,
           }
         : undefined,
+      account: driver.driverAccount
+        ? {
+            balance: Number(driver.driverAccount.balance),
+            currency: driver.driverAccount.currency,
+            completedDeliveries: driver.driverAccount.completedDeliveries,
+          }
+        : undefined,
     };
   }
+
+  /**
+   * Get Driver Transaction History
+   */
+  async getDriverTransactions(userId: string, page = 1, limit = 20) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: { driverAccount: true },
+    });
+    if (!driver) throw new NotFoundException('Driver not found');
+    if (!driver.driverAccount) throw new NotFoundException('No account found');
+
+    const accountId = driver.driverAccount.id;
+    const skip = (page - 1) * limit;
+
+    const [transactions, total] = await Promise.all([
+      this.prisma.driverTransaction.findMany({
+        where: { accountId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.driverTransaction.count({ where: { accountId } }),
+    ]);
+
+    return {
+      balance: Number(driver.driverAccount.balance),
+      currency: driver.driverAccount.currency,
+      transactions: transactions.map(t => ({
+        id: t.id,
+        type: t.type,
+        amount: Number(t.amount),
+        description: t.description,
+        balanceAfter: Number(t.balanceAfter),
+        createdAt: t.createdAt,
+      })),
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
 
   /**
    * Update Driver Status
