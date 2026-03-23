@@ -76,6 +76,7 @@ enum DriverTransactionType {
   PENALTY
   ADJUSTMENT
   REFUND
+  DISPUTE_DEBIT
 }
 
 enum WalletTransactionType {

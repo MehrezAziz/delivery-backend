@@ -7,75 +7,128 @@ export class DriverAssignmentService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Get available orders for a driver, prioritized by delivery zone type.
-   * INCOMPLETE/PENDING_REVIEW drivers can see orders but cannot accept.
+   * Get available orders for a driver, filtered by DeliveryZoneType and availability.
    */
-  async getAvailableOrdersForDriver(driverId: string) {
-    const driver = await this.prisma.driver.findUnique({
-      where: { id: driverId },
-      include: {
-        user: {
-          include: {
-            addresses: {
-              include: { delegation: { include: { governorate: { include: { country: true } } } } },
-              take: 1,
+    async getAvailableOrdersForDriver(driverId: string) {
+      const driver = await this.prisma.driver.findUnique({
+        where: { id: driverId },
+        include: {
+          user: {
+            include: {
+              addresses: {
+                include: { delegation: { include: { governorate: { include: { country: true } } } } },
+                take: 1,
+              },
             },
           },
+          weeklyAvailability: {
+            include: { dayAvailabilities: { include: { timePeriods: true } } },
+          },
         },
-      },
-    });
+      });
 
-    if (!driver) throw new NotFoundException('Driver not found');
+      if (!driver) throw new NotFoundException('Driver not found');
 
-    // INCOMPLETE and PENDING_REVIEW can view, VERIFIED can view+accept
-    // REJECTED and SUSPENDED cannot view
-    if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED) {
-      throw new ForbiddenException('Your account is not eligible to view orders');
+      if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED) {
+        throw new ForbiddenException('Your account is not eligible to view orders');
+      }
+
+      const driverAddress = driver.user.addresses[0];
+      if (!driverAddress) throw new BadRequestException('Driver must have at least one address set');
+
+      // Check driver availability
+      const isAvailable = this.isDriverCurrentlyAvailable(driver.weeklyAvailability);
+      if (!isAvailable) {
+        return {
+          canAccept: driver.status === DriverStatus.VERIFIED,
+          isAvailable: false,
+          sameDelegation: [],
+          sameGovernorate: [],
+          differentGovernorate: [],
+          differentCountry: [],
+        };
+      }
+
+      const driverDelegationId = driverAddress.delegationId;
+      const driverGovernorateId = driverAddress.delegation.governorate.id;
+      const driverCountryId = driverAddress.delegation.governorate.country.id;
+
+      const availableOrders = await this.prisma.order.findMany({
+        where: { status: OrderStatus.SEARCHING_DRIVER },
+        include: {
+          pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+          dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+          pricingPolicy: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      const sameDelegation: any[] = [];
+      const sameGovernorate: any[] = [];
+      const differentGovernorate: any[] = [];
+      const differentCountry: any[] = [];
+
+      for (const order of availableOrders) {
+        if (!order.pickupAddress || !order.dropoffAddress) continue;
+        const zoneType = order.pricingPolicy?.deliveryZoneType;
+        const pickupDelegationId = order.pickupAddress.delegationId;
+        const dropoffDelegationId = order.dropoffAddress.delegationId;
+        const pickupGovernorateId = order.pickupAddress.delegation.governorate.id;
+        const dropoffGovernorateId = order.dropoffAddress.delegation.governorate.id;
+        const pickupCountryId = order.pickupAddress.delegation.governorate.country.id;
+        const dropoffCountryId = order.dropoffAddress.delegation.governorate.country.id;
+
+        let matches = false;
+        let bucket: any[] | null = null;
+
+        switch (zoneType) {
+          case 'SAME_DELEGATION':
+            if (driverDelegationId === pickupDelegationId || driverDelegationId === dropoffDelegationId) {
+              matches = true;
+              bucket = sameDelegation;
+            }
+            break;
+          case 'SAME_GOVERNORATE':
+            if (driverDelegationId === pickupDelegationId || driverDelegationId === dropoffDelegationId) {
+              matches = true;
+              bucket = sameGovernorate;
+            }
+            break;
+          case 'DIFFERENT_GOVERNORATE':
+            if (driverGovernorateId === pickupGovernorateId || driverGovernorateId === dropoffGovernorateId) {
+              matches = true;
+              bucket = differentGovernorate;
+            }
+            break;
+          case 'DIFFERENT_COUNTRY':
+            if (driverCountryId === pickupCountryId || driverCountryId === dropoffCountryId) {
+              matches = true;
+              bucket = differentCountry;
+            }
+            break;
+          default:
+            // Fallback: group by proximity like before
+            if (pickupDelegationId === driverDelegationId) { matches = true; bucket = sameDelegation; }
+            else if (pickupGovernorateId === driverGovernorateId) { matches = true; bucket = sameGovernorate; }
+            else if (pickupCountryId === driverCountryId) { matches = true; bucket = differentGovernorate; }
+            else { matches = true; bucket = differentCountry; }
+            break;
+        }
+
+        if (matches && bucket) bucket.push(order);
+      }
+
+      const mapFn = (o: any) => this.mapOrderToResponse(o);
+      return {
+        canAccept: driver.status === DriverStatus.VERIFIED,
+        isAvailable: true,
+        sameDelegation: sameDelegation.map(mapFn),
+        sameGovernorate: sameGovernorate.map(mapFn),
+        differentGovernorate: differentGovernorate.map(mapFn),
+        differentCountry: differentCountry.map(mapFn),
+      };
     }
 
-    const driverAddress = driver.user.addresses[0];
-    if (!driverAddress) throw new BadRequestException('Driver must have at least one address set');
-
-    const driverDelegationId = driverAddress.delegationId;
-    const driverGovernorateId = driverAddress.delegation.governorate.id;
-    const driverCountryId = driverAddress.delegation.governorate.country.id;
-
-    const availableOrders = await this.prisma.order.findMany({
-      where: { status: OrderStatus.SEARCHING_DRIVER },
-      include: {
-        pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
-        dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
-        pricingPolicy: true,
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    const sameDelegation: any[] = [];
-    const sameGovernorate: any[] = [];
-    const differentGovernorate: any[] = [];
-    const differentCountry: any[] = [];
-
-    for (const order of availableOrders) {
-      if (!order.pickupAddress) continue;
-      const pickupDelegationId = order.pickupAddress.delegationId;
-      const pickupGovernorateId = order.pickupAddress.delegation.governorate.id;
-      const pickupCountryId = order.pickupAddress.delegation.governorate.country.id;
-
-      if (pickupDelegationId === driverDelegationId) sameDelegation.push(order);
-      else if (pickupGovernorateId === driverGovernorateId) sameGovernorate.push(order);
-      else if (pickupCountryId === driverCountryId) differentGovernorate.push(order);
-      else differentCountry.push(order);
-    }
-
-    const mapFn = (o: any) => this.mapOrderToResponse(o);
-    return {
-      canAccept: driver.status === DriverStatus.VERIFIED,
-      sameDelegation: sameDelegation.map(mapFn),
-      sameGovernorate: sameGovernorate.map(mapFn),
-      differentGovernorate: differentGovernorate.map(mapFn),
-      differentCountry: differentCountry.map(mapFn),
-    };
-  }
 
   /**
    * Driver accepts an order (VERIFIED only)
@@ -157,6 +210,77 @@ export class DriverAssignmentService {
           governorate: { nameGovernorate: order.dropoffAddress.delegation.governorate.nameGovernorate,
             country: { name: order.dropoffAddress.delegation.governorate.country.name } } },
       } : null,
+    };
+  }
+
+  /**
+   * Check if driver is currently available based on their weekly schedule
+   */
+  private isDriverCurrentlyAvailable(weeklyAvailability: any): boolean {
+    if (!weeklyAvailability || weeklyAvailability.status !== 'ACTIVE') return false;
+    const now = new Date();
+    const dayNames = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+    const todayName = dayNames[now.getDay()];
+    const todayAvail = weeklyAvailability.dayAvailabilities?.find(
+      (d: any) => d.dayOfWeek === todayName,
+    );
+    if (!todayAvail || !todayAvail.timePeriods?.length) return false;
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    return todayAvail.timePeriods.some((tp: any) => {
+      const start = new Date(tp.startTime);
+      const end = new Date(tp.endTime);
+      const startMin = start.getUTCHours() * 60 + start.getUTCMinutes();
+      const endMin = end.getUTCHours() * 60 + end.getUTCMinutes();
+      return currentMinutes >= startMin && currentMinutes <= endMin;
+    });
+  }
+
+  /**
+   * Search orders by geographic filter (ignores driver address and availability)
+   */
+  async searchOrdersByGeography(driverId: string, filters: {
+    countryId?: string; governorateId?: string; delegationId?: string;
+  }) {
+    const driver = await this.prisma.driver.findUnique({ where: { id: driverId } });
+    if (!driver) throw new NotFoundException('Driver not found');
+    if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED) {
+      throw new ForbiddenException('Your account is not eligible to view orders');
+    }
+
+    const addressFilter: any[] = [];
+    if (filters.delegationId) {
+      addressFilter.push(
+        { pickupAddress: { delegationId: filters.delegationId } },
+        { dropoffAddress: { delegationId: filters.delegationId } },
+      );
+    } else if (filters.governorateId) {
+      addressFilter.push(
+        { pickupAddress: { delegation: { governorateId: filters.governorateId } } },
+        { dropoffAddress: { delegation: { governorateId: filters.governorateId } } },
+      );
+    } else if (filters.countryId) {
+      addressFilter.push(
+        { pickupAddress: { delegation: { governorate: { countryId: filters.countryId } } } },
+        { dropoffAddress: { delegation: { governorate: { countryId: filters.countryId } } } },
+      );
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.SEARCHING_DRIVER,
+        ...(addressFilter.length > 0 ? { OR: addressFilter } : {}),
+      },
+      include: {
+        pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+        dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+        pricingPolicy: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return {
+      canAccept: driver.status === DriverStatus.VERIFIED,
+      orders: orders.map((o: any) => this.mapOrderToResponse(o)),
     };
   }
 }

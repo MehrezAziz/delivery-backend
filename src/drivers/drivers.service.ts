@@ -79,6 +79,24 @@ export class DriversService {
         },
       });
 
+      // Create default full-week availability (all day, every day)
+      const weeklyAvail = await tx.weeklyAvailability.create({
+        data: { driverId: driver.id, status: 'ACTIVE' },
+      });
+      const days = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'] as const;
+      for (const day of days) {
+        const dayAvail = await tx.dayAvailability.create({
+          data: { weeklyAvailabilityId: weeklyAvail.id, dayOfWeek: day },
+        });
+        await tx.timePeriod.create({
+          data: {
+            dayAvailabilityId: dayAvail.id,
+            startTime: new Date('1970-01-01T00:00:00Z'),
+            endTime: new Date('1970-01-01T23:59:00Z'),
+          },
+        });
+      }
+
       // Issue real access token
       const accessToken = this.jwtService.sign({
         sub: user.id,

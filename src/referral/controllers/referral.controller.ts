@@ -5,7 +5,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ReferralService } from '../services/referral.service';
-import { CurrentUser } from '../../auth/decorators/auth.decorators';
+import { CurrentUser, Public } from '../../auth/decorators/auth.decorators';
 import { JwtUserGuard, CustomerGuard } from '../../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../../auth/dto/jwt-payload.interface';
 import { ReferralCodeDto, ReferralStatisticsDto } from '../dto';
@@ -30,6 +30,7 @@ export class ReferralController {
    * Validate a referral code
    * GET /referral/validate/:code
    */
+  @Public()
   @Get('validate/:code')
   async validateReferralCode(
     @Param('code') code: string,

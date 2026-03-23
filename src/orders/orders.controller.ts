@@ -103,7 +103,16 @@ export class DriverOrdersController {
   ) {}
 
   @Get('available')
-  async getAvailableOrders(@CurrentUser() user: AuthenticatedUser) {
+  async getAvailableOrders(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('countryId') countryId?: string,
+    @Query('governorateId') governorateId?: string,
+    @Query('delegationId') delegationId?: string,
+  ) {
+    // If any filter is provided, use geographic search (ignores driver address & availability)
+    if (countryId || governorateId || delegationId) {
+      return this.driverAssignmentService.searchOrdersByGeography(user.profileId, { countryId, governorateId, delegationId });
+    }
     return this.driverAssignmentService.getAvailableOrdersForDriver(user.profileId);
   }
 
