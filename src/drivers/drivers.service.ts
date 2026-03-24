@@ -435,4 +435,37 @@ export class DriversService {
 
     return driver.status === 'VERIFIED';
   }
+
+  /**
+   * Get driver's received ratings with customer info
+   */
+  async getDriverRatings(driverId: string) {
+    const ratings = await this.prisma.rating.findMany({
+      where: { driverId },
+      include: {
+        customer: { include: { user: { select: { firstName: true, secondName: true } } } },
+        order: { select: { id: true, createdAt: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const metrics = await this.prisma.driverPerformanceMetrics.findUnique({
+      where: { driverId },
+      select: { avgRating: true, totalOrders: true, completedOrders: true },
+    });
+
+    return {
+      avgRating: metrics?.avgRating ? Number(metrics.avgRating) : null,
+      totalRatings: ratings.length,
+      completedOrders: metrics?.completedOrders || 0,
+      ratings: ratings.map(r => ({
+        id: r.id,
+        score: r.score,
+        comment: r.comment,
+        createdAt: r.createdAt,
+        customerName: r.customer?.user ? `${r.customer.user.firstName || ''} ${r.customer.user.secondName || ''}`.trim() : 'Customer',
+        orderId: r.order?.id || null,
+      })),
+    };
+  }
 }

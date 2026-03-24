@@ -310,7 +310,8 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { driverAssignment: true } });
     if (!order) throw new NotFoundException('Order not found');
     if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
-    return this.prisma.driverAssignment.update({ where: { orderId }, data: { ...(image1Proof && { image1Proof }), ...(image2Proof && { image2Proof }) } });
+    if (!image1Proof) throw new BadRequestException('First proof image is required');
+    return this.prisma.driverAssignment.update({ where: { orderId }, data: { image1Proof, ...(image2Proof && { image2Proof }) } });
   }
 
   async getDriverLocation(orderId: string, userId: string) {
@@ -464,6 +465,101 @@ export class OrdersService {
     return { closed: expired.length };
   }
 
+  /** Rate a driver after order delivery */
+  async rateOrder(orderId: string, userId: string, score: number, comment?: string) {
+    if (score < 0 || score > 10) throw new BadRequestException('Score must be between 0 and 10');
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true, driverAssignment: true, rating: true },
+    }) as any;
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (order.status !== OrderStatus.DELIVERED) throw new BadRequestException('Order must be delivered to rate');
+    if (order.rating) throw new BadRequestException('You have already rated this order');
+    if (!order.driverAssignment) throw new BadRequestException('No driver assigned to this order');
+
+    const rating = await this.prisma.rating.create({
+      data: {
+        orderId,
+        customerId: order.customerId,
+        driverId: order.driverAssignment.driverId,
+        score,
+        comment: comment || null,
+      },
+    });
+
+    // Update driver average rating
+    const allRatings = await this.prisma.rating.findMany({
+      where: { driverId: order.driverAssignment.driverId },
+      select: { score: true },
+    });
+    const avg = allRatings.reduce((sum, r) => sum + r.score, 0) / allRatings.length;
+    await this.prisma.driverPerformanceMetrics.updateMany({
+      where: { driverId: order.driverAssignment.driverId },
+      data: { avgRating: avg, lastCalculatedAt: new Date() },
+    });
+
+    return rating;
+  }
+
+  /** Revert order to previous status (driver go-back) */
+  async revertOrderStatus(orderId: string, driverId: string): Promise<OrderResponseDto> {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { driverAssignment: true } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
+    const revertMap: Record<string, OrderStatus> = {
+      DRIVER_ARRIVED: OrderStatus.DRIVER_ASSIGNED,
+      PICKED_UP: OrderStatus.DRIVER_ARRIVED,
+      DELIVERING: OrderStatus.PICKED_UP,
+    };
+    const prevStatus = revertMap[order.status];
+    if (!prevStatus) throw new BadRequestException(`Cannot revert from ${order.status}`);
+
+    // Clear the corresponding timestamp
+    const clearData: any = {};
+    if (order.status === 'DRIVER_ARRIVED') clearData.arrivedAt = null;
+    else if (order.status === 'PICKED_UP') clearData.pickedUpAt = null;
+    else if (order.status === 'DELIVERING') clearData.pickedUpAt = null; // revert to PICKED_UP clears nothing extra on assignment
+
+    if (Object.keys(clearData).length > 0) {
+      await this.prisma.driverAssignment.update({ where: { orderId }, data: clearData });
+    }
+    const updated = await this.prisma.order.update({ where: { id: orderId }, data: { status: prevStatus }, include: this.orderInclude() });
+    return this.mapToResponseDto(updated as any);
+  }
+
+  /** Customer rejects the assigned driver — order goes back to SEARCHING_DRIVER */
+  async rejectDriver(orderId: string, userId: string, reason?: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true, driverAssignment: { include: { driver: true } } },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (order.status !== OrderStatus.DRIVER_ASSIGNED) {
+      throw new BadRequestException('You can only reject a driver when the order is in DRIVER_ASSIGNED status');
+    }
+    if (!order.driverAssignment) throw new BadRequestException('No driver assigned');
+
+    const driverId = order.driverAssignment.driverId;
+
+    await this.prisma.$transaction(async (tx) => {
+      // Record the rejection so this driver can't accept again
+      await tx.orderDriverRejection.create({
+        data: { orderId, driverId, reason: reason || null },
+      });
+      // Delete the assignment
+      await tx.driverAssignment.delete({ where: { orderId } });
+      // Set order back to searching
+      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.SEARCHING_DRIVER } });
+      // Close chat room
+      await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
+    });
+
+    return { message: 'Driver rejected. Searching for a new driver.' };
+  }
+
   /** Close the chat room for an order (used on CANCELLED, DELIVERED, REFUNDED) */
   private async closeChatRoomForOrder(orderId: string) {
     await this.prisma.chatRoom.updateMany({
@@ -484,8 +580,8 @@ export class OrdersService {
       customer: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true } } } },
       pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
-      driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } } } } } },
-      pricingPolicy: true, chatRoom: true, dispute: true,
+      driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true } } } } } },
+      pricingPolicy: true, chatRoom: true, dispute: true, rating: true,
     } as const;
   }
 
@@ -520,10 +616,13 @@ export class OrdersService {
           userId: order.driverAssignment.driver.userId,
           user: { firstName: order.driverAssignment.driver.user.firstName, secondName: order.driverAssignment.driver.user.secondName,
             phone: order.driverAssignment.driver.user.phone, image: order.driverAssignment.driver.user.image },
+          avgRating: order.driverAssignment.driver.performanceMetrics?.avgRating ? Number(order.driverAssignment.driver.performanceMetrics.avgRating) : null,
+          completedOrders: order.driverAssignment.driver.performanceMetrics?.completedOrders || 0,
         } : null,
       } : null,
       chatRoom: order.chatRoom ? { id: order.chatRoom.id, status: order.chatRoom.status } : null,
       dispute: order.dispute ? { id: order.dispute.id, status: order.dispute.status, reason: order.dispute.reason, resolution: order.dispute.resolution || null } : null,
+      rating: order.rating ? { id: order.rating.id, score: order.rating.score, comment: order.rating.comment, createdAt: order.rating.createdAt } : null,
     };
   }
 }

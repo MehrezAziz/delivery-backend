@@ -54,7 +54,10 @@ export class DriverAssignmentService {
       const driverCountryId = driverAddress.delegation.governorate.country.id;
 
       const availableOrders = await this.prisma.order.findMany({
-        where: { status: OrderStatus.SEARCHING_DRIVER },
+        where: {
+          status: OrderStatus.SEARCHING_DRIVER,
+          driverRejections: { none: { driverId } },
+        },
         include: {
           pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
           dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
@@ -139,6 +142,14 @@ export class DriverAssignmentService {
       throw new ForbiddenException('Driver must be verified to accept orders');
     }
 
+    // Check if this driver was rejected by the customer for this order
+    const rejection = await this.prisma.orderDriverRejection.findUnique({
+      where: { orderId_driverId: { orderId, driverId } },
+    });
+    if (rejection) {
+      throw new ForbiddenException('The customer has declined working with you on this order');
+    }
+
     const order = await this.prisma.order.findUnique({
       where: { id: orderId }, include: { customer: true },
     });
@@ -152,10 +163,18 @@ export class DriverAssignmentService {
         data: { orderId, driverId, acceptedAt: new Date() },
       });
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.DRIVER_ASSIGNED } });
-      // Open chat room between driver and customer
-      await tx.chatRoom.create({
-        data: { orderId, customerId: order.customerId, driverId, status: ChatStatus.ACTIVE },
-      });
+      // Open or reopen chat room between driver and customer
+      const existingChat = await tx.chatRoom.findUnique({ where: { orderId } });
+      if (existingChat) {
+        await tx.chatRoom.update({
+          where: { id: existingChat.id },
+          data: { driverId, status: ChatStatus.ACTIVE },
+        });
+      } else {
+        await tx.chatRoom.create({
+          data: { orderId, customerId: order.customerId, driverId, status: ChatStatus.ACTIVE },
+        });
+      }
       return assignment;
     });
   }
@@ -268,6 +287,7 @@ export class DriverAssignmentService {
     const orders = await this.prisma.order.findMany({
       where: {
         status: OrderStatus.SEARCHING_DRIVER,
+        driverRejections: { none: { driverId } },
         ...(addressFilter.length > 0 ? { OR: addressFilter } : {}),
       },
       include: {
@@ -317,6 +337,7 @@ export class DriverAssignmentService {
     const orders = await this.prisma.order.findMany({
       where: {
         status: OrderStatus.SEARCHING_DRIVER,
+        driverRejections: { none: { driverId } },
         ...(addressFilter.length > 0 ? { OR: addressFilter } : {}),
       },
       include: {
@@ -331,5 +352,31 @@ export class DriverAssignmentService {
       canAccept: driver.status === DriverStatus.VERIFIED,
       orders: orders.map((o: any) => this.mapOrderToResponse(o)),
     };
+  }
+
+  /**
+   * Get orders where this driver was rejected by the customer
+   */
+  async getRejectedOrders(driverId: string) {
+    const rejections = await this.prisma.orderDriverRejection.findMany({
+      where: { driverId },
+      include: {
+        order: {
+          include: {
+            pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+            dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+            pricingPolicy: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return rejections.map(r => ({
+      rejectionId: r.id,
+      rejectedAt: r.createdAt,
+      reason: r.reason,
+      order: this.mapOrderToResponse(r.order),
+    }));
   }
 }

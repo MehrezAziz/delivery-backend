@@ -48,6 +48,15 @@ export class DriversController {
   }
 
   /**
+   * GET /drivers/me/ratings
+   * Get driver's received ratings
+   */
+  @Get('me/ratings')
+  async getMyRatings(@CurrentUser() user: AuthenticatedUser) {
+    return this.driversService.getDriverRatings(user.profileId);
+  }
+
+  /**
    * GET /drivers/me/transactions
    * Get driver transaction history
    */

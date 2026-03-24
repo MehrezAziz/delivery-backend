@@ -324,6 +324,7 @@ model Driver {
   driverLocations          DriverLocation[]
   performanceMetrics       DriverPerformanceMetrics?
   chatRoomsAsDriver        ChatRoom[]
+  orderRejections          OrderDriverRejection[]
 
   @@map("drivers")
 }
@@ -665,6 +666,7 @@ model Order {
   dispute             Dispute?
   chatRoom            ChatRoom?
   driverLocations     DriverLocation[]
+  driverRejections    OrderDriverRejection[]
 
   @@index([customerId, status])
   @@index([status, createdAt])
@@ -1046,4 +1048,22 @@ model ActionLog {
   @@index([targetType, targetId])
   @@index([createdAt])
   @@map("action_logs")
+}
+
+// ============================================
+// ORDER DRIVER REJECTIONS
+// ============================================
+
+model OrderDriverRejection {
+  id        String   @id @default(uuid())
+  orderId   String   @map("order_id")
+  driverId  String   @map("driver_id")
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@unique([orderId, driverId])
+  @@map("order_driver_rejections")
 }

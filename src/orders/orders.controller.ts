@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
-import { CreateOrderDto, PreviewOrderDto, CancelOrderDto, ChangePaymentMethodDto, UpdateOrderStatusDto, SendChatMessageDto, CreateDisputeDto, RequestAssistanceDto } from './dto/order.dto';
+import { CreateOrderDto, PreviewOrderDto, CancelOrderDto, ChangePaymentMethodDto, UpdateOrderStatusDto, SendChatMessageDto, CreateDisputeDto, RequestAssistanceDto, RateOrderDto } from './dto/order.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, CustomerGuard, DriverGuard, UserActiveGuard, UserRestrictionGuard, VerifiedDriverGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
@@ -89,6 +89,18 @@ export class OrdersController {
   async sendChatMessage(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: SendChatMessageDto) {
     return this.ordersService.sendChatMessage(orderId, user.id, dto.content, dto.image);
   }
+
+  @Post(':id/rate')
+  @UseGuards(CustomerGuard)
+  async rateOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: RateOrderDto) {
+    return this.ordersService.rateOrder(orderId, user.id, dto.score, dto.comment);
+  }
+
+  @Post(':id/reject-driver')
+  @UseGuards(CustomerGuard)
+  async rejectDriver(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() body: { reason?: string }) {
+    return this.ordersService.rejectDriver(orderId, user.id, body.reason);
+  }
 }
 
 // ============================================
@@ -137,6 +149,11 @@ export class DriverOrdersController {
     return this.ordersService.getDriverOrders(user.profileId);
   }
 
+  @Get('rejected')
+  async getRejectedOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.driverAssignmentService.getRejectedOrders(user.profileId);
+  }
+
   @Post(':id/accept')
   @UseGuards(UserActiveGuard, UserRestrictionGuard)
   async acceptOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
@@ -148,6 +165,12 @@ export class DriverOrdersController {
   @UseGuards(UserActiveGuard)
   async updateStatus(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: UpdateOrderStatusDto) {
     return this.ordersService.updateOrderStatus(orderId, user.profileId, dto.status);
+  }
+
+  @Post(':id/revert-status')
+  @UseGuards(UserActiveGuard)
+  async revertStatus(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
+    return this.ordersService.revertOrderStatus(orderId, user.profileId);
   }
 
   @Post(':id/cancel-assignment')

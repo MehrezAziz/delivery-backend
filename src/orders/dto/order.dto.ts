@@ -60,7 +60,7 @@ export class UpdateOrderStatusDto {
 export class UploadProofDto {
   @IsString()
   @IsNotEmpty()
-  image1Proof?: string;
+  image1Proof: string;
 
   @IsString()
   @IsOptional()
@@ -95,6 +95,16 @@ export class SendChatMessageDto {
   image?: string;
 }
 
+export class RateOrderDto {
+  @IsNumber()
+  @Min(0)
+  score: number; // 0-10
+
+  @IsString()
+  @IsOptional()
+  comment?: string;
+}
+
 export class OrderResponseDto {
   id: string;
   customerId: string;
@@ -114,6 +124,7 @@ export class OrderResponseDto {
   driverAssignment?: any;
   chatRoom?: any;
   dispute?: any;
+  rating?: any;
 }
 
 export class AvailableOrdersResponseDto {
