@@ -108,12 +108,28 @@ export class DriverOrdersController {
     @Query('countryId') countryId?: string,
     @Query('governorateId') governorateId?: string,
     @Query('delegationId') delegationId?: string,
+    @Query('delegationIds') delegationIds?: string,
+    @Query('governorateIds') governorateIds?: string,
+    @Query('countryIds') countryIds?: string,
+    @Query('availableNow') availableNow?: string,
   ) {
-    // If any filter is provided, use geographic search (ignores driver address & availability)
+    const forceAvailable = availableNow === 'true';
+
+    // Multi-ID quick filters (comma-separated)
+    if (delegationIds || governorateIds || countryIds) {
+      return this.driverAssignmentService.searchOrdersByMultipleGeography(user.profileId, {
+        delegationIds: delegationIds ? delegationIds.split(',') : undefined,
+        governorateIds: governorateIds ? governorateIds.split(',') : undefined,
+        countryIds: countryIds ? countryIds.split(',') : undefined,
+      });
+    }
+
+    // Single-ID advanced filter (legacy)
     if (countryId || governorateId || delegationId) {
       return this.driverAssignmentService.searchOrdersByGeography(user.profileId, { countryId, governorateId, delegationId });
     }
-    return this.driverAssignmentService.getAvailableOrdersForDriver(user.profileId);
+
+    return this.driverAssignmentService.getAvailableOrdersForDriver(user.profileId, forceAvailable);
   }
 
   @Get('my-orders')

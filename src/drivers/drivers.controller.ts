@@ -39,6 +39,15 @@ export class DriversController {
   }
 
   /**
+   * GET /drivers/me/geography
+   * Get driver's addresses with full delegation/governorate/country info
+   */
+  @Get('me/geography')
+  async getMyGeography(@CurrentUser() user: AuthenticatedUser) {
+    return this.driversService.getDriverGeography(user.profileId);
+  }
+
+  /**
    * GET /drivers/me/transactions
    * Get driver transaction history
    */

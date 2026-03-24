@@ -9,7 +9,7 @@ export class DriverAssignmentService {
   /**
    * Get available orders for a driver, filtered by DeliveryZoneType and availability.
    */
-    async getAvailableOrdersForDriver(driverId: string) {
+    async getAvailableOrdersForDriver(driverId: string, forceAvailable = false) {
       const driver = await this.prisma.driver.findUnique({
         where: { id: driverId },
         include: {
@@ -36,8 +36,8 @@ export class DriverAssignmentService {
       const driverAddress = driver.user.addresses[0];
       if (!driverAddress) throw new BadRequestException('Driver must have at least one address set');
 
-      // Check driver availability
-      const isAvailable = this.isDriverCurrentlyAvailable(driver.weeklyAvailability);
+      // Check driver availability (skip if forceAvailable is true)
+      const isAvailable = forceAvailable || this.isDriverCurrentlyAvailable(driver.weeklyAvailability);
       if (!isAvailable) {
         return {
           canAccept: driver.status === DriverStatus.VERIFIED,
@@ -262,6 +262,55 @@ export class DriverAssignmentService {
       addressFilter.push(
         { pickupAddress: { delegation: { governorate: { countryId: filters.countryId } } } },
         { dropoffAddress: { delegation: { governorate: { countryId: filters.countryId } } } },
+      );
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.SEARCHING_DRIVER,
+        ...(addressFilter.length > 0 ? { OR: addressFilter } : {}),
+      },
+      include: {
+        pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+        dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+        pricingPolicy: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return {
+      canAccept: driver.status === DriverStatus.VERIFIED,
+      orders: orders.map((o: any) => this.mapOrderToResponse(o)),
+    };
+  }
+
+  /**
+   * Search orders by multiple geographic IDs (multi-select quick filter)
+   */
+  async searchOrdersByMultipleGeography(driverId: string, filters: {
+    delegationIds?: string[]; governorateIds?: string[]; countryIds?: string[];
+  }) {
+    const driver = await this.prisma.driver.findUnique({ where: { id: driverId } });
+    if (!driver) throw new NotFoundException('Driver not found');
+    if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED) {
+      throw new ForbiddenException('Your account is not eligible to view orders');
+    }
+
+    const addressFilter: any[] = [];
+    if (filters.delegationIds?.length) {
+      addressFilter.push(
+        { pickupAddress: { delegationId: { in: filters.delegationIds } } },
+        { dropoffAddress: { delegationId: { in: filters.delegationIds } } },
+      );
+    } else if (filters.governorateIds?.length) {
+      addressFilter.push(
+        { pickupAddress: { delegation: { governorateId: { in: filters.governorateIds } } } },
+        { dropoffAddress: { delegation: { governorateId: { in: filters.governorateIds } } } },
+      );
+    } else if (filters.countryIds?.length) {
+      addressFilter.push(
+        { pickupAddress: { delegation: { governorate: { countryId: { in: filters.countryIds } } } } },
+        { dropoffAddress: { delegation: { governorate: { countryId: { in: filters.countryIds } } } } },
       );
     }
 

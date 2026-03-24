@@ -281,6 +281,95 @@ export class DriversService {
   }
 
   /**
+   * Get driver's addresses with full geography info (delegation/governorate/country)
+   */
+  async getDriverGeography(driverId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      include: {
+        user: {
+          include: {
+            addresses: {
+              include: {
+                delegation: {
+                  include: {
+                    governorate: {
+                      include: { country: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        weeklyAvailability: {
+          include: { dayAvailabilities: { include: { timePeriods: true } } },
+        },
+      },
+    });
+
+    if (!driver) throw new NotFoundException('Driver not found');
+
+    // Check if driver is currently within their availability schedule
+    const isCurrentlyAvailable = this.isDriverCurrentlyAvailable(driver.weeklyAvailability);
+
+    const addresses = driver.user.addresses.map((addr) => ({
+      id: addr.id,
+      street: addr.street,
+      delegation: {
+        id: addr.delegation.id,
+        nameDelegation: addr.delegation.nameDelegation,
+      },
+      governorate: {
+        id: addr.delegation.governorate.id,
+        nameGovernorate: addr.delegation.governorate.nameGovernorate,
+      },
+      country: {
+        id: addr.delegation.governorate.country.id,
+        name: addr.delegation.governorate.country.name,
+      },
+    }));
+
+    // Deduplicate delegations, governorates, countries
+    const delegationsMap = new Map<string, { id: string; nameDelegation: string }>();
+    const governoratesMap = new Map<string, { id: string; nameGovernorate: string }>();
+    const countriesMap = new Map<string, { id: string; name: string }>();
+
+    for (const addr of addresses) {
+      delegationsMap.set(addr.delegation.id, addr.delegation);
+      governoratesMap.set(addr.governorate.id, addr.governorate);
+      countriesMap.set(addr.country.id, addr.country);
+    }
+
+    return {
+      isAvailable: isCurrentlyAvailable,
+      addresses,
+      delegations: Array.from(delegationsMap.values()),
+      governorates: Array.from(governoratesMap.values()),
+      countries: Array.from(countriesMap.values()),
+    };
+  }
+
+  private isDriverCurrentlyAvailable(weeklyAvailability: any): boolean {
+    if (!weeklyAvailability || weeklyAvailability.status !== 'ACTIVE') return false;
+    const now = new Date();
+    const dayNames = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+    const todayName = dayNames[now.getDay()];
+    const todayAvail = weeklyAvailability.dayAvailabilities?.find(
+      (d: any) => d.dayOfWeek === todayName,
+    );
+    if (!todayAvail || !todayAvail.timePeriods?.length) return false;
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    return todayAvail.timePeriods.some((tp: any) => {
+      const start = new Date(tp.startTime);
+      const end = new Date(tp.endTime);
+      const startMin = start.getUTCHours() * 60 + start.getUTCMinutes();
+      const endMin = end.getUTCHours() * 60 + end.getUTCMinutes();
+      return currentMinutes >= startMin && currentMinutes <= endMin;
+    });
+  }
+
+  /**
    * Get Driver Transaction History
    */
   async getDriverTransactions(userId: string, page = 1, limit = 20) {
