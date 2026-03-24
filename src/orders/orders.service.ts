@@ -299,7 +299,13 @@ export class OrdersService {
       PICKED_UP: [OrderStatus.DELIVERING], DELIVERING: [OrderStatus.DELIVERED],
     };
     if (!(valid[order.status] || []).includes(newStatus)) throw new BadRequestException(`Cannot transition from ${order.status} to ${newStatus}`);
-    if (newStatus === OrderStatus.DELIVERED) return this.completeOrder(orderId, driverId);
+    if (newStatus === OrderStatus.DELIVERED) {
+      // Proof image 1 is required before marking as delivered
+      if (!order.driverAssignment.image1Proof) {
+        throw new BadRequestException('You must upload at least the first proof image before marking the order as delivered');
+      }
+      return this.completeOrder(orderId, driverId);
+    }
     if (newStatus === OrderStatus.DRIVER_ARRIVED) await this.prisma.driverAssignment.update({ where: { orderId }, data: { arrivedAt: new Date() } });
     else if (newStatus === OrderStatus.PICKED_UP) await this.prisma.driverAssignment.update({ where: { orderId }, data: { pickedUpAt: new Date() } });
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: { status: newStatus }, include: this.orderInclude() });
