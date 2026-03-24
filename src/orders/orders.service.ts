@@ -272,6 +272,30 @@ export class OrdersService {
       await tx.driverPerformanceMetrics.updateMany({ where: { driverId: order.driverAssignment.driverId }, data: { totalOrders: { increment: 1 }, completedOrders: { increment: 1 }, lastCalculatedAt: new Date() } });
       await tx.driverAccount.updateMany({ where: { driverId: order.driverAssignment.driverId }, data: { completedDeliveries: { increment: 1 } } });
 
+      // Recalculate performance metrics
+      const metrics = await tx.driverPerformanceMetrics.findUnique({ where: { driverId: order.driverAssignment.driverId } });
+      if (metrics) {
+        const completionRate = metrics.totalOrders > 0 ? (metrics.completedOrders / metrics.totalOrders) * 100 : 0;
+
+        // Calculate avg delivery time from all completed assignments
+        const completedAssignments = await tx.driverAssignment.findMany({
+          where: { driverId: order.driverAssignment.driverId, acceptedAt: { not: null }, deliveredAt: { not: null } },
+          select: { acceptedAt: true, deliveredAt: true },
+        });
+        let avgDeliveryTimeMinutes: number | null = null;
+        if (completedAssignments.length > 0) {
+          const totalMinutes = completedAssignments.reduce((sum, a) => {
+            return sum + (new Date(a.deliveredAt!).getTime() - new Date(a.acceptedAt!).getTime()) / 60000;
+          }, 0);
+          avgDeliveryTimeMinutes = Math.round(totalMinutes / completedAssignments.length);
+        }
+
+        await tx.driverPerformanceMetrics.update({
+          where: { driverId: order.driverAssignment.driverId },
+          data: { completionRate, avgDeliveryTimeMinutes, lastCalculatedAt: new Date() },
+        });
+      }
+
       // Close chat room on delivery
       await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
 
@@ -316,8 +340,22 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { driverAssignment: true } });
     if (!order) throw new NotFoundException('Order not found');
     if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
-    if (!image1Proof) throw new BadRequestException('First proof image is required');
-    return this.prisma.driverAssignment.update({ where: { orderId }, data: { image1Proof, ...(image2Proof && { image2Proof }) } });
+
+    // Build update data — only update fields that are provided
+    const updateData: any = {};
+    if (image1Proof) updateData.image1Proof = image1Proof;
+    if (image2Proof) updateData.image2Proof = image2Proof;
+
+    // If no image1 exists and none provided, require it
+    if (!order.driverAssignment.image1Proof && !image1Proof) {
+      throw new BadRequestException('First proof image is required');
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      throw new BadRequestException('No new images to upload');
+    }
+
+    return this.prisma.driverAssignment.update({ where: { orderId }, data: updateData });
   }
 
   async getDriverLocation(orderId: string, userId: string) {
@@ -586,7 +624,7 @@ export class OrdersService {
       customer: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true } } } },
       pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
-      driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true } } } } } },
+      driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true, totalOrders: true, cancelledOrders: true, completionRate: true, avgDeliveryTimeMinutes: true } } } } } },
       pricingPolicy: true, chatRoom: true, dispute: true, rating: true,
     } as const;
   }
@@ -624,6 +662,10 @@ export class OrdersService {
             phone: order.driverAssignment.driver.user.phone, image: order.driverAssignment.driver.user.image },
           avgRating: order.driverAssignment.driver.performanceMetrics?.avgRating ? Number(order.driverAssignment.driver.performanceMetrics.avgRating) : null,
           completedOrders: order.driverAssignment.driver.performanceMetrics?.completedOrders || 0,
+          totalOrders: order.driverAssignment.driver.performanceMetrics?.totalOrders || 0,
+          cancelledOrders: order.driverAssignment.driver.performanceMetrics?.cancelledOrders || 0,
+          completionRate: order.driverAssignment.driver.performanceMetrics?.completionRate ? Number(order.driverAssignment.driver.performanceMetrics.completionRate) : null,
+          avgDeliveryTimeMinutes: order.driverAssignment.driver.performanceMetrics?.avgDeliveryTimeMinutes || null,
         } : null,
       } : null,
       chatRoom: order.chatRoom ? { id: order.chatRoom.id, status: order.chatRoom.status } : null,

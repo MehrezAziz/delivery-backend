@@ -197,11 +197,23 @@ export class DriverAssignmentService {
     if (!isCustomer && !isDriver) throw new ForbiddenException('Not authorized to cancel');
 
     await this.prisma.$transaction(async (tx) => {
+      const driverId = order.driverAssignment!.driverId;
       // Delete the assignment so a new driver can accept
       await tx.driverAssignment.delete({ where: { orderId } });
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.SEARCHING_DRIVER } });
       // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId }, data: { status: ChatStatus.CLOSED } });
+      // Update driver performance metrics — increment totalOrders and cancelledOrders
+      const metrics = await tx.driverPerformanceMetrics.findUnique({ where: { driverId } });
+      if (metrics) {
+        const newTotal = metrics.totalOrders + 1;
+        const newCancelled = metrics.cancelledOrders + 1;
+        const completionRate = newTotal > 0 ? (metrics.completedOrders / newTotal) * 100 : 0;
+        await tx.driverPerformanceMetrics.update({
+          where: { driverId },
+          data: { totalOrders: newTotal, cancelledOrders: newCancelled, completionRate, lastCalculatedAt: new Date() },
+        });
+      }
     });
 
     return { message: 'Order assignment cancelled successfully' };
@@ -359,7 +371,12 @@ export class DriverAssignmentService {
    */
   async getRejectedOrders(driverId: string) {
     const rejections = await this.prisma.orderDriverRejection.findMany({
-      where: { driverId },
+      where: {
+        driverId,
+        order: {
+          status: { in: [OrderStatus.SEARCHING_DRIVER, OrderStatus.DRIVER_ASSIGNED, OrderStatus.DRIVER_ARRIVED, OrderStatus.PICKED_UP, OrderStatus.DELIVERING] },
+        },
+      },
       include: {
         order: {
           include: {
