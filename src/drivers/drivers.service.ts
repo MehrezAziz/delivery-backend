@@ -295,6 +295,7 @@ export class DriversService {
         image: driver.user.image ?? undefined,
         myEmail: driver.user.myEmail ?? undefined,
         userGender: driver.user.userGender ?? undefined,
+        hasPassword: !!driver.user.password,
       },
       driverLocation: driver.driverLocations[0]
         ? {
@@ -326,6 +327,34 @@ export class DriversService {
           }
         : undefined,
     };
+  }
+
+  /**
+   * Update driver profile (phone, vehicleType, description, gender)
+   */
+  async updateDriverProfile(userId: string, data: {
+    phone?: string; vehicleType?: string; description?: string; userGender?: string;
+  }) {
+    const driver = await this.prisma.driver.findUnique({ where: { userId } });
+    if (!driver) throw new NotFoundException('Driver not found');
+
+    // Update user fields (phone, gender)
+    const userUpdate: any = {};
+    if (data.phone !== undefined) userUpdate.phone = data.phone || null;
+    if (data.userGender !== undefined) userUpdate.userGender = data.userGender || null;
+    if (Object.keys(userUpdate).length > 0) {
+      await this.prisma.user.update({ where: { id: userId }, data: userUpdate });
+    }
+
+    // Update driver fields
+    const driverUpdate: any = {};
+    if (data.vehicleType !== undefined) driverUpdate.vehicleType = data.vehicleType || null;
+    if (data.description !== undefined) driverUpdate.description = data.description || null;
+    if (Object.keys(driverUpdate).length > 0) {
+      await this.prisma.driver.update({ where: { id: driver.id }, data: driverUpdate });
+    }
+
+    return this.getDriverProfile(userId);
   }
 
   /**

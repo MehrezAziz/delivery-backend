@@ -19,6 +19,7 @@ export class CustomersService {
           select: {
             id: true,
             phone: true,
+            password: true,
             firstName: true,
             secondName: true,
             image: true,
@@ -358,13 +359,14 @@ export class CustomersService {
   }
 
   private mapToResponseDto(customer: any): CustomerResponseDto {
+    const { password, ...userWithoutPassword } = customer.user || {};
     return {
       id: customer.id,
       userId: customer.userId,
       completedOrders: customer.completedOrders,
       customerStatus: customer.customerStatus,
       referredByCodeId: customer.referredByCodeId,
-      user: customer.user,
+      user: { ...userWithoutPassword, hasPassword: !!password },
       myReferralCode: customer.myReferralCode,
       referredByCode: customer.referredByCode,
     };

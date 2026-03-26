@@ -101,6 +101,17 @@ export class OrdersController {
   async rejectDriver(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() body: { reason?: string }) {
     return this.ordersService.rejectDriver(orderId, user.id, body.reason);
   }
+
+  @Post(':id/approve-driver')
+  @UseGuards(CustomerGuard)
+  async approveDriver(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
+    return this.ordersService.approveDriver(orderId, user.id);
+  }
+
+  @Get(':id/driver-reviews')
+  async getDriverReviews(@Param('id') orderId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.ordersService.getDriverReviewsForOrder(orderId, user.id);
+  }
 }
 
 // ============================================

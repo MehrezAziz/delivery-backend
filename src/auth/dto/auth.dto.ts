@@ -74,11 +74,13 @@ export class UserRegisterDto {
 }
 
 export class CompleteUserProfileDto {
+  @IsOptional()
   @IsString()
-  firstName!: string;
+  firstName?: string;
 
+  @IsOptional()
   @IsString()
-  secondName!: string;
+  secondName?: string;
 
   @IsOptional()
   @IsEmail()

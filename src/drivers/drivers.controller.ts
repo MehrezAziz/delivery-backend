@@ -3,6 +3,7 @@ import {
   Get, 
   Post,
   Put,
+  Patch,
   Body, 
   Param, 
   Query,
@@ -36,6 +37,17 @@ export class DriversController {
   @Get('me')
   async getMyProfile(@UserId() userId: string) {
     return this.driversService.getDriverProfile(userId);
+  }
+
+  /**
+   * PATCH /drivers/me
+   * Update driver profile (phone, vehicleType, description, gender)
+   */
+  @Patch('me')
+  async updateMyProfile(@UserId() userId: string, @Body() body: {
+    phone?: string; vehicleType?: string; description?: string; userGender?: string;
+  }) {
+    return this.driversService.updateDriverProfile(userId, body);
   }
 
   /**

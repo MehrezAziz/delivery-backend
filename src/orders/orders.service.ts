@@ -136,7 +136,7 @@ export class OrdersService {
     }) as any;
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
-    const allowed: OrderStatus[] = [OrderStatus.SEARCHING_DRIVER, OrderStatus.DRIVER_ASSIGNED, OrderStatus.DRIVER_ARRIVED];
+    const allowed: OrderStatus[] = [OrderStatus.SEARCHING_DRIVER, 'PENDING_CUSTOMER_APPROVAL' as any, OrderStatus.DRIVER_ASSIGNED, OrderStatus.DRIVER_ARRIVED];
     if (!allowed.includes(order.status)) throw new BadRequestException('Cannot change payment method after pickup');
     if (dto.paymentType === PaymentType.WALLET) {
       if (!order.customer.wallet) throw new BadRequestException('No digital wallet');
@@ -579,6 +579,58 @@ export class OrdersService {
     return this.mapToResponseDto(updated as any);
   }
 
+  /** Get driver reviews for an order (customer can see before approving) */
+  async getDriverReviewsForOrder(orderId: string, userId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true, driverAssignment: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (!order.driverAssignment) throw new BadRequestException('No driver assigned');
+
+    const driverId = order.driverAssignment.driverId;
+    const ratings = await this.prisma.rating.findMany({
+      where: { driverId },
+      include: {
+        customer: { include: { user: { select: { firstName: true, secondName: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    return {
+      reviews: ratings.map(r => ({
+        id: r.id,
+        score: r.score,
+        comment: r.comment,
+        createdAt: r.createdAt,
+        customerName: r.customer?.user ? `${r.customer.user.firstName || ''} ${r.customer.user.secondName || ''}`.trim() || 'Customer' : 'Customer',
+      })),
+    };
+  }
+
+  /** Customer approves the driver — order moves from PENDING_CUSTOMER_APPROVAL to DRIVER_ASSIGNED */
+  async approveDriver(orderId: string, userId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true, driverAssignment: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if ((order.status as string) !== 'PENDING_CUSTOMER_APPROVAL') {
+      throw new BadRequestException('Order is not pending your approval');
+    }
+    if (!order.driverAssignment) throw new BadRequestException('No driver assigned');
+
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { status: OrderStatus.DRIVER_ASSIGNED },
+      include: this.orderInclude(),
+    });
+    return this.mapToResponseDto(updated as any);
+  }
+
   /** Customer rejects the assigned driver — order goes back to SEARCHING_DRIVER */
   async rejectDriver(orderId: string, userId: string, reason?: string) {
     const order = await this.prisma.order.findUnique({
@@ -587,8 +639,8 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
-    if (order.status !== OrderStatus.DRIVER_ASSIGNED) {
-      throw new BadRequestException('You can only reject a driver when the order is in DRIVER_ASSIGNED status');
+    if (order.status !== OrderStatus.DRIVER_ASSIGNED && (order.status as string) !== 'PENDING_CUSTOMER_APPROVAL') {
+      throw new BadRequestException('You can only reject a driver when the order is pending approval or assigned');
     }
     if (!order.driverAssignment) throw new BadRequestException('No driver assigned');
 

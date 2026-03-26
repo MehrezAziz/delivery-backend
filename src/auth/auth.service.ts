@@ -384,15 +384,30 @@ export class AuthService {
    * Complete user profile (optional step after registration)
    */
   async completeProfile(userId: string, dto: CompleteUserProfileDto) {
+    const updateData: any = {};
+    if (dto.firstName !== undefined) updateData.firstName = dto.firstName;
+    if (dto.secondName !== undefined) updateData.secondName = dto.secondName;
+    if (dto.myEmail !== undefined) updateData.myEmail = dto.myEmail;
+    if (dto.image !== undefined) updateData.image = dto.image;
     return this.prisma.user.update({
       where: { id: userId },
-      data: {
-        firstName: dto.firstName,
-        secondName: dto.secondName,
-        myEmail: dto.myEmail,
-        image: dto.image,
-      },
+      data: updateData,
     });
+  }
+
+  /**
+   * Verify user's current password (gate for edit profile page)
+   */
+  async verifyUserPassword(userId: string, password: string): Promise<{ verified: boolean }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.password) {
+      // Google OAuth users without password — allow access (they authenticated via Google)
+      return { verified: true };
+    }
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) throw new UnauthorizedException('Invalid password');
+    return { verified: true };
   }
 
   // ============================================

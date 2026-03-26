@@ -137,9 +137,16 @@ export class DriverAssignmentService {
    * Driver accepts an order (VERIFIED only)
    */
   async acceptOrder(driverId: string, orderId: string) {
-    const driver = await this.prisma.driver.findUnique({ where: { id: driverId } });
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      include: { user: { select: { phone: true } } },
+    });
     if (!driver || driver.status !== DriverStatus.VERIFIED) {
       throw new ForbiddenException('Driver must be verified to accept orders');
+    }
+    // Driver must have a phone number (Google OAuth users need to add one first)
+    if (!driver.user.phone) {
+      throw new BadRequestException('You must add a phone number to your profile before accepting orders. Customers need to be able to contact you.');
     }
 
     // Check if this driver was rejected by the customer for this order
@@ -162,7 +169,7 @@ export class DriverAssignmentService {
       const assignment = await tx.driverAssignment.create({
         data: { orderId, driverId, acceptedAt: new Date() },
       });
-      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.DRIVER_ASSIGNED } });
+      await tx.order.update({ where: { id: orderId }, data: { status: 'PENDING_CUSTOMER_APPROVAL' as any } });
       // Open or reopen chat room between driver and customer
       const existingChat = await tx.chatRoom.findUnique({ where: { orderId } });
       if (existingChat) {
@@ -188,7 +195,7 @@ export class DriverAssignmentService {
       include: { driverAssignment: { include: { driver: true } }, customer: true },
     });
     if (!order) throw new NotFoundException('Order not found');
-    if (order.status !== OrderStatus.DRIVER_ASSIGNED) {
+    if (order.status !== OrderStatus.DRIVER_ASSIGNED && (order.status as string) !== 'PENDING_CUSTOMER_APPROVAL') {
       throw new BadRequestException('Order is not in assigned state');
     }
 

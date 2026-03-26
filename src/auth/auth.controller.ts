@@ -119,6 +119,20 @@ export class AuthController {
   }
 
   /**
+   * POST /auth/verify-password
+   * Verify current user's password (gate for edit profile)
+   */
+  @UseGuards(JwtUserGuard)
+  @Post('verify-password')
+  @HttpCode(HttpStatus.OK)
+  async verifyCurrentPassword(
+    @UserId() userId: string,
+    @Body() body: { password: string },
+  ) {
+    return this.authService.verifyUserPassword(userId, body.password);
+  }
+
+  /**
    * GET /auth/user/me
    * Get current user info
    */

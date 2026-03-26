@@ -16,6 +16,7 @@ export class DriverProfileDto {
     image?: string;
     myEmail?: string;
     userGender?: UserGender;
+    hasPassword?: boolean;
   };
   driverLocation?: {
     latitude: number;
