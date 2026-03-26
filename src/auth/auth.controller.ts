@@ -9,7 +9,10 @@ import {
   UseInterceptors,
   UploadedFile,
   UploadedFiles,
+  Req,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import type { Request } from 'express';
 import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { AuthService } from './auth.service';
 import { DriversService } from '../drivers/drivers.service';
@@ -97,8 +100,9 @@ export class AuthController {
   @Public()
   @Post('user/login')
   @HttpCode(HttpStatus.OK)
-  async userLogin(@Body() dto: UserLoginDto): Promise<AuthTokensDto> {
-    return this.authService.userLogin(dto);
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 attempts per minute
+  async userLogin(@Body() dto: UserLoginDto, @Req() req: Request): Promise<AuthTokensDto> {
+    return this.authService.userLogin(dto, req.ip, req.headers['user-agent']);
   }
 
   /**
@@ -240,8 +244,9 @@ export class AuthController {
   @Public()
   @Post('driver/login')
   @HttpCode(HttpStatus.OK)
-  async driverLogin(@Body() dto: DriverLoginDto): Promise<AuthTokensDto> {
-    return this.authService.driverLogin(dto);
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  async driverLogin(@Body() dto: DriverLoginDto, @Req() req: Request): Promise<AuthTokensDto> {
+    return this.authService.driverLogin(dto, req.ip, req.headers['user-agent']);
   }
 
   /**
@@ -266,7 +271,8 @@ export class AuthController {
   @Public()
   @Post('superuser/login')
   @HttpCode(HttpStatus.OK)
-  async superUserLogin(@Body() dto: SuperUserLoginDto): Promise<AuthTokensDto> {
-    return this.authService.superUserLogin(dto);
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  async superUserLogin(@Body() dto: SuperUserLoginDto, @Req() req: Request): Promise<AuthTokensDto> {
+    return this.authService.superUserLogin(dto, req.ip, req.headers['user-agent']);
   }
 }

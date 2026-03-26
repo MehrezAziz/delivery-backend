@@ -1069,3 +1069,22 @@ model OrderDriverRejection {
   @@unique([orderId, driverId])
   @@map("order_driver_rejections")
 }
+
+// ============================================
+// SECURITY — LOGIN ATTEMPT LOGGING
+// ============================================
+
+model LoginAttempt {
+  id         String   @id @default(uuid())
+  identifier String   // phone, email, or googleId used
+  loginType  String   @map("login_type") // CUSTOMER, DRIVER, ADMIN, CUSTOMER_SERVICE, GOOGLE
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  success    Boolean
+  failReason String?  @map("fail_reason")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([identifier, createdAt])
+  @@index([createdAt])
+  @@map("login_attempts")
+}

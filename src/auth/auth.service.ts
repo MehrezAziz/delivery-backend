@@ -28,6 +28,7 @@ import { RegisterDriverStep1Dto } from './dto/register-driver-step1.dto';
 import { RegisterDriverStep1ResponseDto } from './dto/register-driver-step1-response.dto';
 import { DriverLoginDto } from './dto/driver-login.dto';
 import { UserRole, SuperUserRole, UserStatus, ReferralCode } from '@prisma/client';
+
 import { JwtUserPayload, JwtSuperUserPayload } from './dto/jwt-payload.interface';
 
 @Injectable()
@@ -40,6 +41,28 @@ export class AuthService {
     private readonly referralService: ReferralService,
     private readonly codeGeneratorService: CodeGeneratorService,
   ) {}
+
+  /** Log a login attempt for security audit */
+  private async logLoginAttempt(data: {
+    identifier: string; loginType: string; success: boolean;
+    failReason?: string; ipAddress?: string; userAgent?: string;
+  }) {
+    try {
+      await this.prisma.loginAttempt.create({
+        data: {
+          identifier: data.identifier,
+          loginType: data.loginType,
+          success: data.success,
+          failReason: data.failReason || null,
+          ipAddress: data.ipAddress || null,
+          userAgent: data.userAgent || null,
+        },
+      });
+    } catch (e) {
+      // Don't let logging failures break the login flow
+      console.error('Failed to log login attempt:', e);
+    }
+  }
 
   // ============================================
   // USER AUTH (Customer & Driver - Phone OTP)
@@ -300,7 +323,7 @@ export class AuthService {
   /**
    * User login with phone and password
    */
-  async userLogin(dto: UserLoginDto): Promise<AuthTokensDto> {
+  async userLogin(dto: UserLoginDto, ipAddress?: string, userAgent?: string): Promise<AuthTokensDto> {
     const { phone, password, role } = dto;
 
     // Find user
@@ -313,16 +336,19 @@ export class AuthService {
     });
 
     if (!user) {
+      await this.logLoginAttempt({ identifier: phone, loginType: role, success: false, failReason: 'Account not found', ipAddress, userAgent });
       throw new NotFoundException('Account not found. Please register first.');
     }
 
     // Check role matches
     if (user.role !== role) {
+      await this.logLoginAttempt({ identifier: phone, loginType: role, success: false, failReason: 'Role mismatch', ipAddress, userAgent });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Check if user has password set
     if (!user.password) {
+      await this.logLoginAttempt({ identifier: phone, loginType: role, success: false, failReason: 'No password (OTP account)', ipAddress, userAgent });
       throw new BadRequestException(
         'This account uses OTP login. Please use the OTP login method.',
       );
@@ -331,19 +357,24 @@ export class AuthService {
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
+      await this.logLoginAttempt({ identifier: phone, loginType: role, success: false, failReason: 'Invalid password', ipAddress, userAgent });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Check if customer is blocked or driver is suspended
     if (user.customer && user.customer.customerStatus === 'BLOCKED') {
+      await this.logLoginAttempt({ identifier: phone, loginType: role, success: false, failReason: 'Account blocked', ipAddress, userAgent });
       throw new UnauthorizedException('Your account has been blocked');
     }
     if (user.driver && user.driver.status === 'SUSPENDED') {
+      await this.logLoginAttempt({ identifier: phone, loginType: role, success: false, failReason: 'Account suspended', ipAddress, userAgent });
       throw new UnauthorizedException('Your account has been suspended');
     }
 
     // Get profileId
     const profileId = role === UserRole.CUSTOMER ? user.customer!.id : user.driver!.id;
+
+    await this.logLoginAttempt({ identifier: phone, loginType: role, success: true, ipAddress, userAgent });
 
     // Generate JWT tokens
     return this.generateUserTokens(user.id, phone, role, profileId);
@@ -371,7 +402,7 @@ export class AuthService {
   /**
    * SuperUser login with email/password
    */
-  async superUserLogin(dto: SuperUserLoginDto): Promise<AuthTokensDto> {
+  async superUserLogin(dto: SuperUserLoginDto, ipAddress?: string, userAgent?: string): Promise<AuthTokensDto> {
     const { email, password } = dto;
 
     // Find superuser
@@ -384,17 +415,20 @@ export class AuthService {
     });
 
     if (!superUser) {
+      await this.logLoginAttempt({ identifier: email, loginType: 'SUPERUSER', success: false, failReason: 'Account not found', ipAddress, userAgent });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, superUser.superPassword);
     if (!isPasswordValid) {
+      await this.logLoginAttempt({ identifier: email, loginType: superUser.role, success: false, failReason: 'Invalid password', ipAddress, userAgent });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Check if blocked
     if (superUser.status === UserStatus.BLOCKED) {
+      await this.logLoginAttempt({ identifier: email, loginType: superUser.role, success: false, failReason: 'Account blocked', ipAddress, userAgent });
       throw new UnauthorizedException('Your account has been blocked');
     }
 
@@ -403,6 +437,8 @@ export class AuthService {
       superUser.role === SuperUserRole.ADMIN
         ? superUser.admin!.id
         : superUser.customerService!.id;
+
+    await this.logLoginAttempt({ identifier: email, loginType: superUser.role, success: true, ipAddress, userAgent });
 
     // Generate JWT tokens
     return this.generateSuperUserTokens(
@@ -1039,7 +1075,7 @@ export class AuthService {
   /**
    * Driver Login with phone and password
    */
-  async driverLogin(dto: DriverLoginDto): Promise<AuthTokensDto> {
+  async driverLogin(dto: DriverLoginDto, ipAddress?: string, userAgent?: string): Promise<AuthTokensDto> {
     const { phone, password } = dto;
 
     // Find user by phone and role=DRIVER
@@ -1054,11 +1090,13 @@ export class AuthService {
     });
 
     if (!user) {
+      await this.logLoginAttempt({ identifier: phone, loginType: 'DRIVER', success: false, failReason: 'Account not found', ipAddress, userAgent });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Check if user has password set
     if (!user.password) {
+      await this.logLoginAttempt({ identifier: phone, loginType: 'DRIVER', success: false, failReason: 'No password (Google account)', ipAddress, userAgent });
       throw new BadRequestException(
         'This account uses Google OAuth. Please use Google sign-in.',
       );
@@ -1067,13 +1105,17 @@ export class AuthService {
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
+      await this.logLoginAttempt({ identifier: phone, loginType: 'DRIVER', success: false, failReason: 'Invalid password', ipAddress, userAgent });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Check if driver is suspended
     if (user.driver && user.driver.status === 'SUSPENDED') {
+      await this.logLoginAttempt({ identifier: phone, loginType: 'DRIVER', success: false, failReason: 'Account suspended', ipAddress, userAgent });
       throw new UnauthorizedException('Your account has been suspended');
     }
+
+    await this.logLoginAttempt({ identifier: phone, loginType: 'DRIVER', success: true, ipAddress, userAgent });
 
     // Generate JWT tokens
     return this.generateUserTokens(user.id, phone, UserRole.DRIVER, user.driver!.id);

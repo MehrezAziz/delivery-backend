@@ -1,6 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { SanitizePipe } from './common/pipes/sanitize.pipe';
+import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -11,6 +13,12 @@ async function bootstrap() {
   app.use(require('express').json({ limit: '10mb' }));
   app.use(require('express').urlencoded({ limit: '10mb', extended: true }));
 
+  // Security: HTTP headers (XSS, clickjacking, MIME sniffing protection)
+  app.use(helmet({
+    contentSecurityPolicy: false, // API-only server, no HTML to protect
+    crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow mobile app requests
+  }));
+
   // Enable CORS
   app.enableCors({
     origin: true, // In production, specify allowed origins
@@ -19,6 +27,7 @@ async function bootstrap() {
 
   // Enable validation pipes globally
   app.useGlobalPipes(
+    new SanitizePipe(),
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
