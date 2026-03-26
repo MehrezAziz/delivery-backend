@@ -1,6 +1,8 @@
 import {
   Controller,
   Get,
+  Post,
+  Body,
   Param,
   UseGuards,
 } from '@nestjs/common';
@@ -14,6 +16,19 @@ import { ReferralCodeDto, ReferralStatisticsDto } from '../dto';
 @UseGuards(JwtUserGuard, CustomerGuard)
 export class ReferralController {
   constructor(private readonly referralService: ReferralService) {}
+
+  /**
+   * Apply a referral code to a customer who registered without one.
+   * POST /referral/apply
+   * Can only be done once — cannot be changed after.
+   */
+  @Post('apply')
+  async applyReferralCode(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body('code') code: string,
+  ): Promise<{ message: string }> {
+    return this.referralService.applyReferralCode(user.profileId, code);
+  }
 
   /**
    * Get authenticated customer's referral code

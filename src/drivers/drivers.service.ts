@@ -340,7 +340,15 @@ export class DriversService {
 
     // Update user fields (phone, gender)
     const userUpdate: any = {};
-    if (data.phone !== undefined) userUpdate.phone = data.phone || null;
+    if (data.phone !== undefined) {
+      if (data.phone) {
+        const existingUser = await this.prisma.user.findUnique({ where: { phone: data.phone } });
+        if (existingUser && existingUser.id !== userId) {
+          throw new BadRequestException('This phone number is already in use');
+        }
+      }
+      userUpdate.phone = data.phone || null;
+    }
     if (data.userGender !== undefined) userUpdate.userGender = data.userGender || null;
     if (Object.keys(userUpdate).length > 0) {
       await this.prisma.user.update({ where: { id: userId }, data: userUpdate });

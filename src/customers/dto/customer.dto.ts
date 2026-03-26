@@ -12,6 +12,10 @@ export class UpdateCustomerDto {
 
   @IsString()
   @IsOptional()
+  phone?: string;
+
+  @IsString()
+  @IsOptional()
   myEmail?: string;
 
   @IsEnum(UserGender)

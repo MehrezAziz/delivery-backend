@@ -86,6 +86,37 @@ export class ReferralService {
 
     return referralCode;
   }
+  /**
+   * Apply a referral code to a customer who registered without one.
+   * Can only be done once — if referredByCodeId is already set, it cannot be changed.
+   */
+  async applyReferralCode(customerId: string, code: string): Promise<{ message: string }> {
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+
+    if (!customer) {
+      throw new InvalidReferralCodeException('Customer not found');
+    }
+
+    if (customer.referredByCodeId) {
+      throw new InvalidReferralCodeException('You already have a referral code applied. It cannot be changed.');
+    }
+
+    // Validate the code (checks active, expiry, usage limits, self-referral)
+    const validatedCode = await this.validateReferralCode(code, customerId);
+
+    // Apply the referral code
+    await this.prisma.customer.update({
+      where: { id: customerId },
+      data: { referredByCodeId: validatedCode.id },
+    });
+
+    // Increment usage
+    await this.incrementUsage(validatedCode.id);
+
+    return { message: 'Referral code applied successfully' };
+  }
 
   /**
    * Retrieves a customer's own referral code

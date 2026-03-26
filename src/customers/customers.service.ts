@@ -68,12 +68,21 @@ export class CustomersService {
       throw new NotFoundException('Customer profile not found');
     }
 
+    // Check phone uniqueness if phone is being updated
+    if (dto.phone) {
+      const existingUser = await this.prisma.user.findUnique({ where: { phone: dto.phone } });
+      if (existingUser && existingUser.id !== userId) {
+        throw new BadRequestException('This phone number is already in use');
+      }
+    }
+
     // Update user fields
     await this.prisma.user.update({
       where: { id: userId },
       data: {
         firstName: dto.firstName,
         secondName: dto.secondName,
+        phone: dto.phone,
         myEmail: dto.myEmail,
         userGender: dto.userGender,
         image: dto.image,
