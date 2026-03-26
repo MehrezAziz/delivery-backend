@@ -235,8 +235,14 @@ export class OrdersService {
         const totalDebit = pFee + referralAmount;
         const driverAccount = await tx.driverAccount.findUnique({ where: { driverId: order.driverAssignment.driverId } });
         if (driverAccount) {
-          const newBalance = Number(driverAccount.balance) - totalDebit;
-          await tx.driverAccount.update({ where: { id: driverAccount.id }, data: { balance: newBalance } });
+          const oldBalance = Number(driverAccount.balance);
+          const newBalance = oldBalance - totalDebit;
+          const updateData: any = { balance: newBalance };
+          // Track when balance first goes negative
+          if (newBalance < 0 && oldBalance >= 0) {
+            updateData.negativeBalanceSince = new Date();
+          }
+          await tx.driverAccount.update({ where: { id: driverAccount.id }, data: updateData });
           await tx.driverTransaction.create({
             data: {
               accountId: driverAccount.id,

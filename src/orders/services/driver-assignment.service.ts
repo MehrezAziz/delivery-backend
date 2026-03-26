@@ -29,7 +29,7 @@ export class DriverAssignmentService {
 
       if (!driver) throw new NotFoundException('Driver not found');
 
-      if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED) {
+      if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED || (driver.status as string) === 'PAUSED') {
         throw new ForbiddenException('Your account is not eligible to view orders');
       }
 
@@ -274,7 +274,7 @@ export class DriverAssignmentService {
   }) {
     const driver = await this.prisma.driver.findUnique({ where: { id: driverId } });
     if (!driver) throw new NotFoundException('Driver not found');
-    if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED) {
+    if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED || (driver.status as string) === 'PAUSED') {
       throw new ForbiddenException('Your account is not eligible to view orders');
     }
 
@@ -324,7 +324,7 @@ export class DriverAssignmentService {
   }) {
     const driver = await this.prisma.driver.findUnique({ where: { id: driverId } });
     if (!driver) throw new NotFoundException('Driver not found');
-    if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED) {
+    if (driver.status === DriverStatus.REJECTED || driver.status === DriverStatus.SUSPENDED || (driver.status as string) === 'PAUSED') {
       throw new ForbiddenException('Your account is not eligible to view orders');
     }
 

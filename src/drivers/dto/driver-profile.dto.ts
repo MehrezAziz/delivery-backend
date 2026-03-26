@@ -33,5 +33,8 @@ export class DriverProfileDto {
     balance: number;
     currency: string;
     completedDeliveries: number;
+    negativeBalanceSince?: Date;
+    daysRemainingToPay?: number;
+    maxNegativeDays?: number;
   };
 }

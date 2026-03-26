@@ -209,7 +209,14 @@ export class DriversService {
     const driver = await this.prisma.driver.findUnique({
       where: { userId },
       include: {
-        user: true,
+        user: {
+          include: {
+            addresses: {
+              include: { delegation: { include: { governorate: { include: { country: true } } } } },
+              take: 1,
+            },
+          },
+        },
         driverAccount: true,
         driverLocations: {
           orderBy: { timestamp: 'desc' },
@@ -230,6 +237,44 @@ export class DriversService {
 
     if (!driver) {
       throw new NotFoundException('Driver not found');
+    }
+
+    // Auto-pause check: if balance is negative, calculate days remaining
+    let daysRemainingToPay: number | undefined;
+    let maxNegativeDays: number | undefined;
+    if (driver.driverAccount && Number(driver.driverAccount.balance) < 0) {
+      // Backfill negativeBalanceSince if not set yet (for drivers who went negative before this feature)
+      if (!driver.driverAccount.negativeBalanceSince) {
+        await this.prisma.driverAccount.update({
+          where: { id: driver.driverAccount.id },
+          data: { negativeBalanceSince: new Date() },
+        });
+        driver.driverAccount.negativeBalanceSince = new Date();
+      }
+
+      // Get the pricing policy for the driver's country to find maxNegativeDays
+      const driverAddress = driver.user.addresses[0];
+      if (driverAddress) {
+        const pricingPolicy = await this.prisma.countryPricingPolicy.findFirst({
+          where: { countryId: driverAddress.delegation.governorate.country.id, isActive: true },
+        });
+        if (pricingPolicy) {
+          maxNegativeDays = pricingPolicy.maxNegativeDays;
+          const daysSinceNegative = Math.floor(
+            (Date.now() - new Date(driver.driverAccount.negativeBalanceSince).getTime()) / (1000 * 60 * 60 * 24),
+          );
+          daysRemainingToPay = Math.max(0, maxNegativeDays - daysSinceNegative);
+
+          // Auto-pause if days exceeded and driver is currently VERIFIED
+          if (daysRemainingToPay <= 0 && driver.status === DriverStatus.VERIFIED) {
+            await this.prisma.driver.update({
+              where: { id: driver.id },
+              data: { status: DriverStatus.PAUSED },
+            });
+            driver.status = DriverStatus.PAUSED;
+          }
+        }
+      }
     }
 
     const latestVerification = driver.driverVerifications[0] ?? null;
@@ -275,6 +320,9 @@ export class DriversService {
             balance: Number(driver.driverAccount.balance),
             currency: driver.driverAccount.currency,
             completedDeliveries: driver.driverAccount.completedDeliveries,
+            negativeBalanceSince: driver.driverAccount.negativeBalanceSince ?? undefined,
+            daysRemainingToPay,
+            maxNegativeDays,
           }
         : undefined,
     };

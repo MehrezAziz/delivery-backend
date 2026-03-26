@@ -48,6 +48,7 @@ enum DriverStatus {
   VERIFIED
   REJECTED
   SUSPENDED
+  PAUSED
 }
 
 enum OrderStatus {
@@ -363,6 +364,7 @@ model DriverAccount {
   currency            String   @default("TND")
   avgDeliveryTime     Int?     @map("avg_delivery_time") // in minutes
   completedDeliveries Int      @default(0) @map("completed_deliveries")
+  negativeBalanceSince DateTime? @map("negative_balance_since") // When balance first went negative
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
