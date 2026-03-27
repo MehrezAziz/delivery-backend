@@ -165,6 +165,13 @@ export class DriverOrdersController {
     return this.driverAssignmentService.getRejectedOrders(user.profileId);
   }
 
+  @Get('has-available')
+  async hasAvailableOrders(@CurrentUser() user: AuthenticatedUser): Promise<{ hasAvailableOrders: boolean }> {
+    const hasAvailableOrders = await this.driverAssignmentService.hasAvailableOrdersForDriver(user.profileId);
+    return { hasAvailableOrders };
+  }
+
+
   @Post(':id/accept')
   @UseGuards(UserActiveGuard, UserRestrictionGuard)
   async acceptOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {

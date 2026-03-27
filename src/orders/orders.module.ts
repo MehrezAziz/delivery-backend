@@ -3,6 +3,7 @@ import { OrdersController, DriverOrdersController, AdminOrdersController } from 
 import { OrdersService } from './orders.service';
 import { PriceCalculationService } from './services/price-calculation.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
+import { AutoCancelService } from './services/auto-cancel.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
@@ -12,6 +13,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     OrdersService,
     PriceCalculationService,
     DriverAssignmentService,
+    AutoCancelService,
   ],
   exports: [OrdersService, PriceCalculationService, DriverAssignmentService],
 })

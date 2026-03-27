@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max } from 'class-validator';
 import { PaymentType, OrderStatus, DeliveryZoneType } from '@prisma/client';
 
 export class CreateOrderDto {
@@ -25,6 +25,12 @@ export class CreateOrderDto {
   @IsBoolean()
   @IsOptional()
   isNightDelivery?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(5)
+  @Max(60)
+  cancelAfterMinutes?: number;
 }
 
 export class PreviewOrderDto {

@@ -123,6 +123,7 @@ export class OrdersService {
         description: dto.description, weight: dto.weight, distanceKm: distance,
         price: priceCalc.totalPrice, nightFee: priceCalc.nightFee,
         extraWeightFee: priceCalc.extraWeightFee, isNightDelivery: isNight,
+        ...(dto.cancelAfterMinutes !== undefined && { cancelAfterMinutes: dto.cancelAfterMinutes }),
       },
       include: this.orderInclude(),
     });

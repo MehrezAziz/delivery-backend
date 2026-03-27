@@ -374,6 +374,46 @@ export class DriverAssignmentService {
   }
 
   /**
+   * Check if there are any available orders in the driver's delegation zone.
+   * Uses a count query with take:1 for performance.
+   */
+  async hasAvailableOrdersForDriver(driverId: string): Promise<boolean> {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      include: {
+        user: {
+          include: {
+            addresses: {
+              select: { delegationId: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!driver) throw new NotFoundException('Driver not found');
+
+    const delegationIds = driver.user.addresses
+      .map((a) => a.delegationId)
+      .filter(Boolean) as string[];
+
+    if (delegationIds.length === 0) return false;
+
+    const count = await this.prisma.order.count({
+      take: 1,
+      where: {
+        status: OrderStatus.SEARCHING_DRIVER,
+        pickupAddress: {
+          delegationId: { in: delegationIds },
+        },
+        driverRejections: { none: { driverId } },
+      },
+    });
+
+    return count > 0;
+  }
+
+  /**
    * Get orders where this driver was rejected by the customer
    */
   async getRejectedOrders(driverId: string) {
@@ -403,4 +443,5 @@ export class DriverAssignmentService {
       order: this.mapOrderToResponse(r.order),
     }));
   }
+
 }

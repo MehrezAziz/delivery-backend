@@ -18,6 +18,7 @@ import { AdminModule } from './admin/admin.module';
 import { ReferralModule } from './referral/referral.module';
 import { GeographyModule } from './geography/geography.module';
 import { SupportModule } from './support/support.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { SupportModule } from './support/support.module';
       limit: 60,
     }]),
     EventEmitterModule.forRoot(),
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
     UsersModule,
