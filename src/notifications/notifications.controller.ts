@@ -28,7 +28,7 @@ export class UserNotificationsController {
   @Post('register-token')
   async registerToken(@Request() req, @Body() dto: RegisterTokenDto) {
     await this.prisma.user.update({
-      where: { id: req.user.sub },
+      where: { id: req.user.id },
       data: { fcmToken: dto.token, fcmPlatform: dto.platform },
     });
     return { message: 'Token registered successfully' };
@@ -36,24 +36,24 @@ export class UserNotificationsController {
 
   @Get()
   async getNotifications(@Request() req, @Query() query: NotificationQueryDto) {
-    return this.notificationsService.getNotifications(req.user.sub, 'USER', query);
+    return this.notificationsService.getNotifications(req.user.id, 'USER', query);
   }
 
   @Get('unread-count')
   async getUnreadCount(@Request() req) {
-    const count = await this.notificationsService.getUnreadCount(req.user.sub, 'USER');
+    const count = await this.notificationsService.getUnreadCount(req.user.id, 'USER');
     return { count };
   }
 
   @Patch(':id/read')
   async markAsRead(@Request() req, @Param('id') id: string) {
-    await this.notificationsService.markAsRead(id, req.user.sub);
+    await this.notificationsService.markAsRead(id, req.user.id);
     return { message: 'Notification marked as read' };
   }
 
   @Patch('read-all')
   async markAllAsRead(@Request() req) {
-    await this.notificationsService.markAllAsRead(req.user.sub, 'USER');
+    await this.notificationsService.markAllAsRead(req.user.id, 'USER');
     return { message: 'All notifications marked as read' };
   }
 }
