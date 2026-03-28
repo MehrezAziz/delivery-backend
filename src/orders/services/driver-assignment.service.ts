@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OrderStatus, DriverStatus, ChatStatus } from '@prisma/client';
 
 @Injectable()
 export class DriverAssignmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   /**
    * Get available orders for a driver, filtered by DeliveryZoneType and availability.
@@ -139,7 +143,7 @@ export class DriverAssignmentService {
   async acceptOrder(driverId: string, orderId: string) {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: { user: { select: { phone: true } } },
+      include: { user: { select: { id: true, phone: true, firstName: true, secondName: true } } },
     });
     if (!driver || driver.status !== DriverStatus.VERIFIED) {
       throw new ForbiddenException('Driver must be verified to accept orders');
@@ -165,7 +169,7 @@ export class DriverAssignmentService {
       throw new BadRequestException('Order is not available for assignment');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const assignment = await tx.driverAssignment.create({
         data: { orderId, driverId, acceptedAt: new Date() },
       });
@@ -184,7 +188,21 @@ export class DriverAssignmentService {
       }
       return assignment;
     });
+
+    // Emit driver_assigned event for notifications
+    this.eventEmitter.emit('order.driver_assigned', {
+      orderId,
+      customerId: order.customerId,
+      customerUserId: order.customer.userId,
+      driverId,
+      driverUserId: driver!.user.id,
+      driverName: `${driver!.user.firstName || ''} ${driver!.user.secondName || ''}`.trim(),
+    });
+
+    return result;
   }
+
+  // Note: This is called from the controller after acceptOrder succeeds
 
   /**
    * Cancel order assignment (by driver or customer)

@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from './services/price-calculation.service';
 import { CreateOrderDto, PreviewOrderDto, ChangePaymentMethodDto, OrderResponseDto } from './dto/order.dto';
@@ -9,6 +10,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly priceCalculationService: PriceCalculationService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // ISO code → IANA timezone mapping for night delivery auto-detection
@@ -127,6 +129,11 @@ export class OrdersService {
       },
       include: this.orderInclude(),
     });
+    this.eventEmitter.emit('order.created', {
+      orderId: order.id,
+      customerId: customer.id,
+      userId,
+    });
     return this.mapToResponseDto(order);
   }
 
@@ -177,6 +184,11 @@ export class OrdersService {
     }
     await this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
     await this.closeChatRoomForOrder(orderId);
+    this.eventEmitter.emit('order.cancelled', {
+      orderId,
+      customerUserId: userId,
+      reason,
+    });
     // Close related support tickets
     await this.prisma.supportTicket.updateMany({
       where: {
@@ -318,6 +330,11 @@ export class OrdersService {
 
       return updatedOrder;
     });
+    this.eventEmitter.emit('order.delivered', {
+      orderId,
+      customerUserId: order.customer.userId,
+      driverUserId: order.driverAssignment.driver.userId,
+    });
     return this.mapToResponseDto(result as any);
   }
 
@@ -340,6 +357,19 @@ export class OrdersService {
     if (newStatus === OrderStatus.DRIVER_ARRIVED) await this.prisma.driverAssignment.update({ where: { orderId }, data: { arrivedAt: new Date() } });
     else if (newStatus === OrderStatus.PICKED_UP) await this.prisma.driverAssignment.update({ where: { orderId }, data: { pickedUpAt: new Date() } });
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: { status: newStatus }, include: this.orderInclude() });
+
+    // Emit status change events for notifications
+    const customerUserId = (updated as any).customer?.userId;
+    const statusEventMap: Record<string, string> = {
+      DRIVER_ARRIVED: 'order.driver_arrived',
+      PICKED_UP: 'order.picked_up',
+      DELIVERING: 'order.delivering',
+    };
+    const eventName = statusEventMap[newStatus];
+    if (eventName && customerUserId) {
+      this.eventEmitter.emit(eventName, { orderId, customerUserId });
+    }
+
     return this.mapToResponseDto(updated as any);
   }
 
@@ -494,7 +524,7 @@ export class OrdersService {
   async sendChatMessage(orderId: string, userId: string, content: string, image?: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: true, driverAssignment: { include: { driver: true } }, chatRoom: true },
+      include: { customer: { include: { user: true } }, driverAssignment: { include: { driver: { include: { user: true } } } }, chatRoom: true },
     });
     if (!order) throw new NotFoundException('Order not found');
     if (!order.chatRoom) throw new BadRequestException('No chat room');
@@ -502,7 +532,24 @@ export class OrdersService {
     const isDrv = order.driverAssignment?.driver.userId === userId;
     if (!isCust && !isDrv) throw new ForbiddenException('Not authorized');
     if (order.chatRoom.status === 'CLOSED') throw new ForbiddenException('Chat closed');
-    return this.prisma.message.create({ data: { chatRoomId: order.chatRoom.id, senderId: userId, senderType: isCust ? 'CUSTOMER' : 'DRIVER', content, image } });
+    const message = await this.prisma.message.create({ data: { chatRoomId: order.chatRoom.id, senderId: userId, senderType: isCust ? 'CUSTOMER' : 'DRIVER', content, image } });
+
+    // Emit chat notification event
+    if (isCust && order.driverAssignment?.driver) {
+      this.eventEmitter.emit('chat.new_message_from_customer', {
+        orderId,
+        driverUserId: order.driverAssignment.driver.userId,
+        customerName: `${order.customer.user.firstName || ''} ${order.customer.user.secondName || ''}`.trim(),
+      });
+    } else if (isDrv) {
+      this.eventEmitter.emit('chat.new_message_from_driver', {
+        orderId,
+        customerUserId: order.customer.userId,
+        driverName: `${order.driverAssignment!.driver.user.firstName || ''} ${order.driverAssignment!.driver.user.secondName || ''}`.trim(),
+      });
+    }
+
+    return message;
   }
 
   async closeExpiredChatRooms() {
@@ -522,7 +569,7 @@ export class OrdersService {
 
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: true, driverAssignment: true, rating: true },
+      include: { customer: true, driverAssignment: { include: { driver: true } }, rating: true },
     }) as any;
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
@@ -549,6 +596,13 @@ export class OrdersService {
     await this.prisma.driverPerformanceMetrics.updateMany({
       where: { driverId: order.driverAssignment.driverId },
       data: { avgRating: avg, lastCalculatedAt: new Date() },
+    });
+
+    // Notify driver about the rating
+    this.eventEmitter.emit('driver.rated', {
+      driverUserId: order.driverAssignment.driver.userId,
+      score,
+      orderId,
     });
 
     return rating;

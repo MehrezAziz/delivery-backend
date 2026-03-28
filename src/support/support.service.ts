@@ -1,18 +1,22 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTicketDto, SendMessageDto } from './dto/support.dto';
 import { SupportTicketStatus } from '@prisma/client';
 
 @Injectable()
 export class SupportService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   // ============================================
   // USER-FACING (Customer / Driver)
   // ============================================
 
   async createTicket(userId: string, dto: CreateTicketDto) {
-    return this.prisma.supportTicket.create({
+    const ticket = await this.prisma.supportTicket.create({
       data: {
         userId,
         category: dto.category,
@@ -21,6 +25,8 @@ export class SupportService {
       },
       include: { messages: true },
     });
+    this.eventEmitter.emit('support.new_ticket', { ticketId: ticket.id, userId });
+    return ticket;
   }
 
   async getUserTickets(userId: string) {
@@ -49,12 +55,15 @@ export class SupportService {
   }
 
   async sendUserMessage(ticketId: string, userId: string, dto: SendMessageDto) {
-    const ticket = await this.prisma.supportTicket.findUnique({ where: { id: ticketId } });
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      include: { customerService: true },
+    });
     if (!ticket) throw new NotFoundException('Ticket not found');
     if (ticket.userId !== userId) throw new ForbiddenException('Not your ticket');
     if (ticket.status === 'CLOSED') throw new ForbiddenException('Ticket is closed');
 
-    return this.prisma.supportMessage.create({
+    const message = await this.prisma.supportMessage.create({
       data: {
         ticketId,
         senderId: userId,
@@ -63,6 +72,16 @@ export class SupportService {
         image: dto.image,
       },
     });
+
+    // Notify assigned CS agent about customer reply
+    if (ticket.customerService) {
+      this.eventEmitter.emit('support.customer_replied', {
+        ticketId,
+        csAgentSuperUserId: ticket.customerService.superUserId,
+      });
+    }
+
+    return message;
   }
 
   // ============================================
@@ -98,7 +117,13 @@ export class SupportService {
     const ticket = await this.prisma.supportTicket.findUnique({ where: { id: ticketId } });
     if (!ticket) throw new NotFoundException('Ticket not found');
 
-    return this.prisma.supportTicket.update({
+    // Get the superUserId for the CS agent
+    const csAgent = await this.prisma.customerService.findUnique({
+      where: { id: customerServiceId },
+      select: { superUserId: true },
+    });
+
+    const updated = await this.prisma.supportTicket.update({
       where: { id: ticketId },
       data: {
         assignedTo: customerServiceId,
@@ -109,6 +134,16 @@ export class SupportService {
         customerService: { include: { superUser: { select: { pseudo: true } } } },
       },
     });
+
+    // Notify the assigned CS agent
+    if (csAgent) {
+      this.eventEmitter.emit('support.ticket_assigned', {
+        ticketId,
+        csAgentSuperUserId: csAgent.superUserId,
+      });
+    }
+
+    return updated;
   }
 
   async sendCSMessage(ticketId: string, superUserId: string, customerServiceId: string, dto: SendMessageDto) {
@@ -124,7 +159,7 @@ export class SupportService {
       });
     }
 
-    return this.prisma.supportMessage.create({
+    const message = await this.prisma.supportMessage.create({
       data: {
         ticketId,
         senderId: superUserId,
@@ -133,6 +168,11 @@ export class SupportService {
         image: dto.image,
       },
     });
+
+    // Notify user about CS reply
+    this.eventEmitter.emit('support.ticket_reply', { ticketId, userId: ticket.userId });
+
+    return message;
   }
 
   async closeTicket(ticketId: string) {

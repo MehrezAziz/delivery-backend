@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -7,7 +8,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class AutoCancelService {
   private readonly logger = new Logger(AutoCancelService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async cancelExpiredOrders(): Promise<number> {
@@ -25,13 +29,19 @@ export class AutoCancelService {
 
     for (const order of expiredOrders) {
       try {
-        await this.prisma.order.update({
+        const cancelledOrder = await this.prisma.order.update({
           where: { id: order.id },
           data: { status: OrderStatus.CANCELLED },
+          include: { customer: true },
         });
         this.logger.log(
           `Auto-cancelled: no driver responded within ${order.cancelAfterMinutes} minutes (order ${order.id})`,
         );
+        // Emit no_driver_found event for notification
+        this.eventEmitter.emit('order.no_driver_found', {
+          orderId: order.id,
+          customerUserId: cancelledOrder.customer.userId,
+        });
         cancelledCount++;
       } catch (error) {
         this.logger.error(

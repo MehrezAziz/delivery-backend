@@ -194,10 +194,104 @@ enum MessageSenderType {
 }
 
 enum NotificationType {
-  ORDER_UPDATE
-  PAYMENT
-  REFERRAL
-  SYSTEM
+  // Customer - Order Lifecycle
+  ORDER_CREATED
+  DRIVER_ASSIGNED
+  DRIVER_ARRIVED
+  PACKAGE_PICKED_UP
+  DELIVERY_IN_PROGRESS
+  ORDER_DELIVERED
+  ORDER_CANCELLED
+  NO_DRIVER_FOUND
+  // Customer - Payment & Wallet
+  WALLET_TOPUP_SUCCESS
+  WALLET_TOPUP_FAILED
+  LOW_WALLET_BALANCE
+  ORDER_PAYMENT_DEDUCTED
+  REFUND_PROCESSED
+  WITHDRAWAL_STATUS
+  // Customer - Referral
+  REFERRAL_BONUS
+  REFERRED_FRIEND_REGISTERED
+  // Customer - Account
+  ACCOUNT_CREATED
+  ACCOUNT_SUSPENDED
+  ACCOUNT_REACTIVATED
+  // Customer - Support
+  DISPUTE_OPENED
+  DISPUTE_RESOLVED
+  SUPPORT_TICKET_REPLY
+  // Customer - Chat
+  NEW_MESSAGE_FROM_DRIVER
+  // Driver - Order Opportunities
+  NEW_ORDER_AVAILABLE
+  ORDER_EXPIRED
+  // Driver - Active Order
+  ORDER_CANCELLED_BY_CUSTOMER
+  PICKUP_REMINDER
+  // Driver - Account
+  DOCUMENTS_SUBMITTED
+  VERIFICATION_APPROVED
+  VERIFICATION_REJECTED
+  DRIVER_ACCOUNT_SUSPENDED
+  // Driver - Financial
+  PAYMENT_RECEIVED_COD
+  PAYMENT_CREDITED_WALLET
+  NEGATIVE_BALANCE_WARNING
+  ACCOUNT_BLOCKED_DEBT
+  WITHDRAWAL_PROCESSED
+  // Driver - Performance
+  CUSTOMER_RATED_YOU
+  PERFORMANCE_MILESTONE
+  // Driver - Chat
+  NEW_MESSAGE_FROM_CUSTOMER
+  // Admin - Driver Management
+  NEW_DRIVER_REGISTRATION
+  DRIVER_DOCUMENTS_SUBMITTED
+  DRIVER_PERFORMANCE_ALERT
+  DRIVER_DEBT_THRESHOLD
+  // Admin - Order Management
+  ORDER_STUCK_NO_DRIVER
+  HIGH_VALUE_ORDER
+  ORDER_CANCELLED_AFTER_ASSIGNMENT
+  // Admin - Disputes
+  NEW_DISPUTE_CREATED
+  DISPUTE_ESCALATED
+  // Admin - Financial
+  LARGE_WITHDRAWAL_REQUEST
+  PAYMENT_GATEWAY_FAILURE
+  DAILY_REVENUE_REPORT
+  // Admin - System Health
+  SERVER_ERROR_SPIKE
+  DATABASE_PERFORMANCE_ALERT
+  // Admin - User Management
+  SUSPICIOUS_ACTIVITY
+  BULK_REGISTRATION_DETECTED
+  // CS - Support
+  NEW_SUPPORT_TICKET
+  TICKET_ASSIGNED
+  CUSTOMER_REPLIED_TICKET
+  URGENT_TICKET_UNRESOLVED
+  // CS - Disputes
+  DISPUTE_ASSIGNED
+  DISPUTE_REQUIRES_DECISION
+  // CS - Order Monitoring
+  DELAYED_ORDER_ALERT
+}
+
+enum NotificationPriority {
+  LOW       // Informational only
+  MEDIUM    // Standard notification
+  HIGH      // Important, requires attention
+  CRITICAL  // Urgent, requires immediate action
+}
+
+enum NotificationChannel {
+  PUSH         // Mobile push notification
+  IN_APP       // In-app notification center
+  EMAIL        // Email notification
+  SMS          // SMS (critical only)
+  WEB_SOCKET   // Real-time browser notification
 }
 
 enum NotificationDeliveryStatus {
@@ -248,6 +342,8 @@ model User {
   googleId    String?     @unique @map("google_id") // Google's unique user ID
   googleEmail String?     @unique @map("google_email") // Email from Google
   role        UserRole
+  fcmToken    String?     @map("fcm_token")
+  fcmPlatform String?     @map("fcm_platform") // 'android' or 'ios'
   createdAt   DateTime    @default(now()) @map("created_at")
 
   // Relations
@@ -255,7 +351,6 @@ model User {
   customer         Customer?
   driver           Driver?
   userRestrictions UserRestriction[]
-  notifications    Notification[]
   sentMessages     Message[]
   supportTickets   SupportTicket[]
 
@@ -276,7 +371,6 @@ model SuperUser {
   admin           Admin?
   customerService CustomerService?
   actionLogs      ActionLog[]
-  notifications   Notification[]
 
   @@map("super_users")
 }
@@ -997,19 +1091,25 @@ model Notification {
   title               String
   body                String
   type                NotificationType
+  priority            NotificationPriority       @default(MEDIUM)
+  channels            NotificationChannel[]
   relatedEntityType   String?                    @map("related_entity_type")
   relatedEntityId     String?                    @map("related_entity_id")
+  actionButtons       Json?                      @map("action_buttons")
+  expiresAt           DateTime?                  @map("expires_at")
+  groupKey            String?                    @map("group_key")
   sentAt              DateTime                   @default(now()) @map("sent_at")
   readAt              DateTime?                  @map("read_at")
   deliveryStatus      NotificationDeliveryStatus @default(PENDING) @map("delivery_status")
+  failureReason       String?                    @map("failure_reason")
 
-  // Relations - manually handled based on userType in application code
-  // If userType == 'USER' -> lookup in users table
-  // If userType == 'SUPER_USER' -> lookup in super_users table
-  user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  superUser SuperUser? @relation(fields: [userId], references: [id], onDelete: Cascade, map: "notification_super_user_fk")
+  // Relations removed — userId is polymorphic (can be User or SuperUser)
+  // Lookups handled in application code based on userType
 
   @@index([userId, readAt])
+  @@index([userId, userType, sentAt])
+  @@index([groupKey])
+  @@index([type])
   @@map("notifications")
 }
 
