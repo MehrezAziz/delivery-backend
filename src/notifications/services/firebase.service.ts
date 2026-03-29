@@ -69,38 +69,56 @@ export class FirebaseService implements OnModuleInit {
       // For order notifications, use a stable tag so Android replaces the notification
       const tag = isOrderNotification && orderId ? `order_${orderId}` : undefined;
 
-      const message: admin.messaging.Message = {
-        token: payload.token,
-        // Always include notification field so Android displays it natively
-        notification: {
-          title: payload.title,
-          body: payload.body,
-        },
-        data: dataPayload,
-        android: {
-          priority: 'high',
-          notification: {
-            channelId: isOrderNotification ? 'order-updates' : 'default',
-            // tag is the key: same tag = Android replaces the notification
-            tag: tag,
-            sticky: payload.ongoing || false,
-            sound: 'default',
+      let message: admin.messaging.Message;
+
+      if (isOrderNotification) {
+        // Order notifications: DATA-ONLY message
+        // The foreground service on the client handles display
+        message = {
+          token: payload.token,
+          // No notification field — data only so the foreground service handles it
+          data: dataPayload,
+          android: {
+            priority: 'high',
           },
-        },
-        apns: {
-          headers: {
-            'apns-priority': '10',
-            // apns-collapse-id makes iOS replace notifications with same ID
-            ...(tag ? { 'apns-collapse-id': tag } : {}),
-          },
-          payload: {
-            aps: {
-              sound: 'default',
-              ...(payload.groupKey ? { 'thread-id': payload.groupKey } : {}),
+          apns: {
+            headers: {
+              'apns-priority': '10',
+              'apns-push-type': 'background',
+              ...(tag ? { 'apns-collapse-id': tag } : {}),
+            },
+            payload: {
+              aps: {
+                'content-available': 1,
+                ...(payload.groupKey ? { 'thread-id': payload.groupKey } : {}),
+              },
             },
           },
-        },
-      };
+        };
+      } else {
+        // Non-order notifications: standard notification display
+        message = {
+          token: payload.token,
+          notification: {
+            title: payload.title,
+            body: payload.body,
+          },
+          data: dataPayload,
+          android: {
+            priority: 'high',
+            notification: {
+              channelId: 'default',
+              sound: 'default',
+            },
+          },
+          apns: {
+            headers: { 'apns-priority': '10' },
+            payload: {
+              aps: { sound: 'default' },
+            },
+          },
+        };
+      }
 
       await admin.messaging().send(message);
       return { success: true };
