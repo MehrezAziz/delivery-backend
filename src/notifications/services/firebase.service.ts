@@ -58,30 +58,24 @@ export class FirebaseService implements OnModuleInit {
         ...(payload.groupKey ? { groupKey: payload.groupKey } : {}),
         ...(payload.actionButtons ? { actionButtons: JSON.stringify(payload.actionButtons) } : {}),
         ongoing: payload.ongoing ? 'true' : 'false',
+        title: payload.title,
+        body: payload.body,
       };
 
       const message: admin.messaging.Message = {
         token: payload.token,
-        // Include notification so Android shows it natively even when app is closed
-        notification: {
-          title: payload.title,
-          body: payload.body,
-        },
+        // Data-only message — Notifee on the client handles display
+        // This gives full control over notification appearance and update behavior
         data: dataPayload,
         android: {
           priority: 'high',
-          notification: {
-            channelId: payload.ongoing ? 'order-updates' : 'default',
-            // tag ensures same groupKey replaces the previous notification
-            ...(payload.groupKey ? { tag: payload.groupKey } : {}),
-            sticky: payload.ongoing || false,
-          },
         },
         apns: {
+          headers: { 'apns-priority': '10' },
           payload: {
             aps: {
+              'content-available': 1,
               sound: 'default',
-              ...(payload.groupKey ? { 'thread-id': payload.groupKey } : {}),
             },
           },
         },

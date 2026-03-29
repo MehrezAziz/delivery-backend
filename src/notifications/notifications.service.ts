@@ -139,6 +139,8 @@ export class NotificationsService {
           type: dto.type,
           ...(dto.relatedEntityType ? { relatedEntityType: dto.relatedEntityType } : {}),
           ...(dto.relatedEntityId ? { relatedEntityId: dto.relatedEntityId } : {}),
+          // Pass orderId separately for Notifee notification ID
+          ...(dto.groupKey?.startsWith('order:') ? { orderId: dto.groupKey.replace('order:', '') } : {}),
         },
         actionButtons: dto.actionButtons,
         groupKey: dto.groupKey,
