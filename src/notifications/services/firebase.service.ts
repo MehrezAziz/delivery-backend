@@ -62,20 +62,41 @@ export class FirebaseService implements OnModuleInit {
         body: payload.body,
       };
 
+      // Use a stable tag derived from orderId — same tag replaces the previous notification
+      // Extract orderId from groupKey (format: "order:uuid") for a clean tag
+      let tag: string | undefined;
+      if (payload.groupKey?.startsWith('order:')) {
+        // Use just the orderId as tag - this ensures all notifications for same order replace each other
+        tag = payload.groupKey.replace('order:', 'order_');
+      } else {
+        tag = payload.groupKey || undefined;
+      }
+
       const message: admin.messaging.Message = {
         token: payload.token,
-        // Data-only message — Notifee on the client handles display
-        // This gives full control over notification appearance and update behavior
+        // notification field ensures Android shows it natively even when app is killed
+        notification: {
+          title: payload.title,
+          body: payload.body,
+        },
+        // data field carries metadata for the app to handle when it's alive
         data: dataPayload,
         android: {
           priority: 'high',
+          notification: {
+            channelId: payload.ongoing ? 'order-updates' : 'default',
+            // tag ensures same-order notifications replace each other even when app is killed
+            tag: tag,
+            sticky: payload.ongoing || false,
+            sound: 'default',
+          },
         },
         apns: {
-          headers: { 'apns-priority': '10' },
+          headers: { 'apns-priority': '10', 'apns-collapse-id': tag || '' },
           payload: {
             aps: {
-              'content-available': 1,
               sound: 'default',
+              ...(payload.groupKey ? { 'thread-id': payload.groupKey } : {}),
             },
           },
         },
