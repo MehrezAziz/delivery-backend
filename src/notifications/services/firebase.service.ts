@@ -53,46 +53,46 @@ export class FirebaseService implements OnModuleInit {
     }
 
     try {
+      const isOrderNotification = payload.groupKey?.startsWith('order:');
+      const orderId = isOrderNotification && payload.groupKey ? payload.groupKey.replace('order:', '') : undefined;
+
       const dataPayload: Record<string, string> = {
         ...payload.data,
         ...(payload.groupKey ? { groupKey: payload.groupKey } : {}),
+        ...(orderId ? { orderId } : {}),
         ...(payload.actionButtons ? { actionButtons: JSON.stringify(payload.actionButtons) } : {}),
         ongoing: payload.ongoing ? 'true' : 'false',
         title: payload.title,
         body: payload.body,
       };
 
-      // Use a stable tag derived from orderId — same tag replaces the previous notification
-      // Extract orderId from groupKey (format: "order:uuid") for a clean tag
-      let tag: string | undefined;
-      if (payload.groupKey?.startsWith('order:')) {
-        // Use just the orderId as tag - this ensures all notifications for same order replace each other
-        tag = payload.groupKey.replace('order:', 'order_');
-      } else {
-        tag = payload.groupKey || undefined;
-      }
+      // For order notifications, use a stable tag so Android replaces the notification
+      const tag = isOrderNotification && orderId ? `order_${orderId}` : undefined;
 
       const message: admin.messaging.Message = {
         token: payload.token,
-        // notification field ensures Android shows it natively even when app is killed
+        // Always include notification field so Android displays it natively
         notification: {
           title: payload.title,
           body: payload.body,
         },
-        // data field carries metadata for the app to handle when it's alive
         data: dataPayload,
         android: {
           priority: 'high',
           notification: {
-            channelId: payload.ongoing ? 'order-updates' : 'default',
-            // tag ensures same-order notifications replace each other even when app is killed
+            channelId: isOrderNotification ? 'order-updates' : 'default',
+            // tag is the key: same tag = Android replaces the notification
             tag: tag,
             sticky: payload.ongoing || false,
             sound: 'default',
           },
         },
         apns: {
-          headers: { 'apns-priority': '10', 'apns-collapse-id': tag || '' },
+          headers: {
+            'apns-priority': '10',
+            // apns-collapse-id makes iOS replace notifications with same ID
+            ...(tag ? { 'apns-collapse-id': tag } : {}),
+          },
           payload: {
             aps: {
               sound: 'default',
