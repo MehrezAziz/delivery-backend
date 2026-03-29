@@ -9,6 +9,7 @@ export class OrderNotificationListener {
 
   @OnEvent('order.created')
   async handleOrderCreated(payload: { orderId: string; customerId: string; userId: string }) {
+    // Notify customer
     await this.notificationsService.send({
       userId: payload.userId,
       userType: 'USER',
@@ -16,6 +17,15 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      ongoing: true,
+    });
+
+    // Notify all admins about new order
+    await this.notificationsService.sendToAllAdmins(NotificationType.HIGH_VALUE_ORDER, {
+      relatedEntityType: 'Order',
+      relatedEntityId: payload.orderId,
+      title: 'New Order Created',
+      body: 'A new delivery order has been created.',
     });
   }
 
@@ -28,7 +38,7 @@ export class OrderNotificationListener {
     driverUserId: string;
     driverName: string;
   }) {
-    // Notify customer
+    // Update the existing order notification for customer (persistent, non-dismissible)
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -37,11 +47,14 @@ export class OrderNotificationListener {
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
       templateData: { driverName: payload.driverName },
+      updateExisting: true,
+      ongoing: true,
     });
   }
 
   @OnEvent('order.driver_arrived')
   async handleDriverArrived(payload: { orderId: string; customerUserId: string }) {
+    // Update existing persistent notification — no new notification
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -49,11 +62,14 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      updateExisting: true,
+      ongoing: true,
     });
   }
 
   @OnEvent('order.picked_up')
   async handlePickedUp(payload: { orderId: string; customerUserId: string }) {
+    // Update existing persistent notification
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -61,11 +77,14 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      updateExisting: true,
+      ongoing: true,
     });
   }
 
   @OnEvent('order.delivering')
   async handleDelivering(payload: { orderId: string; customerUserId: string }) {
+    // Update existing persistent notification
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -73,6 +92,8 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      updateExisting: true,
+      ongoing: true,
     });
   }
 
@@ -82,7 +103,7 @@ export class OrderNotificationListener {
     customerUserId: string;
     driverUserId: string;
   }) {
-    // Notify customer
+    // Final notification — update existing but make it DISMISSIBLE (not ongoing)
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -90,6 +111,8 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      updateExisting: true,
+      ongoing: false, // Customer can now dismiss this notification
     });
   }
 
@@ -100,7 +123,7 @@ export class OrderNotificationListener {
     driverUserId?: string;
     reason?: string;
   }) {
-    // Notify customer
+    // Update existing notification — dismissible
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -109,6 +132,8 @@ export class OrderNotificationListener {
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
       templateData: { reason: payload.reason },
+      updateExisting: true,
+      ongoing: false,
     });
 
     // Notify driver if assigned
@@ -137,6 +162,7 @@ export class OrderNotificationListener {
 
   @OnEvent('order.no_driver_found')
   async handleNoDriverFound(payload: { orderId: string; customerUserId: string }) {
+    // Update existing notification — dismissible
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -144,6 +170,8 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      updateExisting: true,
+      ongoing: false,
     });
   }
 }

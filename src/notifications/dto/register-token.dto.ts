@@ -1,8 +1,8 @@
-import { IsString, IsIn, IsNotEmpty } from 'class-validator';
+import { IsString, IsIn, IsOptional } from 'class-validator';
 
 export class RegisterTokenDto {
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   token: string;
 
   @IsString()

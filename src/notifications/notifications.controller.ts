@@ -27,11 +27,22 @@ export class UserNotificationsController {
 
   @Post('register-token')
   async registerToken(@Request() req, @Body() dto: RegisterTokenDto) {
+    const fcmToken = dto.token || null;
+    const fcmPlatform = dto.token ? dto.platform : null;
+
+    // Clear this token from any other user (handles same-device multi-account)
+    if (fcmToken) {
+      await this.prisma.user.updateMany({
+        where: { fcmToken, id: { not: req.user.id } },
+        data: { fcmToken: null, fcmPlatform: null },
+      });
+    }
+
     await this.prisma.user.update({
       where: { id: req.user.id },
-      data: { fcmToken: dto.token, fcmPlatform: dto.platform },
+      data: { fcmToken, fcmPlatform },
     });
-    return { message: 'Token registered successfully' };
+    return { message: fcmToken ? 'Token registered successfully' : 'Token cleared' };
   }
 
   @Get()

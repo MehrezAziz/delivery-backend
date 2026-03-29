@@ -8,6 +8,7 @@ import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { jwtVerify } from 'jose';
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -31,24 +32,46 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         client.handshake.headers?.authorization?.replace('Bearer ', '');
 
       if (!token) {
+        this.logger.warn('No token provided');
         client.disconnect();
         return;
       }
 
-      const payload = this.jwtService.verify(token, {
-        secret: this.configService.get<string>('JWT_SECRET'),
-      });
+      let payload: any;
+      try {
+        // Try @nestjs/jwt first (for mobile app tokens)
+        payload = this.jwtService.verify(token, {
+          secret: this.configService.get<string>('JWT_SECRET'),
+        });
+      } catch (jwtError) {
+        // Try jose verification (for control panel tokens signed with jose)
+        try {
+          const secret = new TextEncoder().encode(this.configService.get<string>('JWT_SECRET'));
+          const { payload: josePayload } = await jwtVerify(token, secret);
+          payload = josePayload;
+        } catch (joseError) {
+          this.logger.warn(`JWT verification failed for both methods`);
+          client.disconnect();
+          return;
+        }
+      }
 
-      // Store user info on socket
-      client.data.userId = payload.superUserId || payload.sub;
+      // Store user info on socket — control panel tokens have superUserId, mobile tokens have sub
+      client.data.userId = payload.superUserId || payload.sub || payload.id;
       client.data.userType = payload.superUserId ? 'SUPER_USER' : 'USER';
+
+      if (!client.data.userId) {
+        this.logger.warn('No userId found in token payload');
+        client.disconnect();
+        return;
+      }
 
       // Join a room based on user ID for targeted notifications
       client.join(`user:${client.data.userId}`);
 
       this.logger.log(`Client connected: ${client.data.userId} (${client.data.userType})`);
     } catch (error) {
-      this.logger.warn(`Unauthorized WebSocket connection attempt`);
+      this.logger.warn(`Unauthorized WebSocket connection attempt: ${error.message}`);
       client.disconnect();
     }
   }

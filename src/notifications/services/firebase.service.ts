@@ -53,22 +53,28 @@ export class FirebaseService implements OnModuleInit {
     }
 
     try {
+      const dataPayload: Record<string, string> = {
+        ...payload.data,
+        ...(payload.groupKey ? { groupKey: payload.groupKey } : {}),
+        ...(payload.actionButtons ? { actionButtons: JSON.stringify(payload.actionButtons) } : {}),
+        ongoing: payload.ongoing ? 'true' : 'false',
+      };
+
       const message: admin.messaging.Message = {
         token: payload.token,
+        // Include notification so Android shows it natively even when app is closed
         notification: {
           title: payload.title,
           body: payload.body,
         },
-        data: {
-          ...payload.data,
-          ...(payload.groupKey ? { groupKey: payload.groupKey } : {}),
-          ...(payload.actionButtons ? { actionButtons: JSON.stringify(payload.actionButtons) } : {}),
-        },
+        data: dataPayload,
         android: {
           priority: 'high',
           notification: {
             channelId: payload.ongoing ? 'order-updates' : 'default',
+            // tag ensures same groupKey replaces the previous notification
             ...(payload.groupKey ? { tag: payload.groupKey } : {}),
+            sticky: payload.ongoing || false,
           },
         },
         apns: {
@@ -85,7 +91,6 @@ export class FirebaseService implements OnModuleInit {
       return { success: true };
     } catch (error: any) {
       const errorCode = error?.code || error?.errorInfo?.code || '';
-      // Clear invalid tokens
       if (
         errorCode === 'messaging/invalid-registration-token' ||
         errorCode === 'messaging/registration-token-not-registered'

@@ -15,6 +15,12 @@ export class SupportNotificationListener {
       NotificationType.NEW_SUPPORT_TICKET,
       { relatedEntityType: 'SupportTicket', relatedEntityId: payload.ticketId },
     );
+
+    // Also notify all admins
+    await this.notificationsService.sendToAllAdmins(
+      NotificationType.NEW_SUPPORT_TICKET,
+      { relatedEntityType: 'SupportTicket', relatedEntityId: payload.ticketId },
+    );
   }
 
   @OnEvent('support.ticket_assigned')

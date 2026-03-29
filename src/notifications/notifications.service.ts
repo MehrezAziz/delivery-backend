@@ -24,6 +24,10 @@ export interface SendNotificationDto {
   groupKey?: string;
   expiresAt?: Date;
   templateData?: Record<string, string | number | undefined>;
+  // If true, update existing notification with same groupKey instead of creating new one
+  updateExisting?: boolean;
+  // If true, the push notification is ongoing/sticky (non-dismissible on Android)
+  ongoing?: boolean;
 }
 
 @Injectable()
@@ -50,13 +54,38 @@ export class NotificationsService {
         body = body || template.body;
       }
 
-      // Create notification record in DB (IN_APP)
-      // Use raw SQL to avoid dual FK constraint issue (both user and superUser relations share userId column)
-      const notificationId = require('crypto').randomUUID();
-      await this.prisma.$executeRaw`
-        INSERT INTO notifications (id, user_id, user_type, title, body, type, priority, channels, related_entity_type, related_entity_id, action_buttons, expires_at, group_key, sent_at, delivery_status)
-        VALUES (${notificationId}, ${dto.userId}, ${dto.userType}, ${title}, ${body}, ${dto.type}::"NotificationType", ${priority}::"NotificationPriority", ${channels}::"NotificationChannel"[], ${dto.relatedEntityType || null}, ${dto.relatedEntityId || null}, ${dto.actionButtons ? JSON.stringify(dto.actionButtons) : null}::jsonb, ${dto.expiresAt || null}::timestamp, ${dto.groupKey || null}, NOW(), 'SENT'::"NotificationDeliveryStatus")
-      `;
+      // Create or update notification record in DB (IN_APP)
+      let notificationId: string;
+
+      // If groupKey is provided, always try to update existing notification first
+      // This ensures only ONE notification per order/group in the DB
+      if (dto.groupKey) {
+        const existing = await this.prisma.notification.findFirst({
+          where: { userId: dto.userId, groupKey: dto.groupKey },
+          orderBy: { sentAt: 'desc' },
+        });
+
+        if (existing) {
+          await this.prisma.notification.update({
+            where: { id: existing.id },
+            data: { title, body, type: dto.type, priority, readAt: null, sentAt: new Date() },
+          });
+          notificationId = existing.id;
+        } else {
+          notificationId = require('crypto').randomUUID();
+          await this.prisma.$executeRaw`
+            INSERT INTO notifications (id, user_id, user_type, title, body, type, priority, channels, related_entity_type, related_entity_id, action_buttons, expires_at, group_key, sent_at, delivery_status)
+            VALUES (${notificationId}, ${dto.userId}, ${dto.userType}, ${title}, ${body}, ${dto.type}::"NotificationType", ${priority}::"NotificationPriority", ${channels}::"NotificationChannel"[], ${dto.relatedEntityType || null}, ${dto.relatedEntityId || null}, ${dto.actionButtons ? JSON.stringify(dto.actionButtons) : null}::jsonb, ${dto.expiresAt || null}::timestamp, ${dto.groupKey || null}, NOW(), 'SENT'::"NotificationDeliveryStatus")
+          `;
+        }
+      } else {
+        // No groupKey — always create new notification
+        notificationId = require('crypto').randomUUID();
+        await this.prisma.$executeRaw`
+          INSERT INTO notifications (id, user_id, user_type, title, body, type, priority, channels, related_entity_type, related_entity_id, action_buttons, expires_at, group_key, sent_at, delivery_status)
+          VALUES (${notificationId}, ${dto.userId}, ${dto.userType}, ${title}, ${body}, ${dto.type}::"NotificationType", ${priority}::"NotificationPriority", ${channels}::"NotificationChannel"[], ${dto.relatedEntityType || null}, ${dto.relatedEntityId || null}, ${dto.actionButtons ? JSON.stringify(dto.actionButtons) : null}::jsonb, ${dto.expiresAt || null}::timestamp, ${dto.groupKey || null}, NOW(), 'SENT'::"NotificationDeliveryStatus")
+        `;
+      }
 
       const notification = { id: notificationId, sentAt: new Date() };
 
@@ -113,7 +142,7 @@ export class NotificationsService {
         },
         actionButtons: dto.actionButtons,
         groupKey: dto.groupKey,
-        ongoing: !!dto.groupKey?.startsWith('order:'),
+        ongoing: dto.ongoing !== undefined ? dto.ongoing : !!dto.groupKey?.startsWith('order:'),
       });
 
       if (!result.success) {
