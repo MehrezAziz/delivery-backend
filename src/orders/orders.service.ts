@@ -456,6 +456,13 @@ export class OrdersService {
         },
       });
 
+      // Emit event for notification
+      this.eventEmitter.emit('order.disputed', {
+        orderId,
+        customerUserId: userId,
+        reason,
+      });
+
       return d;
     });
   }
@@ -683,6 +690,26 @@ export class OrdersService {
       data: { status: OrderStatus.DRIVER_ASSIGNED },
       include: this.orderInclude(),
     });
+
+    // Emit driver_assigned event for notifications (customer approved the driver)
+    const driver = order.driverAssignment;
+    if (driver) {
+      const driverData = await this.prisma.driver.findUnique({
+        where: { id: driver.driverId },
+        include: { user: { select: { id: true, firstName: true, secondName: true } } },
+      });
+      if (driverData) {
+        this.eventEmitter.emit('order.driver_assigned', {
+          orderId,
+          customerId: order.customerId,
+          customerUserId: userId,
+          driverId: driver.driverId,
+          driverUserId: driverData.user.id,
+          driverName: `${driverData.user.firstName || ''} ${driverData.user.secondName || ''}`.trim(),
+        });
+      }
+    }
+
     return this.mapToResponseDto(updated as any);
   }
 
@@ -712,6 +739,12 @@ export class OrdersService {
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.SEARCHING_DRIVER } });
       // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
+    });
+
+    // Emit event so notification goes back to "Searching"
+    this.eventEmitter.emit('order.driver_rejected', {
+      orderId,
+      customerUserId: userId,
     });
 
     return { message: 'Driver rejected. Searching for a new driver.' };

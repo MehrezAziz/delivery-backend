@@ -38,7 +38,7 @@ export class OrderNotificationListener {
     driverUserId: string;
     driverName: string;
   }) {
-    // Update the existing order notification for customer (persistent, non-dismissible)
+    // Update the existing order notification for customer — driver is now confirmed
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -46,9 +46,37 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
-      templateData: { driverName: payload.driverName },
+      templateData: { driverName: payload.driverName, orderStatus: 'DRIVER_ASSIGNED' },
       updateExisting: true,
       ongoing: true,
+    });
+  }
+
+  @OnEvent('order.pending_customer_approval')
+  async handlePendingCustomerApproval(payload: {
+    orderId: string;
+    customerId: string;
+    customerUserId: string;
+    driverId: string;
+    driverUserId: string;
+    driverName: string;
+  }) {
+    // Notify customer that a driver wants to take their order — needs approval
+    await this.notificationsService.send({
+      userId: payload.customerUserId,
+      userType: 'USER',
+      type: NotificationType.DRIVER_ASSIGNED, // Reuse type but with different template data
+      title: `🚗 Driver Found! — ${payload.driverName}`,
+      body: '◉———⛟———⌖———⌖———⌖———⌖———⌖',
+      relatedEntityType: 'Order',
+      relatedEntityId: payload.orderId,
+      groupKey: `order:${payload.orderId}`,
+      updateExisting: true,
+      ongoing: true,
+      actionButtons: [
+        { id: 'accept_driver', title: '✅ Accept Driver', action: 'accept_driver' },
+        { id: 'see_driver', title: '👤 See Driver', action: 'see_driver' },
+      ],
     });
   }
 
@@ -162,7 +190,6 @@ export class OrderNotificationListener {
 
   @OnEvent('order.no_driver_found')
   async handleNoDriverFound(payload: { orderId: string; customerUserId: string }) {
-    // Update existing notification — dismissible
     await this.notificationsService.send({
       userId: payload.customerUserId,
       userType: 'USER',
@@ -170,6 +197,39 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      updateExisting: true,
+      ongoing: false,
+    });
+  }
+
+  @OnEvent('order.driver_rejected')
+  async handleDriverRejected(payload: { orderId: string; customerUserId: string }) {
+    // Driver was rejected by customer — go back to searching
+    await this.notificationsService.send({
+      userId: payload.customerUserId,
+      userType: 'USER',
+      type: NotificationType.ORDER_CREATED, // Reuse "searching" template
+      relatedEntityType: 'Order',
+      relatedEntityId: payload.orderId,
+      groupKey: `order:${payload.orderId}`,
+      title: '🔍 Searching for another driver...',
+      body: '⛟————⌖————⌖————⌖————⌖————⌖————⌖',
+      updateExisting: true,
+      ongoing: true,
+    });
+  }
+
+  @OnEvent('order.disputed')
+  async handleOrderDisputed(payload: { orderId: string; customerUserId: string; reason: string }) {
+    await this.notificationsService.send({
+      userId: payload.customerUserId,
+      userType: 'USER',
+      type: NotificationType.DISPUTE_OPENED,
+      relatedEntityType: 'Order',
+      relatedEntityId: payload.orderId,
+      groupKey: `order:${payload.orderId}`,
+      title: '⚠️ Order Disputed',
+      body: `Dispute opened: ${payload.reason}`,
       updateExisting: true,
       ongoing: false,
     });

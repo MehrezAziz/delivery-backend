@@ -7,40 +7,53 @@ export interface NotificationTemplate {
 
 type TemplateData = Record<string, string | number | undefined>;
 
+// Track line builder: ◉ = completed, ⛟ = current position, ⌖ = pending
+function track(step: number): string {
+  const total = 7;
+  const parts: string[] = [];
+  for (let i = 0; i < total; i++) {
+    if (i < step) parts.push('◉');
+    else if (i === step) parts.push('⛟');
+    else parts.push('⌖');
+    if (i < total - 1) parts.push('———');
+  }
+  return parts.join('');
+}
+
 // Template functions for each notification type
 const templates: Record<NotificationType, (data?: TemplateData) => NotificationTemplate> = {
   // Customer - Order Lifecycle
   ORDER_CREATED: (d) => ({
-    title: 'Order Confirmed',
-    body: `Your order has been created. Looking for a driver...`,
+    title: '📦 Order Confirmed — Searching for a driver...',
+    body: track(0),
   }),
   DRIVER_ASSIGNED: (d) => ({
-    title: 'Driver Found!',
-    body: `${d?.driverName || 'A driver'} is on the way to pick up your package.`,
+    title: `✅ Driver Assigned — ${d?.driverName || 'Your driver'} is on the way!`,
+    body: track(2),
   }),
   DRIVER_ARRIVED: (d) => ({
-    title: 'Driver Arrived',
-    body: `Your driver has arrived at the pickup location.`,
+    title: '📍 Driver Arrived — At the pickup location',
+    body: track(3),
   }),
   PACKAGE_PICKED_UP: (d) => ({
-    title: 'Package Picked Up',
-    body: `Your package has been picked up and is on its way.`,
+    title: '📦 Package Picked Up — On its way!',
+    body: track(4),
   }),
   DELIVERY_IN_PROGRESS: (d) => ({
-    title: 'Delivery In Progress',
-    body: `Your package is being delivered.`,
+    title: '🚚 Delivery In Progress',
+    body: track(5),
   }),
   ORDER_DELIVERED: (d) => ({
-    title: 'Order Delivered!',
-    body: `Your package has been delivered successfully.`,
+    title: '✅ Order Delivered!',
+    body: track(6),
   }),
   ORDER_CANCELLED: (d) => ({
-    title: 'Order Cancelled',
-    body: d?.reason ? `Your order was cancelled: ${d.reason}` : 'Your order has been cancelled.',
+    title: '⊘ Order Cancelled',
+    body: d?.reason ? `${d.reason}` : 'Your order has been cancelled.',
   }),
   NO_DRIVER_FOUND: (d) => ({
-    title: 'No Driver Found',
-    body: `No driver was available for your order. Please try again.`,
+    title: '⊘ No Driver Found',
+    body: 'No driver was available. Please try again.',
   }),
 
   // Customer - Payment & Wallet

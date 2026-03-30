@@ -189,8 +189,8 @@ export class DriverAssignmentService {
       return assignment;
     });
 
-    // Emit driver_assigned event for notifications
-    this.eventEmitter.emit('order.driver_assigned', {
+    // Emit pending_customer_approval event for notifications (customer needs to approve)
+    this.eventEmitter.emit('order.pending_customer_approval', {
       orderId,
       customerId: order.customerId,
       customerUserId: order.customer.userId,

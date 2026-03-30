@@ -121,6 +121,7 @@ export class FirebaseService implements OnModuleInit {
       }
 
       await admin.messaging().send(message);
+      this.logger.log(`FCM push sent successfully to token ${payload.token.substring(0, 20)}... (order: ${isOrderNotification}, groupKey: ${payload.groupKey})`);
       return { success: true };
     } catch (error: any) {
       const errorCode = error?.code || error?.errorInfo?.code || '';

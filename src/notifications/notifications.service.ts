@@ -128,7 +128,12 @@ export class NotificationsService {
         select: { fcmToken: true },
       });
 
-      if (!user?.fcmToken) return;
+      if (!user?.fcmToken) {
+        this.logger.warn(`No FCM token for user ${userId}, skipping push`);
+        return;
+      }
+
+      this.logger.log(`Sending push to user ${userId}, type: ${dto.type}, groupKey: ${dto.groupKey}`);
 
       const result = await this.firebaseService.sendPush({
         token: user.fcmToken,
@@ -141,6 +146,8 @@ export class NotificationsService {
           ...(dto.relatedEntityId ? { relatedEntityId: dto.relatedEntityId } : {}),
           // Pass orderId separately for Notifee notification ID
           ...(dto.groupKey?.startsWith('order:') ? { orderId: dto.groupKey.replace('order:', '') } : {}),
+          // Progress step for the notification progress bar
+          progressStep: String(this.getProgressStep(dto.type)),
         },
         actionButtons: dto.actionButtons,
         groupKey: dto.groupKey,
@@ -167,6 +174,19 @@ export class NotificationsService {
     } catch (error) {
       this.logger.error(`Push notification failed for user ${userId}`, error.stack);
     }
+  }
+
+  private getProgressStep(type: NotificationType): number {
+    const stepMap: Partial<Record<NotificationType, number>> = {
+      ORDER_CREATED: 0,       // Searching
+      // Step 1 = Driver Found (pending approval) — handled with custom title/body
+      DRIVER_ASSIGNED: 2,     // Driver Assigned (approved)
+      DRIVER_ARRIVED: 3,      // Driver Arrived
+      PACKAGE_PICKED_UP: 4,   // Picked Up
+      DELIVERY_IN_PROGRESS: 5, // Delivering
+      ORDER_DELIVERED: 6,     // Delivered
+    };
+    return stepMap[type] ?? -1;
   }
 
   async markAsRead(notificationId: string, userId: string) {
