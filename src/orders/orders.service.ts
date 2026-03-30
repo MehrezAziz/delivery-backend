@@ -456,12 +456,15 @@ export class OrdersService {
         },
       });
 
-      // Emit event for notification
+      // Emit events for notifications
       this.eventEmitter.emit('order.disputed', {
         orderId,
         customerUserId: userId,
         reason,
       });
+
+      // Notify CS agents and admins about the new dispute + support ticket
+      this.eventEmitter.emit('support.new_ticket', { ticketId: ticket.id, userId });
 
       return d;
     });
@@ -508,11 +511,16 @@ export class OrdersService {
       if (existingTicket) return existingTicket;
 
       const desc = `Assistance requested for Order #${orderId}`;
-      return this.prisma.$transaction(async (tx) => {
+      const ticket = await this.prisma.$transaction(async (tx) => {
         const t = await tx.supportTicket.create({ data: { userId, category: 'ORDER_ISSUE', priority: 'MEDIUM', description: message ? `${desc}\n\n${message}` : desc } });
         await tx.supportMessage.create({ data: { ticketId: t.id, senderId: userId, senderType: 'USER', content: `🔗 Order ID: ${orderId}\n\n${message || 'I need assistance with this order.'}` } });
         return t;
       });
+
+      // Emit event so CS agents and admins get notified
+      this.eventEmitter.emit('support.new_ticket', { ticketId: ticket.id, userId });
+
+      return ticket;
     }
 
 

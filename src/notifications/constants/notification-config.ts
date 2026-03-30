@@ -68,8 +68,8 @@ export const DEFAULT_PRIORITY: Record<NotificationType, NotificationPriority> = 
   [NotificationType.DRIVER_DEBT_THRESHOLD]: NotificationPriority.HIGH,
   // Admin - Order Management
   [NotificationType.ORDER_STUCK_NO_DRIVER]: NotificationPriority.HIGH,
-  [NotificationType.HIGH_VALUE_ORDER]: NotificationPriority.MEDIUM,
-  [NotificationType.ORDER_CANCELLED_AFTER_ASSIGNMENT]: NotificationPriority.MEDIUM,
+  [NotificationType.HIGH_VALUE_ORDER]: NotificationPriority.HIGH,
+  [NotificationType.ORDER_CANCELLED_AFTER_ASSIGNMENT]: NotificationPriority.HIGH,
   // Admin - Disputes
   [NotificationType.NEW_DISPUTE_CREATED]: NotificationPriority.CRITICAL,
   [NotificationType.DISPUTE_ESCALATED]: NotificationPriority.HIGH,
@@ -84,10 +84,10 @@ export const DEFAULT_PRIORITY: Record<NotificationType, NotificationPriority> = 
   [NotificationType.SUSPICIOUS_ACTIVITY]: NotificationPriority.HIGH,
   [NotificationType.BULK_REGISTRATION_DETECTED]: NotificationPriority.HIGH,
   // CS - Support
-  [NotificationType.NEW_SUPPORT_TICKET]: NotificationPriority.MEDIUM,
+  [NotificationType.NEW_SUPPORT_TICKET]: NotificationPriority.HIGH,
   [NotificationType.TICKET_ASSIGNED]: NotificationPriority.HIGH,
-  [NotificationType.CUSTOMER_REPLIED_TICKET]: NotificationPriority.MEDIUM,
-  [NotificationType.URGENT_TICKET_UNRESOLVED]: NotificationPriority.HIGH,
+  [NotificationType.CUSTOMER_REPLIED_TICKET]: NotificationPriority.HIGH,
+  [NotificationType.URGENT_TICKET_UNRESOLVED]: NotificationPriority.CRITICAL,
   // CS - Disputes
   [NotificationType.DISPUTE_ASSIGNED]: NotificationPriority.HIGH,
   [NotificationType.DISPUTE_REQUIRES_DECISION]: NotificationPriority.HIGH,
