@@ -28,6 +28,8 @@ export interface SendNotificationDto {
   updateExisting?: boolean;
   // If true, the push notification is ongoing/sticky (non-dismissible on Android)
   ongoing?: boolean;
+  // Explicit order status to pass to the frontend dedup map (overrides type-based mapping)
+  orderStatus?: string;
 }
 
 @Injectable()
@@ -135,6 +137,19 @@ export class NotificationsService {
 
       this.logger.log(`Sending push to user ${userId}, type: ${dto.type}, groupKey: ${dto.groupKey}`);
 
+      // Map notification type to order status so the frontend can update its dedup map
+      const ORDER_STATUS_BY_TYPE: Partial<Record<string, string>> = {
+        ORDER_CREATED: 'SEARCHING_DRIVER',
+        DRIVER_ASSIGNED: 'DRIVER_ASSIGNED',
+        DRIVER_ARRIVED: 'DRIVER_ARRIVED',
+        PACKAGE_PICKED_UP: 'PICKED_UP',
+        DELIVERY_IN_PROGRESS: 'DELIVERING',
+        ORDER_DELIVERED: 'DELIVERED',
+        ORDER_CANCELLED: 'CANCELLED',
+        NO_DRIVER_FOUND: 'NO_DRIVER_FOUND',
+      };
+      const orderStatus = dto.orderStatus || ORDER_STATUS_BY_TYPE[dto.type];
+
       const result = await this.firebaseService.sendPush({
         token: user.fcmToken,
         title,
@@ -146,6 +161,8 @@ export class NotificationsService {
           ...(dto.relatedEntityId ? { relatedEntityId: dto.relatedEntityId } : {}),
           // Pass orderId separately for Notifee notification ID
           ...(dto.groupKey?.startsWith('order:') ? { orderId: dto.groupKey.replace('order:', '') } : {}),
+          // Pass orderStatus so the frontend dedup map stays in sync
+          ...(orderStatus ? { orderStatus } : {}),
           // Progress step for the notification progress bar
           progressStep: String(this.getProgressStep(dto.type)),
         },

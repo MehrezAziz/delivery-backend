@@ -71,6 +71,7 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      orderStatus: 'PENDING_CUSTOMER_APPROVAL',
       updateExisting: true,
       ongoing: true,
       actionButtons: [
