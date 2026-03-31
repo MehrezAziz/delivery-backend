@@ -72,11 +72,11 @@ export class FirebaseService implements OnModuleInit {
       let message: admin.messaging.Message;
 
       if (isOrderNotification) {
-        // Order notifications: DATA-ONLY message
-        // The foreground service on the client handles display
+        // Order notifications must be DATA-ONLY so the app controls a single
+        // persistent notification per order (instead of Android creating native ones).
         message = {
           token: payload.token,
-          // No notification field — data only so the foreground service handles it
+          // No `notification` field for order updates
           data: dataPayload,
           android: {
             priority: 'high',
