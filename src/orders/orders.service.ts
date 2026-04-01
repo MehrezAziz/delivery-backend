@@ -607,7 +607,12 @@ export class OrdersService {
       where: { driverId: order.driverAssignment.driverId },
       select: { score: true },
     });
-    const avg = allRatings.reduce((sum, r) => sum + r.score, 0) / allRatings.length;
+    const rawAvg =
+      allRatings.length === 0
+        ? 0
+        : allRatings.reduce((sum, r) => sum + r.score, 0) / allRatings.length;
+    // Scores are 0–10; round to 2 decimals for DECIMAL(4,2)
+    const avg = Math.round(Math.min(10, Math.max(0, rawAvg)) * 100) / 100;
     await this.prisma.driverPerformanceMetrics.updateMany({
       where: { driverId: order.driverAssignment.driverId },
       data: { avgRating: avg, lastCalculatedAt: new Date() },

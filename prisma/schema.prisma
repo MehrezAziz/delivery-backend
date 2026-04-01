@@ -627,7 +627,7 @@ model DriverPerformanceMetrics {
   totalOrders            Int      @default(0) @map("total_orders")
   completedOrders        Int      @default(0) @map("completed_orders")
   cancelledOrders        Int      @default(0) @map("cancelled_orders")
-  avgRating              Decimal? @db.Decimal(3, 2) @map("avg_rating")
+  avgRating              Decimal? @db.Decimal(4, 2) @map("avg_rating") // 0–10 scale; (3,2) max was 9.99 and overflowed at 10.0
   avgDeliveryTimeMinutes Int?     @map("avg_delivery_time_minutes")
   completionRate         Decimal? @db.Decimal(5, 2) @map("completion_rate") // percentage
   onTimeRate             Decimal? @db.Decimal(5, 2) @map("on_time_rate") // percentage
