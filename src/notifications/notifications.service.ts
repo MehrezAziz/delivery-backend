@@ -30,6 +30,8 @@ export interface SendNotificationDto {
   ongoing?: boolean;
   // Explicit order status to pass to the frontend dedup map (overrides type-based mapping)
   orderStatus?: string;
+  /** Mobile app: show driver persistent order tracking UI vs customer */
+  trackingAudience?: 'CUSTOMER' | 'DRIVER';
 }
 
 @Injectable()
@@ -163,6 +165,7 @@ export class NotificationsService {
           ...(dto.groupKey?.startsWith('order:') ? { orderId: dto.groupKey.replace('order:', '') } : {}),
           // Pass orderStatus so the frontend dedup map stays in sync
           ...(orderStatus ? { orderStatus } : {}),
+          ...(dto.trackingAudience ? { trackingAudience: dto.trackingAudience } : {}),
           // Progress step for the notification progress bar
           progressStep: String(this.getProgressStep(dto.type)),
         },

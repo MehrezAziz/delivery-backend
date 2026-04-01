@@ -339,7 +339,10 @@ export class OrdersService {
   }
 
   async updateOrderStatus(orderId: string, driverId: string, newStatus: OrderStatus): Promise<OrderResponseDto> {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { driverAssignment: true } });
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { driverAssignment: { include: { driver: { select: { userId: true } } } } },
+    });
     if (!order) throw new NotFoundException('Order not found');
     if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
     const valid: Record<string, OrderStatus[]> = {
@@ -366,8 +369,9 @@ export class OrdersService {
       DELIVERING: 'order.delivering',
     };
     const eventName = statusEventMap[newStatus];
+    const driverUserId = order.driverAssignment?.driver?.userId;
     if (eventName && customerUserId) {
-      this.eventEmitter.emit(eventName, { orderId, customerUserId });
+      this.eventEmitter.emit(eventName, { orderId, customerUserId, driverUserId });
     }
 
     return this.mapToResponseDto(updated as any);
@@ -730,7 +734,7 @@ export class OrdersService {
   async rejectDriver(orderId: string, userId: string, reason?: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: true, driverAssignment: { include: { driver: true } } },
+      include: { customer: true, driverAssignment: { include: { driver: { select: { id: true, userId: true } } } } },
     });
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
@@ -740,6 +744,7 @@ export class OrdersService {
     if (!order.driverAssignment) throw new BadRequestException('No driver assigned');
 
     const driverId = order.driverAssignment.driverId;
+    const rejectedDriverUserId = order.driverAssignment.driver.userId;
 
     await this.prisma.$transaction(async (tx) => {
       // Record the rejection so this driver can't accept again
@@ -758,6 +763,10 @@ export class OrdersService {
     this.eventEmitter.emit('order.driver_rejected', {
       orderId,
       customerUserId: userId,
+    });
+    this.eventEmitter.emit('order.driver_rejected_notify_driver', {
+      orderId,
+      driverUserId: rejectedDriverUserId,
     });
 
     return { message: 'Driver rejected. Searching for a new driver.' };
