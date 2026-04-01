@@ -748,6 +748,8 @@ model Order {
   cancelAfterMinutes Int        @default(15) @map("cancel_after_minutes")
   isNightDelivery   Boolean     @default(false) @map("is_night_delivery")
   guestCheckout     Boolean     @default(false) @map("guest_checkout")
+  trackingToken     String?     @unique @map("tracking_token")
+  trackingExpiresAt DateTime?   @map("tracking_expires_at")
   createdAt         DateTime    @default(now()) @map("created_at")
 
   // Relations

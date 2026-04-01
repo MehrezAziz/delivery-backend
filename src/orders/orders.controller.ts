@@ -112,6 +112,25 @@ export class OrdersController {
   async getDriverReviews(@Param('id') orderId: string, @CurrentUser() user: AuthenticatedUser) {
     return this.ordersService.getDriverReviewsForOrder(orderId, user.id);
   }
+
+  @Get(':id/tracking-token')
+  @UseGuards(CustomerGuard)
+  async getTrackingToken(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
+    return this.ordersService.getTrackingInfo(orderId, user.id);
+  }
+}
+
+// ============================================
+// PUBLIC TRACKING ENDPOINT (no auth)
+// ============================================
+@Controller('tracking')
+export class PublicTrackingController {
+  constructor(private readonly ordersService: OrdersService) {}
+
+  @Get(':token')
+  async getPublicTracking(@Param('token') token: string) {
+    return this.ordersService.getPublicTracking(token);
+  }
 }
 
 // ============================================

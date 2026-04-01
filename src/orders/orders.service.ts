@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from './services/price-calculation.service';
 import { CreateOrderDto, PreviewOrderDto, ChangePaymentMethodDto, OrderResponseDto } from './dto/order.dto';
 import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus } from '@prisma/client';
+import { randomBytes } from 'crypto';
 
 @Injectable()
 export class OrdersService {
@@ -19,6 +20,21 @@ export class OrdersService {
     EG: 'Africa/Cairo', SA: 'Asia/Riyadh', AE: 'Asia/Dubai', FR: 'Europe/Paris',
     US: 'America/New_York', GB: 'Europe/London', DE: 'Europe/Berlin', TR: 'Europe/Istanbul',
   };
+
+  /** Generate a short random tracking token e.g. TRK-A3F9X2 */
+  private generateTrackingToken(): string {
+    return 'TRK-' + randomBytes(4).toString('hex').toUpperCase();
+  }
+
+  /** Read tracking_expiry_minutes from SystemConfig, fallback to 5 */
+  private async getTrackingExpiryMinutes(): Promise<number> {
+    const config = await this.prisma.systemConfig.findUnique({ where: { key: 'tracking_expiry_minutes' } });
+    if (config) {
+      const val = parseInt(config.value, 10);
+      if (!isNaN(val) && val > 0) return val;
+    }
+    return 5;
+  }
 
   /**
    * Determine if it's night time (20:00-06:00) in the given country
@@ -225,9 +241,11 @@ export class OrdersService {
       throw new BadRequestException('Order must be in DELIVERING status');
     }
 
+    const expiryMinutes = await this.getTrackingExpiryMinutes();
+    const trackingExpiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+
     const result = await this.prisma.$transaction(async (tx) => {
-      const updatedOrder = await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.DELIVERED }, include: this.orderInclude() });
-      await tx.driverAssignment.update({ where: { orderId }, data: { deliveredAt: new Date() } });
+      const updatedOrder = await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.DELIVERED, trackingExpiresAt }, include: this.orderInclude() });      await tx.driverAssignment.update({ where: { orderId }, data: { deliveredAt: new Date() } });
       await tx.customer.update({ where: { id: order.customerId }, data: { completedOrders: { increment: 1 } } });
 
       if (order.paymentType === PaymentType.COD) {
@@ -359,8 +377,13 @@ export class OrdersService {
     }
     if (newStatus === OrderStatus.DRIVER_ARRIVED) await this.prisma.driverAssignment.update({ where: { orderId }, data: { arrivedAt: new Date() } });
     else if (newStatus === OrderStatus.PICKED_UP) await this.prisma.driverAssignment.update({ where: { orderId }, data: { pickedUpAt: new Date() } });
-    const updated = await this.prisma.order.update({ where: { id: orderId }, data: { status: newStatus }, include: this.orderInclude() });
 
+    // Generate tracking token when order is picked up
+    const orderUpdateData: any = { status: newStatus };
+    if (newStatus === OrderStatus.PICKED_UP) {
+      orderUpdateData.trackingToken = this.generateTrackingToken();
+    }
+    const updated = await this.prisma.order.update({ where: { id: orderId }, data: orderUpdateData, include: this.orderInclude() });
     // Emit status change events for notifications
     const customerUserId = (updated as any).customer?.userId;
     const statusEventMap: Record<string, string> = {
@@ -416,6 +439,57 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Order not found');
     if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
     return this.prisma.driverLocation.create({ data: { driverId, orderId, latitude: lat, longitude: lng, accuracy } });
+  }
+
+  /** Customer gets their order's tracking token (only during PICKED_UP/DELIVERING) */
+  async getTrackingInfo(orderId: string, userId: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { customer: true } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    const trackable: OrderStatus[] = [OrderStatus.PICKED_UP, OrderStatus.DELIVERING];
+    if (!trackable.includes(order.status)) throw new BadRequestException('Tracking is only available when order is picked up or delivering');
+    if (!order.trackingToken) throw new BadRequestException('Tracking token not yet generated');
+    return { trackingToken: order.trackingToken };
+  }
+
+  /** Public endpoint — anyone with the token can see driver location */
+  async getPublicTracking(token: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { trackingToken: token },
+      include: {
+        dropoffAddress: { include: { delegation: { include: { governorate: true } } } },
+      },
+    });
+    if (!order) throw new NotFoundException('Invalid tracking token');
+
+    const trackable: OrderStatus[] = [OrderStatus.PICKED_UP, OrderStatus.DELIVERING];
+    const isExpired = order.trackingExpiresAt && order.trackingExpiresAt < new Date();
+
+    if (!trackable.includes(order.status) && !isExpired) {
+      throw new BadRequestException('Tracking is not active for this order');
+    }
+    if (isExpired && !trackable.includes(order.status)) {
+      throw new BadRequestException('Tracking link has expired');
+    }
+
+    const driverLocation = await this.prisma.driverLocation.findFirst({
+      where: { orderId: order.id },
+      orderBy: { timestamp: 'desc' },
+    });
+
+    return {
+      status: order.status,
+      driverLocation: driverLocation ? {
+        latitude: driverLocation.latitude,
+        longitude: driverLocation.longitude,
+        timestamp: driverLocation.timestamp,
+      } : null,
+      dropoffAddress: order.dropoffAddress ? {
+        street: order.dropoffAddress.street,
+        delegation: order.dropoffAddress.delegation?.nameDelegation,
+        governorate: order.dropoffAddress.delegation?.governorate?.nameGovernorate,
+      } : null,
+    };
   }
 
   async createDispute(orderId: string, userId: string, reason: string) {
