@@ -1,4 +1,4 @@
-import { IsEnum } from 'class-validator';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { DocumentType } from '@prisma/client';
 
 export class RegisterDriverStep3Dto {
@@ -6,4 +6,8 @@ export class RegisterDriverStep3Dto {
     message: 'Document type must be PASSPORT, ID_CARD, or STUDENT_CARD',
   })
   documentType: DocumentType;
+
+  @IsOptional()
+  @IsString()
+  livenessSession?: string;
 }

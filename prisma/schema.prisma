@@ -566,6 +566,7 @@ model Document {
   cardPlace          String?            @map("card_place")
   placeOfBirth       String?            @map("place_of_birth")
   dateOfIssue        DateTime?          @map("date_of_issue") @db.Date()
+  mlAnalysis         Json?              @map("ml_analysis")
 
   // Relations
   verification DriverVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)

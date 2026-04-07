@@ -17,9 +17,20 @@ import { AdminApprovalService } from './services/admin-approval.service';
 import { AvailabilityService } from './services/availability.service';
 import type { WeeklyAvailabilityDto } from './services/availability.service';
 import type { UploadDocumentsDto, RejectDriverDto, SuspendDriverDto } from './dto/driver-verification.dto';
+import {
+  CreateLivenessChallengeDto,
+  VerifyDocumentSubmissionDto,
+} from './dto/verification-analysis.dto';
 import { CurrentUser, UserId } from '../auth/decorators/auth.decorators';
-import { JwtUserGuard, JwtSuperUserGuard, DriverGuard, AdminGuard } from '../auth/guards/auth.guards';
-import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
+import {
+  JwtUserGuard,
+  JwtSuperUserGuard,
+  DriverGuard,
+  AdminGuard,
+  StaffGuard,
+} from '../auth/guards/auth.guards';
+import type { AuthenticatedUser, AuthenticatedSuperUser } from '../auth/dto/jwt-payload.interface';
+import { IdentityVerificationService } from './services/identity-verification.service';
 
 @Controller('drivers')
 @UseGuards(JwtUserGuard, DriverGuard)
@@ -28,6 +39,7 @@ export class DriversController {
     private readonly driversService: DriversService,
     private readonly verificationService: VerificationService,
     private readonly availabilityService: AvailabilityService,
+    private readonly identityVerificationService: IdentityVerificationService,
   ) {}
 
   /**
@@ -95,6 +107,38 @@ export class DriversController {
   }
 
   /**
+   * POST /drivers/verification/:documentId/liveness/challenge
+   * Creates a short-lived liveness challenge sequence for realtime selfie checks.
+   */
+  @Post('verification/:documentId/liveness/challenge')
+  async createLivenessChallenge(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('documentId') documentId: string,
+    @Body() dto: CreateLivenessChallengeDto,
+  ) {
+    return this.identityVerificationService.createLivenessChallenge(user.id, documentId, dto);
+  }
+
+  /**
+   * POST /drivers/verification/:documentId/analyze
+   * Stores OCR/face/liveness outputs and applies rule-based verification decision.
+   */
+  @Post('verification/:documentId/analyze')
+  async analyzeVerification(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('documentId') documentId: string,
+    @Query('challengeId') challengeId: string,
+    @Body() dto: VerifyDocumentSubmissionDto,
+  ) {
+    return this.identityVerificationService.verifySubmission(
+      user.id,
+      documentId,
+      challengeId,
+      dto,
+    );
+  }
+
+  /**
    * GET /drivers/availability
    * Get driver's weekly availability schedule
    */
@@ -154,5 +198,23 @@ export class AdminDriverController {
     @Body() dto: SuspendDriverDto,
   ) {
     return this.adminApprovalService.suspendDriver(driverId, dto.reason);
+  }
+}
+
+@Controller('staff/drivers')
+@UseGuards(JwtSuperUserGuard, StaffGuard)
+export class StaffDriverController {
+  constructor(private readonly adminApprovalService: AdminApprovalService) {}
+
+  /**
+   * GET /staff/drivers/:id/verification-history
+   * Admin can always access. Customer service requires VERIFY_ACCOUNTS permission.
+   */
+  @Get(':id/verification-history')
+  async getDriverVerificationHistory(
+    @CurrentUser() staff: AuthenticatedSuperUser,
+    @Param('id') driverId: string,
+  ) {
+    return this.adminApprovalService.getDriverVerificationHistoryForStaff(staff, driverId);
   }
 }

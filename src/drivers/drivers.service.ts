@@ -10,6 +10,10 @@ import { DriverProfileDto } from './dto/driver-profile.dto';
 import { DriverStatus, UserRole } from '@prisma/client';
 import { JwtUserPayload } from '../auth/dto/jwt-payload.interface';
 import { DriverPendingPayload } from '../auth/dto/driver-pending-payload.interface';
+import { MlVerificationService } from './services/ml-verification.service';
+import { InjectRedis } from '@nestjs-modules/ioredis';
+import Redis from 'ioredis';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
 export class DriversService {
@@ -17,6 +21,9 @@ export class DriversService {
     private readonly prisma: PrismaService,
     private readonly documentsService: DocumentsService,
     private readonly jwtService: JwtService,
+    private readonly mlVerificationService: MlVerificationService,
+    private readonly eventEmitter: EventEmitter2,
+    @InjectRedis() private readonly redis: Redis,
   ) {}
 
   /**
@@ -46,7 +53,7 @@ export class DriversService {
     if (!delegation) throw new NotFoundException('Delegation not found');
 
     // Commit everything in one transaction
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Create User
       const user = await tx.user.create({
         data: {
@@ -113,11 +120,17 @@ export class DriversService {
           userId: driver.userId,
           vehicleType: driver.vehicleType!,
           description: driver.description ?? undefined,
-          status: 'INCOMPLETE',
+          status: 'INCOMPLETE' as const,
         },
-        nextStep: 'step3',
+        nextStep: 'step3' as const,
       };
     });
+    const driverName = `${pending.firstName ?? ''} ${pending.secondName ?? ''}`.trim() || 'Unknown';
+    this.eventEmitter.emit('driver.registered', {
+      driverUserId: result.driver.userId,
+      driverName,
+    });
+    return result;
   }
 
   /**
@@ -128,11 +141,19 @@ export class DriversService {
     dto: RegisterDriverStep3Dto,
     files: DocumentFiles,
   ): Promise<RegisterDriverStep3ResponseDto> {
-    const { documentType } = dto;
+    const { documentType, livenessSession } = dto;
 
     // Find driver by userId
     const driver = await this.prisma.driver.findUnique({
       where: { userId },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            secondName: true,
+          },
+        },
+      },
     });
 
     if (!driver) {
@@ -148,7 +169,17 @@ export class DriversService {
     const documentUrls = await this.documentsService.uploadDocumentImages(files, userId);
 
     // Create verification and document in transaction
-    return await this.prisma.$transaction(async (tx) => {
+    let createdDocumentId = '';
+    let livenessPayload: Record<string, unknown> | null = null;
+    if (livenessSession) {
+      try {
+        livenessPayload = JSON.parse(livenessSession) as Record<string, unknown>;
+      } catch {
+        throw new BadRequestException('Invalid livenessSession JSON payload');
+      }
+      await this.validateAndConsumeLivenessSession(driver.id, livenessPayload);
+    }
+    const step3 = await this.prisma.$transaction(async (tx) => {
       // Create DriverVerification
       const driverVerification = await tx.driverVerification.create({
         data: {
@@ -166,8 +197,16 @@ export class DriversService {
           docImageTop: documentUrls.docImageTop,
           docImageBottom: documentUrls.docImageBottom,
           verificationStatus: 'SUBMITTED',
+          mlAnalysis: {
+            stage: 'REGISTRATION_SUBMISSION',
+            livenessSession: livenessPayload,
+            recommendation: 'PENDING_STAFF_REVIEW',
+            note: 'Automated verification evidence submitted during registration step 3.',
+            submittedAt: new Date().toISOString(),
+          } as any,
         },
       });
+      createdDocumentId = document.id;
 
       // Update Driver status to PENDING_REVIEW
       const updatedDriver = await tx.driver.update({
@@ -194,12 +233,22 @@ export class DriversService {
         },
         driver: {
           id: updatedDriver.id,
-          status: 'PENDING_REVIEW',
+          status: DriverStatus.PENDING_REVIEW,
         },
         message:
           'Your documents have been submitted for review. You will be notified once verified.',
       };
     });
+
+    if (createdDocumentId) {
+      this.mlVerificationService.scheduleAnalysis(createdDocumentId);
+    }
+    const driverName = `${driver.user.firstName ?? ''} ${driver.user.secondName ?? ''}`.trim() || 'Unknown';
+    this.eventEmitter.emit('driver.documents_submitted', {
+      driverUserId: userId,
+      driverName,
+    });
+    return step3;
   }
 
   /**
@@ -552,5 +601,30 @@ export class DriversService {
         orderId: r.order?.id || null,
       })),
     };
+  }
+
+  private async validateAndConsumeLivenessSession(
+    driverId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const nonce = typeof payload.nonce === 'string' ? payload.nonce : '';
+    const timestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
+    const passed = payload.passed === true;
+    const steps = Array.isArray(payload.steps) ? payload.steps : [];
+
+    if (!passed || steps.length < 2 || !nonce || !timestamp) {
+      throw new BadRequestException('Invalid liveness evidence payload');
+    }
+
+    // Challenge freshness guard (10 min) + anti-replay nonce stored in Redis.
+    if (Math.abs(Date.now() - timestamp) > 10 * 60 * 1000) {
+      throw new BadRequestException('Liveness evidence expired, please recapture');
+    }
+
+    const key = `liveness:nonce:${driverId}:${nonce}`;
+    const set = await this.redis.set(key, '1', 'EX', 15 * 60, 'NX');
+    if (set !== 'OK') {
+      throw new BadRequestException('Liveness evidence already used (replay blocked)');
+    }
   }
 }

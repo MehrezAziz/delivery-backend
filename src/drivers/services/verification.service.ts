@@ -2,10 +2,14 @@ import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/commo
 import { PrismaService } from '../../prisma/prisma.service';
 import { UploadDocumentsDto, DriverVerificationResponseDto } from '../dto/driver-verification.dto';
 import { UserRole, DriverStatus, VerificationStatus } from '@prisma/client';
+import { MlVerificationService } from './ml-verification.service';
 
 @Injectable()
 export class VerificationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mlVerificationService: MlVerificationService,
+  ) {}
 
   async uploadDocuments(userId: string, dto: UploadDocumentsDto): Promise<DriverVerificationResponseDto> {
     // Check if user is a driver
@@ -30,7 +34,7 @@ export class VerificationService {
     });
 
     // Create document record
-    await this.prisma.document.create({
+    const doc = await this.prisma.document.create({
       data: {
         verificationId: verification.id,
         documentImage: dto.documentImage,
@@ -40,6 +44,7 @@ export class VerificationService {
         verificationStatus: VerificationStatus.SUBMITTED,
       },
     });
+    this.mlVerificationService.scheduleAnalysis(doc.id);
 
     // Update driver status to PENDING_REVIEW
     await this.prisma.driver.update({
@@ -89,6 +94,7 @@ export class VerificationService {
         docImageTop: doc.docImageTop,
         docImageBottom: doc.docImageBottom,
         verificationStatus: doc.verificationStatus,
+        mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
       })) || [],
     };
   }

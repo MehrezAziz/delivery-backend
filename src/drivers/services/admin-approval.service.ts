@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DriverVerificationResponseDto } from '../dto/driver-verification.dto';
-import { DriverStatus, VerificationStatus } from '@prisma/client';
+import { CustomerServiceRole, DriverStatus, SuperUserRole, VerificationStatus } from '@prisma/client';
+import type { AuthenticatedSuperUser } from '../../auth/dto/jwt-payload.interface';
 import { DriverInitializationService } from './driver-initialization.service';
 
 @Injectable()
@@ -40,9 +41,49 @@ export class AdminApprovalService {
           docImageTop: doc.docImageTop,
           docImageBottom: doc.docImageBottom,
           verificationStatus: doc.verificationStatus,
+          mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
         })) || [],
       };
     });
+  }
+
+  async getDriverVerificationHistoryForStaff(
+    staff: AuthenticatedSuperUser,
+    driverId: string,
+  ): Promise<DriverVerificationResponseDto[]> {
+    await this.assertStaffCanReview(staff);
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      include: {
+        driverVerifications: {
+          include: { documents: true },
+          orderBy: { submittedAt: 'desc' },
+        },
+      },
+    });
+
+    if (!driver) {
+      throw new NotFoundException('Driver not found');
+    }
+
+    return driver.driverVerifications.map((verification) => ({
+      driverId: driver.id,
+      status: driver.status,
+      documentType: verification.documentType,
+      submittedAt: verification.submittedAt || null,
+      verifiedAt: verification.verifiedAt || null,
+      approvedAt: driver.approvedAt,
+      suspendedAt: driver.suspendedAt,
+      documents: verification.documents.map((doc) => ({
+        id: doc.id,
+        documentImage: doc.documentImage,
+        selfieImage: doc.selfieImage,
+        docImageTop: doc.docImageTop,
+        docImageBottom: doc.docImageBottom,
+        verificationStatus: doc.verificationStatus,
+        mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
+      })),
+    }));
   }
 
   async approveDriver(driverId: string): Promise<DriverVerificationResponseDto> {
@@ -92,6 +133,22 @@ export class AdminApprovalService {
     await this.driverInitializationService.initializeVerifiedDriver(driverId);
 
     return this.getDriverVerification(driverId);
+  }
+
+  private async assertStaffCanReview(staff: AuthenticatedSuperUser): Promise<void> {
+    if (staff.role === SuperUserRole.ADMIN) {
+      return;
+    }
+
+    const cs = await this.prisma.customerService.findUnique({
+      where: { id: staff.profileId },
+      select: { roles: true },
+    });
+    if (!cs || !cs.roles.includes(CustomerServiceRole.VERIFY_ACCOUNTS)) {
+      throw new BadRequestException(
+        'Customer service role VERIFY_ACCOUNTS is required for verification history access',
+      );
+    }
   }
 
   async rejectDriver(driverId: string, reason: string): Promise<DriverVerificationResponseDto> {
@@ -184,6 +241,7 @@ export class AdminApprovalService {
         docImageTop: doc.docImageTop,
         docImageBottom: doc.docImageBottom,
         verificationStatus: doc.verificationStatus,
+        mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
       })) || [],
     };
   }

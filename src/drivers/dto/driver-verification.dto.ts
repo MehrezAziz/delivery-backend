@@ -30,6 +30,8 @@ export class DocumentResponseDto {
   docImageTop: string | null;
   docImageBottom: string | null;
   verificationStatus: VerificationStatus;
+  /** Populated when ML_VERIFY_ENABLED and Python pipeline runs; see MlVerificationService */
+  mlAnalysis?: Record<string, unknown> | null;
 }
 
 export class DriverVerificationResponseDto {
