@@ -93,30 +93,54 @@ export class MlVerificationService {
         livenessPassed: true,
         analyzedAt: new Date().toISOString(),
       } as Record<string, unknown>;
+
+      const existing = (doc.mlAnalysis as Record<string, unknown> | null) ?? {};
+      const merged = {
+        ...existing,
+        ...parsed,
+        livenessSession: existing.livenessSession ?? parsed.livenessSession,
+        stage: 'ML_ANALYSIS_COMPLETE',
+      } as Record<string, unknown>;
+
       await this.prisma.document.update({
         where: { id: documentId },
         data: {
           firstName: mapped.firstName ?? doc.firstName,
           lastName: mapped.lastName ?? doc.lastName,
           idNumber: mapped.idNumber ?? doc.idNumber,
-          mlAnalysis: parsed as Prisma.InputJsonValue,
+          mlAnalysis: merged as Prisma.InputJsonValue,
           selfieVerified: faceSimilarity >= 0.52,
         },
       });
       this.logger.log(`ML analysis stored for document ${documentId}`);
     } catch (e) {
-      this.logger.warn(`ML verify_driver_documents error: ${(e as Error).message}`);
+      const err = e as Error;
+      this.logger.warn(`ML verify_driver_documents error: ${err.message}${err.stack ? `\n${err.stack}` : ''}`);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
-  private async downloadFile(url: string, dest: string): Promise<void> {
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`GET ${url} -> ${res.status}`);
+  /**
+   * DocumentsService stores local paths like `uploads/...` or `./uploads/...`.
+   * Only http(s) URLs work with fetch; local files must be read from disk.
+   */
+  private async downloadFile(urlOrPath: string, dest: string): Promise<void> {
+    const s = urlOrPath.trim();
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      const res = await fetch(s);
+      if (!res.ok) {
+        throw new Error(`GET ${s} -> ${res.status}`);
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      await fs.writeFile(dest, buf);
+      return;
     }
-    const buf = Buffer.from(await res.arrayBuffer());
+
+    const resolved = path.isAbsolute(s)
+      ? s
+      : path.resolve(process.cwd(), s.replace(/^\.\//, ''));
+    const buf = await fs.readFile(resolved);
     await fs.writeFile(dest, buf);
   }
 
