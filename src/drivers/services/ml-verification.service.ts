@@ -28,8 +28,57 @@ export class MlVerificationService {
     );
   }
 
+  async checkLivenessFrame(
+    action: 'TURN_LEFT' | 'TURN_RIGHT' | 'HOLD_HIGH' | 'BLINK',
+    imageBase64: string,
+  ): Promise<{
+    matched: boolean;
+    faceDetected: boolean;
+    yaw?: number;
+    pitch?: number;
+    roll?: number;
+    eyesDetected?: number;
+  }> {
+    const url = this.resolveLivenessWorkerUrl();
+    if (!url) {
+      throw new Error('Liveness worker URL is not configured');
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.config.get<string>('FACE_WORKER_API_KEY')
+          ? { Authorization: `Bearer ${this.config.get<string>('FACE_WORKER_API_KEY')}` }
+          : {}),
+      },
+      body: JSON.stringify({ action, imageBase64 }),
+    });
+    if (!res.ok) {
+      throw new Error(`Liveness worker failed: ${res.status}`);
+    }
+
+    const payload = (await res.json()) as {
+      matched?: boolean;
+      faceDetected?: boolean;
+      yaw?: number;
+      pitch?: number;
+      roll?: number;
+      eyesDetected?: number;
+    };
+    return {
+      matched: payload.matched === true,
+      faceDetected: payload.faceDetected === true,
+      yaw: typeof payload.yaw === 'number' ? payload.yaw : undefined,
+      pitch: typeof payload.pitch === 'number' ? payload.pitch : undefined,
+      roll: typeof payload.roll === 'number' ? payload.roll : undefined,
+      eyesDetected: typeof payload.eyesDetected === 'number' ? payload.eyesDetected : undefined,
+    };
+  }
+
   async runAnalysis(documentId: string): Promise<void> {
     if (!this.isEnabled()) return;
+    this.logger.log(`ML analysis started for document ${documentId}`);
 
     const doc = await this.prisma.document.findUnique({
       where: { id: documentId },
@@ -112,7 +161,9 @@ export class MlVerificationService {
           selfieVerified: faceSimilarity >= 0.52,
         },
       });
-      this.logger.log(`ML analysis stored for document ${documentId}`);
+      this.logger.log(
+        `ML analysis stored for document ${documentId} | textScore=${textScores.score.toFixed(4)} faceSimilarity=${faceSimilarity.toFixed(4)} decision=${recommendation.decision}`,
+      );
     } catch (e) {
       const err = e as Error;
       this.logger.warn(`ML verify_driver_documents error: ${err.message}${err.stack ? `\n${err.stack}` : ''}`);
@@ -214,6 +265,14 @@ export class MlVerificationService {
       if (dh[i] === sh[i]) same++;
     }
     return Number((same / Math.min(dh.length, sh.length)).toFixed(4));
+  }
+
+  private resolveLivenessWorkerUrl(): string | null {
+    const explicit = this.config.get<string>('LIVENESS_WORKER_URL');
+    if (explicit) return explicit;
+    const face = this.config.get<string>('FACE_WORKER_URL');
+    if (!face) return null;
+    return face.replace(/\/face\/?$/, '/liveness/frame');
   }
 
   private mapOcrToFields(rawText: string): {

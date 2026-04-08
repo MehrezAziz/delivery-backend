@@ -1,4 +1,5 @@
 import { 
+  BadRequestException,
   Controller, 
   Get, 
   Post,
@@ -31,6 +32,7 @@ import {
 } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser, AuthenticatedSuperUser } from '../auth/dto/jwt-payload.interface';
 import { IdentityVerificationService } from './services/identity-verification.service';
+import { MlVerificationService } from './services/ml-verification.service';
 
 @Controller('drivers')
 @UseGuards(JwtUserGuard, DriverGuard)
@@ -40,6 +42,7 @@ export class DriversController {
     private readonly verificationService: VerificationService,
     private readonly availabilityService: AvailabilityService,
     private readonly identityVerificationService: IdentityVerificationService,
+    private readonly mlVerificationService: MlVerificationService,
   ) {}
 
   /**
@@ -136,6 +139,26 @@ export class DriversController {
       challengeId,
       dto,
     );
+  }
+
+  /**
+   * POST /drivers/verification/liveness/frame-check
+   * Realtime pose/blink check powered by ML worker.
+   */
+  @Post('verification/liveness/frame-check')
+  async checkLivenessFrame(
+    @Body()
+    body: {
+      action?: 'TURN_LEFT' | 'TURN_RIGHT' | 'HOLD_HIGH' | 'BLINK';
+      imageBase64?: string;
+    },
+  ) {
+    const action = body?.action;
+    const imageBase64 = body?.imageBase64;
+    if (!action || !imageBase64) {
+      throw new BadRequestException('action and imageBase64 are required');
+    }
+    return this.mlVerificationService.checkLivenessFrame(action, imageBase64);
   }
 
   /**
