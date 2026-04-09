@@ -8,7 +8,14 @@ export class GeographyService {
   async getCountries() {
     return this.prisma.country.findMany({
       where: { isActive: true },
-      select: { id: true, name: true, isoCode: true, currencyCode: true, currencySymbol: true },
+      select: {
+        id: true,
+        name: true,
+        isoCode: true,
+        currencyCode: true,
+        currencySymbol: true,
+        language: true,
+      },
       orderBy: { name: 'asc' },
     });
   }
@@ -79,7 +86,14 @@ export class GeographyService {
                   governorate: {
                     include: {
                       country: {
-                        select: { id: true, name: true, isoCode: true, currencyCode: true, currencySymbol: true },
+                        select: {
+                          id: true,
+                          name: true,
+                          isoCode: true,
+                          currencyCode: true,
+                          currencySymbol: true,
+                          language: true,
+                        },
                       },
                     },
                   },
@@ -118,7 +132,14 @@ export class GeographyService {
           governorate: {
             include: {
               country: {
-                select: { id: true, name: true, isoCode: true, currencyCode: true, currencySymbol: true },
+                select: {
+                  id: true,
+                  name: true,
+                  isoCode: true,
+                  currencyCode: true,
+                  currencySymbol: true,
+                  language: true,
+                },
               },
             },
           },
@@ -143,7 +164,18 @@ export class GeographyService {
         const fallback = await this.prisma.delegation.findFirst({
           include: {
             governorate: {
-              include: { country: { select: { id: true, name: true, isoCode: true, currencyCode: true, currencySymbol: true } } },
+              include: {
+                country: {
+                  select: {
+                    id: true,
+                    name: true,
+                    isoCode: true,
+                    currencyCode: true,
+                    currencySymbol: true,
+                    language: true,
+                  },
+                },
+              },
             },
           },
         });

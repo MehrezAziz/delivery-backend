@@ -650,6 +650,8 @@ model Country {
   isoCode        String  @unique @map("iso_code")
   currencyCode   String  @map("currency_code")
   currencySymbol String  @map("currency_symbol")
+  /// Optional BCP 47 / ISO 639-1 tag for driver-facing UX (e.g. liveness voice: "ar", "fr", "en"). Nullable — no data loss on existing rows.
+  language       String? @map("language")
   isActive       Boolean @default(true) @map("is_active")
 
   // Relations

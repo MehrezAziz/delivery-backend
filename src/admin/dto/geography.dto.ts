@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsBoolean, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsBoolean, IsOptional, IsNumber, Min, MaxLength, Matches } from 'class-validator';
 
 // Country DTOs
 export class CreateCountryDto {
@@ -21,6 +21,15 @@ export class CreateCountryDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  /** BCP 47 / ISO 639-1 style tag for driver UX (liveness voice, etc.), e.g. `ar`, `fr`, `en`. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(12)
+  @Matches(/^[a-z]{2}(-[A-Za-z0-9]{1,8})*$/, {
+    message: 'language must look like a locale tag (e.g. ar, fr, en-US)',
+  })
+  language?: string | null;
 }
 
 export class UpdateCountryDto {
@@ -43,6 +52,14 @@ export class UpdateCountryDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(12)
+  @Matches(/^[a-z]{2}(-[A-Za-z0-9]{1,8})*$/, {
+    message: 'language must look like a locale tag (e.g. ar, fr, en-US)',
+  })
+  language?: string | null;
 }
 
 // Governorate DTOs

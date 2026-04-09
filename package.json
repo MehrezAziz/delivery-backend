@@ -20,7 +20,10 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:seed": "ts-node prisma/seed.ts",
     "seed:complete": "ts-node prisma/seed-complete.ts",
-    "postman:generate": "ts-node scripts/generate-postman-collection.ts"
+    "postman:generate": "ts-node scripts/generate-postman-collection.ts",
+    "migrate:repair-driver-verification": "prisma db execute --file prisma/scripts/repair-driver-verification-index.sql --schema prisma/schema.prisma",
+    "migrate:fix-failed-chain": "npm run migrate:repair-driver-verification && prisma migrate resolve --applied 20260317155621_driver_verification_one_to_many && prisma migrate deploy",
+    "db:backfill-country-languages": "prisma db execute --file prisma/scripts/backfill-country-languages.sql --schema prisma/schema.prisma"
   },
   "dependencies": {
     "@nestjs-modules/ioredis": "^2.0.2",
