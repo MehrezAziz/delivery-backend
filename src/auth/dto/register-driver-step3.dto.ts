@@ -3,7 +3,7 @@ import { DocumentType } from '@prisma/client';
 
 export class RegisterDriverStep3Dto {
   @IsEnum(DocumentType, {
-    message: 'Document type must be PASSPORT, ID_CARD, or STUDENT_CARD',
+    message: 'Document type must be PASSPORT, ID_CARD, STUDENT_CARD, or DRIVER_CARD',
   })
   documentType: DocumentType;
 

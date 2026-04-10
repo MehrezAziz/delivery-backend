@@ -87,15 +87,23 @@ export class VerificationService {
       verifiedAt: latestVerification?.verifiedAt || null,
       approvedAt: driver.approvedAt,
       suspendedAt: driver.suspendedAt,
-      documents: latestVerification?.documents.map(doc => ({
-        id: doc.id,
-        documentImage: doc.documentImage,
-        selfieImage: doc.selfieImage,
-        docImageTop: doc.docImageTop,
-        docImageBottom: doc.docImageBottom,
-        verificationStatus: doc.verificationStatus,
-        mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
-      })) || [],
+      documents:
+        latestVerification?.documents.map((doc) => ({
+          id: doc.id,
+          documentImage: doc.documentImage,
+          selfieImage: doc.selfieImage,
+          docImageTop: doc.docImageTop,
+          docImageBottom: doc.docImageBottom,
+          verificationStatus: doc.verificationStatus,
+          selfieVerified: doc.selfieVerified,
+          firstName: doc.firstName,
+          lastName: doc.lastName,
+          idNumber: doc.idNumber,
+          dateOfBirth: doc.dateOfBirth,
+          translationLocale: doc.translationLocale,
+          translationData: (doc.translationData as Record<string, unknown> | null) ?? null,
+          mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
+        })) || [],
     };
   }
 }

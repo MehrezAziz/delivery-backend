@@ -9,7 +9,7 @@ Auth: `Bearer <driver-access-token>`
 Content-Type: `multipart/form-data`
 
 ### Required fields
-- `documentType`: `PASSPORT | ID_CARD | STUDENT_CARD`
+- `documentType`: `PASSPORT | ID_CARD | STUDENT_CARD | DRIVER_CARD`
 - `selfieImage`: image file (jpg/png)
 - `docImageTop`: image file (jpg/png)
 
@@ -121,4 +121,12 @@ Effects:
 - `FACE_WORKER_URL` (optional external face worker)
 - `FACE_WORKER_API_KEY` (optional)
 - `VERIFICATION_DECISION_WEBHOOK_URL` (in control panel env)
+
+### Translation (Google Cloud Translation API v2, for non-Latin text scoring + staff UI)
+
+- `TRANSLATION_ENABLED=true`
+- `TRANSLATION_TARGET_LOCALE=en` (BCP-47 target language for comparison + display)
+- `GOOGLE_TRANSLATE_API_KEY=<key>` (REST v2; enable Cloud Translation API on the GCP project)
+
+When enabled, `Document.translationData` stores original + translated declared vs OCR fields; text score uses translated strings. When disabled or on API failure, scoring falls back to originals.
 

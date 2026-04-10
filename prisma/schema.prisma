@@ -119,6 +119,7 @@ enum DocumentType {
   PASSPORT
   ID_CARD
   STUDENT_CARD
+  DRIVER_CARD
 }
 
 enum VerificationStatus {
@@ -572,12 +573,17 @@ model Document {
   placeOfBirth       String?            @map("place_of_birth")
   dateOfIssue        DateTime?          @map("date_of_issue") @db.Date()
   mlAnalysis         Json?              @map("ml_analysis")
+  /// BCP 47 locale code used for stored translations (e.g. en).
+  translationLocale  String?            @map("translation_locale")
+  /// Original + Google-translated declared vs OCR fields for staff review and audit.
+  translationData    Json?              @map("translation_data")
 
   // Relations
   verification DriverVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
   identityCard IdentityCard?
   passport     Passport?
   studentCard  StudentCard?
+  driverCard   DriverCard?
 
   @@map("documents")
 }
@@ -621,6 +627,17 @@ model StudentCard {
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@map("student_cards")
+}
+
+model DriverCard {
+  id             String @id @default(uuid())
+  documentId     String @unique @map("document_id")
+  classification String
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("driver_cards")
 }
 
 // ============================================

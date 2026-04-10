@@ -7,6 +7,9 @@ import * as os from 'os';
 import { createHash } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { VerificationRulesService } from './verification-rules.service';
+import { TranslationService } from './translation.service';
+import type { DocumentTranslationPayload, TranslationFieldBundle } from './document-translation.types';
+import type { DeclaredProfileDataDto, OcrExtractedDataDto } from '../dto/verification-analysis.dto';
 
 @Injectable()
 export class MlVerificationService {
@@ -16,6 +19,7 @@ export class MlVerificationService {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly rules: VerificationRulesService,
+    private readonly translation: TranslationService,
   ) {}
 
   isEnabled(): boolean {
@@ -113,13 +117,42 @@ export class MlVerificationService {
       const mapped = this.mapOcrToFields(ocrResult.rawText ?? '');
       const faceSimilarity = await this.compareFaces(docPath, selfiePath);
 
-      const declared = {
+      /** Declared: `User` (names) + `Document` (id/DOB when present). Extracted: OCR `mapped`. */
+      const declaredBundle: TranslationFieldBundle = {
         firstName: doc.verification.driver.user.firstName ?? undefined,
         lastName: doc.verification.driver.user.secondName ?? undefined,
         idNumber: doc.idNumber ?? undefined,
         dateOfBirth: doc.dateOfBirth ? doc.dateOfBirth.toISOString().slice(0, 10) : undefined,
       };
-      const textScores = this.rules.scoreTextConsistency(declared, mapped);
+      const extractedBundle: TranslationFieldBundle = {
+        firstName: mapped.firstName,
+        lastName: mapped.lastName,
+        idNumber: mapped.idNumber,
+        dateOfBirth: mapped.dateOfBirth,
+      };
+
+      const targetLocale = this.translation.getTargetLocale();
+      let translationPayload: DocumentTranslationPayload | null = null;
+      let scoreDeclared: DeclaredProfileDataDto = this.bundleToDeclaredDto(declaredBundle);
+      let scoreExtracted: OcrExtractedDataDto = this.bundleToOcrDto(extractedBundle);
+
+      if (this.translation.isEnabled()) {
+        translationPayload = await this.translation.translateFields(
+          declaredBundle,
+          extractedBundle,
+          targetLocale,
+        );
+        if (!translationPayload.error) {
+          scoreDeclared = this.bundleToDeclaredDto(
+            this.mergeTranslated(declaredBundle, translationPayload.translatedDeclared),
+          );
+          scoreExtracted = this.bundleToOcrDto(
+            this.mergeTranslated(extractedBundle, translationPayload.translatedExtracted),
+          );
+        }
+      }
+
+      const textScores = this.rules.scoreTextConsistency(scoreDeclared, scoreExtracted);
       const recommendation = this.rules.decideVerification({
         textScore: textScores.score,
         faceSimilarity,
@@ -138,6 +171,12 @@ export class MlVerificationService {
           confidence: ocrResult.confidence,
           mapped,
           fields: textScores.fields,
+        },
+        scoring: {
+          compared: 'user_and_document_declared_vs_ocr_extracted',
+          usedTranslation: Boolean(translationPayload && !translationPayload.error),
+          translationTargetLocale: translationPayload && !translationPayload.error ? targetLocale : null,
+          translationError: translationPayload?.error ?? null,
         },
         livenessPassed: true,
         analyzedAt: new Date().toISOString(),
@@ -159,6 +198,10 @@ export class MlVerificationService {
           idNumber: mapped.idNumber ?? doc.idNumber,
           mlAnalysis: merged as Prisma.InputJsonValue,
           selfieVerified: faceSimilarity >= 0.52,
+          translationLocale: translationPayload ? targetLocale : null,
+          translationData: translationPayload
+            ? (translationPayload as unknown as Prisma.InputJsonValue)
+            : Prisma.DbNull,
         },
       });
       this.logger.log(
@@ -293,7 +336,12 @@ export class MlVerificationService {
       clean.match(/\b(\d{4}[\/.-]\d{2}[\/.-]\d{2})\b/);
 
     const nameCandidates = normalized
-      .filter((x) => /^[A-Za-zÀ-ÿ' -]{3,}$/.test(x))
+      .filter((x) => {
+        if (x.length < 2) return false;
+        if (/^\d[\d\s/.-]+$/.test(x)) return false;
+        if (/^[A-Z0-9]{6,18}$/.test(x)) return false;
+        return /^[\p{L}\p{M}0-9'\s.,-]{2,}$/u.test(x);
+      })
       .slice(0, 2);
 
     return {
@@ -302,5 +350,35 @@ export class MlVerificationService {
       idNumber: idMatch?.[1],
       dateOfBirth: dobMatch?.[1],
     };
+  }
+
+  private bundleToDeclaredDto(b: TranslationFieldBundle): DeclaredProfileDataDto {
+    return {
+      firstName: b.firstName,
+      lastName: b.lastName,
+      idNumber: b.idNumber,
+      dateOfBirth: b.dateOfBirth,
+    };
+  }
+
+  private bundleToOcrDto(b: TranslationFieldBundle): OcrExtractedDataDto {
+    return {
+      firstName: b.firstName,
+      lastName: b.lastName,
+      idNumber: b.idNumber,
+      dateOfBirth: b.dateOfBirth,
+    };
+  }
+
+  private mergeTranslated(
+    original: TranslationFieldBundle,
+    translated: TranslationFieldBundle,
+  ): TranslationFieldBundle {
+    const out: TranslationFieldBundle = {};
+    (['firstName', 'lastName', 'idNumber', 'dateOfBirth'] as const).forEach((k) => {
+      const t = translated[k]?.trim();
+      out[k] = t || original[k];
+    });
+    return out;
   }
 }

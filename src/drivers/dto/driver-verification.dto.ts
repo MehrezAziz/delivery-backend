@@ -30,6 +30,15 @@ export class DocumentResponseDto {
   docImageTop: string | null;
   docImageBottom: string | null;
   verificationStatus: VerificationStatus;
+  selfieVerified: boolean;
+  firstName: string | null;
+  lastName: string | null;
+  idNumber: string | null;
+  dateOfBirth: Date | null;
+  /** BCP 47 locale used for `translationData` (e.g. en). */
+  translationLocale: string | null;
+  /** Google Translation payload for staff review; see `DocumentTranslationPayload`. */
+  translationData: Record<string, unknown> | null;
   /** Populated when ML_VERIFY_ENABLED and Python pipeline runs; see MlVerificationService */
   mlAnalysis?: Record<string, unknown> | null;
 }

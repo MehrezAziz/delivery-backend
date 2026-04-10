@@ -42,9 +42,12 @@ export class VerificationRulesService {
     (Object.keys(this.fieldWeights) as (keyof DeclaredProfileDataDto)[]).forEach((field) => {
       const declaredValue = declared[field] ?? null;
       const extractedValue = ocr[field] ?? null;
-      if (!declaredValue && !extractedValue) return;
+      // Only score fields the user actually declared (non-empty).
+      if (declaredValue == null || String(declaredValue).trim() === '') {
+        return;
+      }
 
-      const score = this.scoreStringMatch(declaredValue ?? '', extractedValue ?? '');
+      const score = this.scoreStringMatch(declaredValue, extractedValue ?? '');
       const weight = this.fieldWeights[field];
       weightedTotal += score * weight;
       usedWeight += weight;

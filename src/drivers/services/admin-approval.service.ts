@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { DriverVerificationResponseDto } from '../dto/driver-verification.dto';
+import { DocumentResponseDto, DriverVerificationResponseDto } from '../dto/driver-verification.dto';
 import { CustomerServiceRole, DriverStatus, SuperUserRole, VerificationStatus } from '@prisma/client';
 import type { AuthenticatedSuperUser } from '../../auth/dto/jwt-payload.interface';
 import { DriverInitializationService } from './driver-initialization.service';
@@ -34,15 +34,7 @@ export class AdminApprovalService {
         verifiedAt: latest?.verifiedAt || null,
         approvedAt: driver.approvedAt,
         suspendedAt: driver.suspendedAt,
-        documents: latest?.documents.map(doc => ({
-          id: doc.id,
-          documentImage: doc.documentImage,
-          selfieImage: doc.selfieImage,
-          docImageTop: doc.docImageTop,
-          docImageBottom: doc.docImageBottom,
-          verificationStatus: doc.verificationStatus,
-          mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
-        })) || [],
+        documents: latest?.documents.map((doc) => this.mapDocumentToDto(doc)) || [],
       };
     });
   }
@@ -74,15 +66,7 @@ export class AdminApprovalService {
       verifiedAt: verification.verifiedAt || null,
       approvedAt: driver.approvedAt,
       suspendedAt: driver.suspendedAt,
-      documents: verification.documents.map((doc) => ({
-        id: doc.id,
-        documentImage: doc.documentImage,
-        selfieImage: doc.selfieImage,
-        docImageTop: doc.docImageTop,
-        docImageBottom: doc.docImageBottom,
-        verificationStatus: doc.verificationStatus,
-        mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
-      })),
+      documents: verification.documents.map((doc) => this.mapDocumentToDto(doc)),
     }));
   }
 
@@ -234,15 +218,41 @@ export class AdminApprovalService {
       verifiedAt: latest?.verifiedAt || null,
       approvedAt: driver.approvedAt,
       suspendedAt: driver.suspendedAt,
-      documents: latest?.documents.map(doc => ({
-        id: doc.id,
-        documentImage: doc.documentImage,
-        selfieImage: doc.selfieImage,
-        docImageTop: doc.docImageTop,
-        docImageBottom: doc.docImageBottom,
-        verificationStatus: doc.verificationStatus,
-        mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
-      })) || [],
+      documents: latest?.documents.map((doc) => this.mapDocumentToDto(doc)) || [],
+    };
+  }
+
+  private mapDocumentToDto(doc: {
+    id: string;
+    documentImage: string | null;
+    selfieImage: string | null;
+    docImageTop: string | null;
+    docImageBottom: string | null;
+    verificationStatus: VerificationStatus;
+    selfieVerified: boolean;
+    firstName: string | null;
+    lastName: string | null;
+    idNumber: string | null;
+    dateOfBirth: Date | null;
+    translationLocale: string | null;
+    translationData: unknown;
+    mlAnalysis: unknown;
+  }): DocumentResponseDto {
+    return {
+      id: doc.id,
+      documentImage: doc.documentImage,
+      selfieImage: doc.selfieImage,
+      docImageTop: doc.docImageTop,
+      docImageBottom: doc.docImageBottom,
+      verificationStatus: doc.verificationStatus,
+      selfieVerified: doc.selfieVerified,
+      firstName: doc.firstName,
+      lastName: doc.lastName,
+      idNumber: doc.idNumber,
+      dateOfBirth: doc.dateOfBirth,
+      translationLocale: doc.translationLocale,
+      translationData: (doc.translationData as Record<string, unknown> | null) ?? null,
+      mlAnalysis: doc.mlAnalysis as Record<string, unknown> | null,
     };
   }
 }

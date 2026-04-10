@@ -10,6 +10,7 @@ import { AvailabilityService } from './services/availability.service';
 import { IdentityVerificationService } from './services/identity-verification.service';
 import { VerificationRulesService } from './services/verification-rules.service';
 import { LivenessChallengeService } from './services/liveness-challenge.service';
+import { TranslationService } from './services/translation.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { JwtModule } from '@nestjs/jwt';
@@ -49,6 +50,7 @@ import { RedisModule } from '@nestjs-modules/ioredis';
     IdentityVerificationService,
     VerificationRulesService,
     LivenessChallengeService,
+    TranslationService,
   ],
   exports: [
     DriversService,
