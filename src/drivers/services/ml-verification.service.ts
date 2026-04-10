@@ -117,12 +117,10 @@ export class MlVerificationService {
       const mapped = this.mapOcrToFields(ocrResult.rawText ?? '');
       const faceSimilarity = await this.compareFaces(docPath, selfiePath);
 
-      /** Declared: `User` (names) + `Document` (id/DOB when present). Extracted: OCR `mapped`. */
+      /** Declared: Driver/User profile (common attrs). Extracted: OCR `mapped` fields. */
       const declaredBundle: TranslationFieldBundle = {
         firstName: doc.verification.driver.user.firstName ?? undefined,
         lastName: doc.verification.driver.user.secondName ?? undefined,
-        idNumber: doc.idNumber ?? undefined,
-        dateOfBirth: doc.dateOfBirth ? doc.dateOfBirth.toISOString().slice(0, 10) : undefined,
       };
       const extractedBundle: TranslationFieldBundle = {
         firstName: mapped.firstName,
@@ -153,8 +151,11 @@ export class MlVerificationService {
       }
 
       const textScores = this.rules.scoreTextConsistency(scoreDeclared, scoreExtracted);
+      const infoMatchScore = Number(textScores.score.toFixed(4));
+      const textClarityScore = Number(this.normalizeScore(ocrResult.confidence).toFixed(4));
+      const finalTextScore = Number((((infoMatchScore * 0.5) + (textClarityScore * 0.5))).toFixed(4));
       const recommendation = this.rules.decideVerification({
-        textScore: textScores.score,
+        textScore: finalTextScore,
         faceSimilarity,
         livenessPassed: true, // realtime liveness is captured in registration flow
       });
@@ -163,7 +164,8 @@ export class MlVerificationService {
         pipeline: 'worker-v2',
         recommendation: recommendation.decision,
         reasons: recommendation.reasons,
-        textScore: textScores.score,
+        textScore: finalTextScore,
+        ocrDeclaredMismatch: infoMatchScore < recommendation.thresholds.text,
         faceSimilarity,
         ocr: {
           provider: ocrResult.provider,
@@ -174,6 +176,9 @@ export class MlVerificationService {
         },
         scoring: {
           compared: 'user_and_document_declared_vs_ocr_extracted',
+          informationMatchScore: infoMatchScore,
+          textClarityScore,
+          textScoreFormula: `${infoMatchScore.toFixed(2)} + ${textClarityScore.toFixed(2)} = ${finalTextScore.toFixed(2)}`,
           usedTranslation: Boolean(translationPayload && !translationPayload.error),
           translationTargetLocale: translationPayload && !translationPayload.error ? targetLocale : null,
           translationError: translationPayload?.error ?? null,
@@ -193,9 +198,25 @@ export class MlVerificationService {
       await this.prisma.document.update({
         where: { id: documentId },
         data: {
-          firstName: mapped.firstName ?? doc.firstName,
-          lastName: mapped.lastName ?? doc.lastName,
-          idNumber: mapped.idNumber ?? doc.idNumber,
+          // Persist translated OCR text in Document when available; keep null when no value.
+          firstName: this.pickTranslatedOrOriginal(
+            mapped.firstName,
+            translationPayload?.translatedExtracted.firstName,
+          ),
+          lastName: this.pickTranslatedOrOriginal(
+            mapped.lastName,
+            translationPayload?.translatedExtracted.lastName,
+          ),
+          idNumber: this.pickTranslatedOrOriginal(
+            mapped.idNumber,
+            translationPayload?.translatedExtracted.idNumber,
+          ),
+          dateOfBirth: this.parseDate(
+            this.pickTranslatedOrOriginal(
+              mapped.dateOfBirth,
+              translationPayload?.translatedExtracted.dateOfBirth,
+            ),
+          ),
           mlAnalysis: merged as Prisma.InputJsonValue,
           selfieVerified: faceSimilarity >= 0.52,
           translationLocale: translationPayload ? targetLocale : null,
@@ -205,7 +226,7 @@ export class MlVerificationService {
         },
       });
       this.logger.log(
-        `ML analysis stored for document ${documentId} | textScore=${textScores.score.toFixed(4)} faceSimilarity=${faceSimilarity.toFixed(4)} decision=${recommendation.decision}`,
+        `ML analysis stored for document ${documentId} | textScore=${finalTextScore.toFixed(4)} (match=${infoMatchScore.toFixed(4)} clarity=${textClarityScore.toFixed(4)}) faceSimilarity=${faceSimilarity.toFixed(4)} decision=${recommendation.decision}`,
       );
     } catch (e) {
       const err = e as Error;
@@ -380,5 +401,38 @@ export class MlVerificationService {
       out[k] = t || original[k];
     });
     return out;
+  }
+
+  private pickTranslatedOrOriginal(
+    original?: string,
+    translated?: string,
+  ): string | null {
+    const t = translated?.trim();
+    if (t) return t;
+    const o = original?.trim();
+    return o || null;
+  }
+
+  private parseDate(value: string | null): Date | null {
+    if (!value) return null;
+    const normalized = value.replace(/[./]/g, '-').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+      const d = new Date(`${normalized}T00:00:00Z`);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    const m = normalized.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m) {
+      const iso = `${m[3]}-${m[2]}-${m[1]}`;
+      const d = new Date(`${iso}T00:00:00Z`);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    return null;
+  }
+
+  private normalizeScore(value: number | null | undefined): number {
+    if (typeof value !== 'number' || Number.isNaN(value)) return 0;
+    if (value < 0) return 0;
+    if (value > 1) return 1;
+    return value;
   }
 }
