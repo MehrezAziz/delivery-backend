@@ -1,13 +1,20 @@
 import { Injectable, NotFoundException, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentsService, DocumentFiles } from '../documents/documents.service';
+
+/** Step 3 multipart: selfie optional when submitting with a recent liveness checkpoint. */
+export type Step3UploadFiles = {
+  selfieImage?: Express.Multer.File;
+  docImageTop: Express.Multer.File;
+  docImageBottom?: Express.Multer.File;
+};
 import { JwtService } from '@nestjs/jwt';
 import { RegisterDriverStep2Dto } from '../auth/dto/register-driver-step2.dto';
 import { RegisterDriverStep3Dto } from '../auth/dto/register-driver-step3.dto';
 import { RegisterDriverStep2ResponseDto } from '../auth/dto/register-driver-step2-response.dto';
 import { RegisterDriverStep3ResponseDto } from '../auth/dto/register-driver-step3-response.dto';
 import { DriverProfileDto } from './dto/driver-profile.dto';
-import { DriverStatus, UserRole } from '@prisma/client';
+import { DriverStatus, Prisma, UserRole } from '@prisma/client';
 import { JwtUserPayload } from '../auth/dto/jwt-payload.interface';
 import { DriverPendingPayload } from '../auth/dto/driver-pending-payload.interface';
 import { MlVerificationService } from './services/ml-verification.service';
@@ -139,11 +146,11 @@ export class DriversService {
   async submitDocumentVerification(
     userId: string,
     dto: RegisterDriverStep3Dto,
-    files: DocumentFiles,
+    files: Step3UploadFiles,
   ): Promise<RegisterDriverStep3ResponseDto> {
     const { documentType, livenessSession } = dto;
+    const usePending = dto.usePendingLiveness === 'true';
 
-    // Find driver by userId
     const driver = await this.prisma.driver.findUnique({
       where: { userId },
       include: {
@@ -160,27 +167,66 @@ export class DriversService {
       throw new NotFoundException('Driver not found. Please complete step 1 first.');
     }
 
-    // Verify step 2 completed (vehicleType must exist)
     if (!driver.vehicleType) {
       throw new BadRequestException('Please complete step 2 first.');
     }
 
-    // Upload document images
-    const documentUrls = await this.documentsService.uploadDocumentImages(files, userId);
+    if (!files.docImageTop) {
+      throw new BadRequestException('Document front image is required');
+    }
 
-    // Create verification and document in transaction
-    let createdDocumentId = '';
     let livenessPayload: Record<string, unknown> | null = null;
-    if (livenessSession) {
+    let documentUrls: { selfieImage: string; docImageTop: string; docImageBottom?: string };
+
+    if (usePending) {
+      if (
+        !driver.pendingLivenessExpiresAt ||
+        driver.pendingLivenessExpiresAt.getTime() <= Date.now() ||
+        !driver.pendingVerificationSelfieUrl ||
+        !driver.pendingLivenessSession
+      ) {
+        throw new BadRequestException(
+          'Saved liveness has expired or is missing. Please complete the liveness check again.',
+        );
+      }
+      livenessPayload = driver.pendingLivenessSession as Record<string, unknown>;
+      const docOnly = await this.documentsService.uploadDocImagesOnly(
+        {
+          docImageTop: files.docImageTop,
+          docImageBottom: files.docImageBottom,
+        },
+        userId,
+      );
+      documentUrls = {
+        selfieImage: driver.pendingVerificationSelfieUrl,
+        docImageTop: docOnly.docImageTop,
+        docImageBottom: docOnly.docImageBottom,
+      };
+    } else {
+      if (!files.selfieImage) {
+        throw new BadRequestException('Selfie image is required');
+      }
+      if (!livenessSession) {
+        throw new BadRequestException('Liveness session is required');
+      }
       try {
         livenessPayload = JSON.parse(livenessSession) as Record<string, unknown>;
       } catch {
         throw new BadRequestException('Invalid livenessSession JSON payload');
       }
       await this.validateAndConsumeLivenessSession(driver.id, livenessPayload);
+      documentUrls = await this.documentsService.uploadDocumentImages(
+        {
+          selfieImage: files.selfieImage,
+          docImageTop: files.docImageTop,
+          docImageBottom: files.docImageBottom,
+        } as DocumentFiles,
+        userId,
+      );
     }
+
+    let createdDocumentId = '';
     const step3 = await this.prisma.$transaction(async (tx) => {
-      // Create DriverVerification
       const driverVerification = await tx.driverVerification.create({
         data: {
           driverId: driver.id,
@@ -189,7 +235,6 @@ export class DriversService {
         },
       });
 
-      // Create Document
       const document = await tx.document.create({
         data: {
           verificationId: driverVerification.id,
@@ -208,11 +253,13 @@ export class DriversService {
       });
       createdDocumentId = document.id;
 
-      // Update Driver status to PENDING_REVIEW
       const updatedDriver = await tx.driver.update({
         where: { id: driver.id },
         data: {
           status: 'PENDING_REVIEW',
+          pendingLivenessSession: Prisma.DbNull,
+          pendingVerificationSelfieUrl: null,
+          pendingLivenessExpiresAt: null,
         },
       });
 
@@ -249,6 +296,77 @@ export class DriversService {
       driverName,
     });
     return step3;
+  }
+
+  /**
+   * Persist completed liveness (selfie + session JSON) for up to 24h so the driver can upload documents later.
+   */
+  async saveLivenessCheckpoint(
+    userId: string,
+    livenessSessionRaw: string,
+    selfieFile: Express.Multer.File,
+  ): Promise<{ ok: true; expiresAt: string }> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(livenessSessionRaw) as Record<string, unknown>;
+    } catch {
+      throw new BadRequestException('Invalid livenessSession JSON payload');
+    }
+
+    const driver = await this.prisma.driver.findUnique({ where: { userId } });
+    if (!driver) {
+      throw new NotFoundException('Driver not found');
+    }
+    if (!driver.vehicleType) {
+      throw new BadRequestException('Please complete step 2 first.');
+    }
+
+    this.validateLivenessCheckpointPayload(payload);
+
+    const selfieUrl = await this.documentsService.uploadLivenessCheckpointSelfie(selfieFile, userId);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await this.prisma.driver.update({
+      where: { id: driver.id },
+      data: {
+        pendingLivenessSession: payload as object,
+        pendingVerificationSelfieUrl: selfieUrl,
+        pendingLivenessExpiresAt: expiresAt,
+      },
+    });
+
+    return { ok: true, expiresAt: expiresAt.toISOString() };
+  }
+
+  /**
+   * Whether the driver still has a valid saved liveness checkpoint (for resuming document upload).
+   */
+  async getVerificationDraft(userId: string): Promise<{
+    pendingLivenessValid: boolean;
+    pendingLivenessExpiresAt: string | null;
+  }> {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      select: {
+        pendingLivenessExpiresAt: true,
+        pendingLivenessSession: true,
+        pendingVerificationSelfieUrl: true,
+      },
+    });
+
+    if (
+      !driver?.pendingLivenessExpiresAt ||
+      !driver.pendingLivenessSession ||
+      !driver.pendingVerificationSelfieUrl
+    ) {
+      return { pendingLivenessValid: false, pendingLivenessExpiresAt: null };
+    }
+
+    const valid = driver.pendingLivenessExpiresAt.getTime() > Date.now();
+    return {
+      pendingLivenessValid: valid,
+      pendingLivenessExpiresAt: driver.pendingLivenessExpiresAt.toISOString(),
+    };
   }
 
   /**
@@ -601,6 +719,21 @@ export class DriversService {
         orderId: r.order?.id || null,
       })),
     };
+  }
+
+  private validateLivenessCheckpointPayload(payload: Record<string, unknown>): void {
+    const nonce = typeof payload.nonce === 'string' ? payload.nonce : '';
+    const timestamp = typeof payload.timestamp === 'number' ? payload.timestamp : 0;
+    const passed = payload.passed === true;
+    const steps = Array.isArray(payload.steps) ? payload.steps : [];
+
+    if (!passed || steps.length < 4 || !nonce || !timestamp) {
+      throw new BadRequestException('Invalid liveness evidence payload');
+    }
+
+    if (Math.abs(Date.now() - timestamp) > 24 * 60 * 60 * 1000) {
+      throw new BadRequestException('Liveness evidence expired, please capture the challenge again');
+    }
   }
 
   private async validateAndConsumeLivenessSession(

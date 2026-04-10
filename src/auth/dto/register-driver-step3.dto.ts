@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
 import { DocumentType } from '@prisma/client';
 
 export class RegisterDriverStep3Dto {
@@ -10,4 +10,9 @@ export class RegisterDriverStep3Dto {
   @IsOptional()
   @IsString()
   livenessSession?: string;
+
+  /** When `true`, use selfie + liveness JSON saved within the last 24h (liveness checkpoint). */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  usePendingLiveness?: string;
 }

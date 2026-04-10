@@ -1,5 +1,7 @@
 import {
+  BadRequestException,
   Controller,
+  Get,
   Post,
   Body,
   HttpCode,
@@ -15,7 +17,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { AuthService } from './auth.service';
-import { DriversService } from '../drivers/drivers.service';
+import { DriversService, Step3UploadFiles } from '../drivers/drivers.service';
 import {
   SendOtpDto,
   VerifyOtpDto,
@@ -32,6 +34,7 @@ import { RegisterCustomerResponseDto } from './dto/register-customer-response.dt
 import { RegisterDriverStep1Dto } from './dto/register-driver-step1.dto';
 import { RegisterDriverStep2Dto } from './dto/register-driver-step2.dto';
 import { RegisterDriverStep3Dto } from './dto/register-driver-step3.dto';
+import { RegisterLivenessCheckpointDto } from './dto/register-liveness-checkpoint.dto';
 import { DriverLoginDto } from './dto/driver-login.dto';
 import { GoogleDriverAuthDto } from './dto/google-driver-auth.dto';
 import { Public, CurrentUser, UserId } from './decorators/auth.decorators';
@@ -238,13 +241,57 @@ export class AuthController {
       docImageBottom?: Express.Multer.File[];
     },
   ) {
-    const documentFiles = {
-      selfieImage: files.selfieImage?.[0]!,
-      docImageTop: files.docImageTop?.[0]!,
+    const usePending = dto.usePendingLiveness === 'true';
+    if (!usePending && !files.selfieImage?.[0]) {
+      throw new BadRequestException('Selfie image is required');
+    }
+    if (!usePending && !dto.livenessSession) {
+      throw new BadRequestException('Liveness session is required');
+    }
+    if (usePending && dto.livenessSession) {
+      throw new BadRequestException('Remove livenessSession when submitting with saved liveness');
+    }
+    if (!files.docImageTop?.[0]) {
+      throw new BadRequestException('Document front image is required');
+    }
+
+    const documentFiles: Step3UploadFiles = {
+      selfieImage: files.selfieImage?.[0],
+      docImageTop: files.docImageTop[0],
       docImageBottom: files.docImageBottom?.[0],
     };
 
     return this.driversService.submitDocumentVerification(userId, dto, documentFiles);
+  }
+
+  /**
+   * POST /auth/driver/register/liveness-checkpoint
+   * Saves selfie + liveness JSON for up to 24h so documents can be submitted later.
+   */
+  @UseGuards(JwtUserGuard)
+  @Post('driver/register/liveness-checkpoint')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileFieldsInterceptor([{ name: 'selfieImage', maxCount: 1 }]))
+  async registerLivenessCheckpoint(
+    @UserId() userId: string,
+    @Body() dto: RegisterLivenessCheckpointDto,
+    @UploadedFiles() files: { selfieImage?: Express.Multer.File[] },
+  ) {
+    const selfie = files.selfieImage?.[0];
+    if (!selfie) {
+      throw new BadRequestException('selfieImage is required');
+    }
+    return this.driversService.saveLivenessCheckpoint(userId, dto.livenessSession, selfie);
+  }
+
+  /**
+   * GET /auth/driver/register/verification-draft
+   * Whether a saved liveness checkpoint is still valid (24h window).
+   */
+  @UseGuards(JwtUserGuard)
+  @Get('driver/register/verification-draft')
+  async getVerificationDraft(@UserId() userId: string) {
+    return this.driversService.getVerificationDraft(userId);
   }
 
   // ============================================

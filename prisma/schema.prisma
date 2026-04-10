@@ -409,6 +409,11 @@ model Driver {
   suspendedAt DateTime?    @map("suspended_at")
   description String?
 
+  /// Saved liveness evidence (JSON) when driver completes challenge but not yet document submit; expires after 24h.
+  pendingLivenessSession       Json?      @map("pending_liveness_session")
+  pendingVerificationSelfieUrl String?    @map("pending_verification_selfie_url")
+  pendingLivenessExpiresAt     DateTime?  @map("pending_liveness_expires_at")
+
   // Relations
   user                     User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   driverAccount            DriverAccount?

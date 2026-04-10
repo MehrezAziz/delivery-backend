@@ -84,6 +84,56 @@ export class DocumentsService {
   }
 
   /**
+   * Upload only document front/back (used when selfie was saved earlier via liveness checkpoint).
+   */
+  async uploadDocImagesOnly(
+    files: { docImageTop: Express.Multer.File; docImageBottom?: Express.Multer.File },
+    userId: string,
+  ): Promise<{ docImageTop: string; docImageBottom?: string }> {
+    this.validateImageFile(files.docImageTop);
+    if (files.docImageBottom) {
+      this.validateImageFile(files.docImageBottom);
+    }
+
+    const docTopFilename = this.generateFilename(userId, 'doc-top');
+    const docBottomFilename = files.docImageBottom
+      ? this.generateFilename(userId, 'doc-bottom')
+      : null;
+
+    await fs.writeFile(
+      path.join(this.uploadDir, docTopFilename),
+      files.docImageTop.buffer,
+    );
+    if (files.docImageBottom && docBottomFilename) {
+      await fs.writeFile(
+        path.join(this.uploadDir, docBottomFilename),
+        files.docImageBottom.buffer,
+      );
+    }
+
+    return {
+      docImageTop: path.join(this.uploadDir, docTopFilename),
+      docImageBottom: docBottomFilename
+        ? path.join(this.uploadDir, docBottomFilename)
+        : undefined,
+    };
+  }
+
+  /**
+   * Persist selfie for a liveness checkpoint (24h) before full document submission.
+   */
+  async uploadLivenessCheckpointSelfie(
+    file: Express.Multer.File,
+    userId: string,
+  ): Promise<string> {
+    this.validateImageFile(file);
+    const selfieFilename = this.generateFilename(userId, 'selfie-checkpoint');
+    const filepath = path.join(this.uploadDir, selfieFilename);
+    await fs.writeFile(filepath, file.buffer);
+    return filepath;
+  }
+
+  /**
    * Validate image file
    */
   private validateImageFile(file: Express.Multer.File): void {
