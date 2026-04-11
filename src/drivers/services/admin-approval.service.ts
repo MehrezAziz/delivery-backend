@@ -85,8 +85,11 @@ export class AdminApprovalService {
       throw new NotFoundException('Driver not found');
     }
 
-    if (driver.status !== DriverStatus.PENDING_REVIEW) {
-      throw new BadRequestException('Driver is not pending review');
+    if (
+      driver.status !== DriverStatus.PENDING_REVIEW &&
+      driver.status !== DriverStatus.REJECTED
+    ) {
+      throw new BadRequestException('Driver must be pending review or rejected to approve');
     }
 
     // Update driver status and set approvedAt
@@ -97,6 +100,18 @@ export class AdminApprovalService {
         approvedAt: new Date(),
       },
     });
+
+    const now = new Date();
+    const open = await this.prisma.userRestriction.findMany({
+      where: { userId: driver.userId, liftedAt: null },
+      select: { id: true },
+    });
+    for (const row of open) {
+      await this.prisma.userRestriction.update({
+        where: { id: row.id },
+        data: { liftedAt: now },
+      });
+    }
 
     // Update the latest verification record
     const latestVerification = driver.driverVerifications[0];
