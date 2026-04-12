@@ -273,6 +273,7 @@ enum NotificationType {
   TICKET_ASSIGNED
   CUSTOMER_REPLIED_TICKET
   URGENT_TICKET_UNRESOLVED
+  SUPPORT_HUMAN_REQUESTED
   // CS - Disputes
   DISPUTE_ASSIGNED
   DISPUTE_REQUIRES_DECISION
@@ -1055,6 +1056,8 @@ model SupportTicket {
   priority    SupportTicketPriority
   status      SupportTicketStatus   @default(OPEN)
   description String
+  /// Set when user requests a human; used to avoid duplicate admin notifications.
+  humanEscalationNotifiedAt DateTime? @map("human_escalation_notified_at")
   createdAt   DateTime              @default(now()) @map("created_at")
   resolvedAt  DateTime?             @map("resolved_at")
 
@@ -1072,9 +1075,11 @@ model SupportMessage {
   id         String   @id @default(uuid())
   ticketId   String   @map("ticket_id")
   senderId   String   @map("sender_id")
-  senderType String   @map("sender_type") // 'USER' or 'CUSTOMER_SERVICE'
+  senderType String   @map("sender_type") // 'USER' | 'CUSTOMER_SERVICE' | 'BOT'
   content    String
   image      String?
+  /// UI hints: helpfulness buttons, track delivery action, citations, etc.
+  metadata   Json?
   timestamp  DateTime @default(now())
   readAt     DateTime? @map("read_at")
 
@@ -1154,6 +1159,38 @@ model SystemConfig {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("system_configs")
+}
+
+// ============================================
+// AI SUPPORT (ops / audit)
+// ============================================
+
+model AiSupportToolLog {
+  id         String   @id @default(uuid())
+  ticketId   String   @map("ticket_id")
+  userId     String   @map("user_id")
+  toolName   String   @map("tool_name")
+  durationMs Int      @map("duration_ms")
+  success    Boolean
+  errorCode  String?  @map("error_code")
+  model      String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([ticketId, createdAt])
+  @@index([createdAt])
+  @@map("ai_support_tool_logs")
+}
+
+model AiSupportFeedback {
+  id        String   @id @default(uuid())
+  messageId String   @unique @map("message_id")
+  ticketId  String   @map("ticket_id")
+  userId    String   @map("user_id")
+  helpful   Boolean
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([ticketId])
+  @@map("ai_support_feedback")
 }
 
 // ============================================

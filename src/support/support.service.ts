@@ -1,14 +1,24 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateTicketDto, SendMessageDto } from './dto/support.dto';
+import { CreateTicketDto, SendMessageDto, AiFeedbackDto } from './dto/support.dto';
 import { SupportTicketStatus } from '@prisma/client';
+import { AiSupportOrchestratorService } from '../ai-support/ai-support-orchestrator.service';
 
 @Injectable()
 export class SupportService {
+  private readonly logger = new Logger(SupportService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly aiSupport: AiSupportOrchestratorService,
   ) {}
 
   // ============================================
@@ -81,7 +91,148 @@ export class SupportService {
       });
     }
 
-    return message;
+    let botMessage: Awaited<ReturnType<AiSupportOrchestratorService['handleUserMessage']>> = null;
+    if (!ticket.assignedTo && (await this.aiSupport.canRunAiSupport())) {
+      try {
+        botMessage = await this.aiSupport.handleUserMessage({
+          ticketId,
+          userId,
+          userMessageContent: dto.content,
+        });
+      } catch (e) {
+        this.logger.warn(`AI support orchestration failed: ${(e as Error).message}`);
+      }
+    }
+
+    return { message, botMessage };
+  }
+
+  /**
+   * Same as sendUserMessage but emits SSE: user_message, chunk (optional), done.
+   */
+  async sendUserMessageStream(
+    ticketId: string,
+    userId: string,
+    dto: SendMessageDto,
+    emit: (event: string, data: Record<string, unknown>) => void,
+  ) {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      include: { customerService: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (ticket.userId !== userId) throw new ForbiddenException('Not your ticket');
+    if (ticket.status === 'CLOSED') throw new ForbiddenException('Ticket is closed');
+
+    const message = await this.prisma.supportMessage.create({
+      data: {
+        ticketId,
+        senderId: userId,
+        senderType: 'USER',
+        content: dto.content,
+        image: dto.image,
+      },
+    });
+
+    if (ticket.customerService) {
+      this.eventEmitter.emit('support.customer_replied', {
+        ticketId,
+        csAgentSuperUserId: ticket.customerService.superUserId,
+      });
+    }
+
+    emit('user_message', { message });
+
+    let botMessage: Awaited<ReturnType<AiSupportOrchestratorService['handleUserMessage']>> = null;
+    if (!ticket.assignedTo && (await this.aiSupport.canRunAiSupport())) {
+      try {
+        botMessage = await this.aiSupport.handleUserMessage({
+          ticketId,
+          userId,
+          userMessageContent: dto.content,
+          onStreamChunk: async (chunk: string) => {
+            emit('chunk', { text: chunk });
+          },
+        });
+      } catch (e) {
+        this.logger.warn(`AI support stream orchestration failed: ${(e as Error).message}`);
+      }
+    }
+
+    emit('done', { botMessage: botMessage ?? null });
+  }
+
+  async submitAiFeedback(ticketId: string, userId: string, dto: AiFeedbackDto) {
+    const msg = await this.prisma.supportMessage.findFirst({
+      where: {
+        id: dto.messageId,
+        ticketId,
+        senderType: 'BOT',
+      },
+    });
+    if (!msg) throw new NotFoundException('Bot message not found');
+
+    const ticket = await this.prisma.supportTicket.findUnique({ where: { id: ticketId } });
+    if (!ticket || ticket.userId !== userId) throw new ForbiddenException('Not your ticket');
+
+    await this.prisma.aiSupportFeedback.upsert({
+      where: { messageId: dto.messageId },
+      create: {
+        messageId: dto.messageId,
+        ticketId,
+        userId,
+        helpful: dto.helpful,
+      },
+      update: { helpful: dto.helpful },
+    });
+
+    if (!dto.helpful) {
+      const negativeCount = await this.prisma.aiSupportFeedback.count({
+        where: { ticketId, helpful: false },
+      });
+      if (negativeCount === 2) {
+        this.eventEmitter.emit('support.ai_negative_feedback_twice', { ticketId, userId });
+      }
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Generate a bot reply for the latest user message without creating a new user row.
+   * Used when the mobile client could not read the SSE stream but the user message was already persisted.
+   */
+  async generateAiFollowup(ticketId: string, userId: string) {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      include: {
+        messages: { orderBy: { timestamp: 'asc' } },
+      },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (ticket.userId !== userId) throw new ForbiddenException('Not your ticket');
+    if (ticket.assignedTo) throw new ForbiddenException('Ticket is assigned; AI is disabled');
+    if (ticket.status === 'CLOSED') throw new ForbiddenException('Ticket is closed');
+
+    const last = ticket.messages[ticket.messages.length - 1];
+    if (!last || last.senderType !== 'USER' || last.senderId !== userId) {
+      throw new BadRequestException('No pending user message to answer');
+    }
+
+    let botMessage: Awaited<ReturnType<AiSupportOrchestratorService['handleUserMessage']>> = null;
+    if (await this.aiSupport.canRunAiSupport()) {
+      try {
+        botMessage = await this.aiSupport.handleUserMessage({
+          ticketId,
+          userId,
+          userMessageContent: last.content,
+        });
+      } catch (e) {
+        this.logger.warn(`AI follow-up failed: ${(e as Error).message}`);
+      }
+    }
+
+    return { botMessage };
   }
 
   // ============================================
@@ -197,10 +348,16 @@ export class SupportService {
 
   // Mark messages as read
   async markMessagesRead(ticketId: string, readerType: 'USER' | 'CUSTOMER_SERVICE') {
-    // Mark messages from the OTHER side as read
-    const senderType = readerType === 'USER' ? 'CUSTOMER_SERVICE' : 'USER';
+    // Mark messages from the OTHER side as read (BOT counts as support-side for USER readers)
     await this.prisma.supportMessage.updateMany({
-      where: { ticketId, senderType, readAt: null },
+      where: {
+        ticketId,
+        readAt: null,
+        senderType:
+          readerType === 'USER'
+            ? { in: ['CUSTOMER_SERVICE', 'BOT'] }
+            : 'USER',
+      },
       data: { readAt: new Date() },
     });
   }

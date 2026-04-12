@@ -38,18 +38,18 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       }
 
       let payload: any;
+      const secretStr = this.configService.get<string>('JWT_SECRET');
       try {
-        // Try @nestjs/jwt first (for mobile app tokens)
-        payload = this.jwtService.verify(token, {
-          secret: this.configService.get<string>('JWT_SECRET'),
-        });
-      } catch (jwtError) {
-        // Try jose verification (for control panel tokens signed with jose)
+        // Control panel (delivery-control) signs with jose — try that first
+        const secret = new TextEncoder().encode(secretStr);
+        const { payload: josePayload } = await jwtVerify(token, secret);
+        payload = josePayload;
+      } catch (joseError) {
         try {
-          const secret = new TextEncoder().encode(this.configService.get<string>('JWT_SECRET'));
-          const { payload: josePayload } = await jwtVerify(token, secret);
-          payload = josePayload;
-        } catch (joseError) {
+          payload = this.jwtService.verify(token, {
+            secret: secretStr,
+          });
+        } catch (jwtError) {
           this.logger.warn(`JWT verification failed for both methods`);
           client.disconnect();
           return;

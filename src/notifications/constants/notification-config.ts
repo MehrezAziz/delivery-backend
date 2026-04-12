@@ -88,6 +88,7 @@ export const DEFAULT_PRIORITY: Record<NotificationType, NotificationPriority> = 
   [NotificationType.TICKET_ASSIGNED]: NotificationPriority.HIGH,
   [NotificationType.CUSTOMER_REPLIED_TICKET]: NotificationPriority.HIGH,
   [NotificationType.URGENT_TICKET_UNRESOLVED]: NotificationPriority.CRITICAL,
+  [NotificationType.SUPPORT_HUMAN_REQUESTED]: NotificationPriority.CRITICAL,
   // CS - Disputes
   [NotificationType.DISPUTE_ASSIGNED]: NotificationPriority.HIGH,
   [NotificationType.DISPUTE_REQUIRES_DECISION]: NotificationPriority.HIGH,

@@ -295,6 +295,12 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
     title: 'Urgent Ticket Unresolved',
     body: `An urgent support ticket remains unresolved.`,
   }),
+  SUPPORT_HUMAN_REQUESTED: (d) => ({
+    title: 'Customer requested a human agent',
+    body: d?.ticketId
+      ? `Support ticket ${d.ticketId}: user asked for a real agent.`
+      : `A user asked to speak with a real support agent on a ticket.`,
+  }),
 
   // CS - Disputes
   DISPUTE_ASSIGNED: (d) => ({

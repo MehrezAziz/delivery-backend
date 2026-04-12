@@ -1,11 +1,53 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { NotificationType } from '@prisma/client';
+import { NotificationPriority, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications.service';
 
 @Injectable()
 export class SupportNotificationListener {
   constructor(private notificationsService: NotificationsService) {}
+
+  @OnEvent('support.ai_negative_feedback_twice')
+  async handleAiNegativeFeedbackTwice(payload: { ticketId: string; userId: string }) {
+    await this.notificationsService.sendToAllAdmins(NotificationType.SUPPORT_HUMAN_REQUESTED, {
+      title: 'AI support rated not helpful twice',
+      body: `Ticket ${payload.ticketId}: the user gave two negative helpfulness ratings on bot replies. Please review the conversation.`,
+      priority: NotificationPriority.HIGH,
+      relatedEntityType: 'SupportTicket',
+      relatedEntityId: payload.ticketId,
+    });
+    await this.notificationsService.sendToCSWithPermission(
+      'MANAGE_SUPPORT_TICKETS',
+      NotificationType.SUPPORT_HUMAN_REQUESTED,
+      {
+        title: 'AI support rated not helpful twice',
+        body: `Ticket ${payload.ticketId}: two "not helpful" ratings on AI replies.`,
+        priority: NotificationPriority.HIGH,
+        relatedEntityType: 'SupportTicket',
+        relatedEntityId: payload.ticketId,
+      },
+    );
+  }
+
+  @OnEvent('support.human_requested')
+  async handleHumanRequested(payload: { ticketId: string; userId: string }) {
+    await this.notificationsService.sendToAllAdmins(NotificationType.SUPPORT_HUMAN_REQUESTED, {
+      relatedEntityType: 'SupportTicket',
+      relatedEntityId: payload.ticketId,
+      priority: NotificationPriority.CRITICAL,
+      templateData: { ticketId: payload.ticketId },
+    });
+    await this.notificationsService.sendToCSWithPermission(
+      'MANAGE_SUPPORT_TICKETS',
+      NotificationType.SUPPORT_HUMAN_REQUESTED,
+      {
+        relatedEntityType: 'SupportTicket',
+        relatedEntityId: payload.ticketId,
+        priority: NotificationPriority.HIGH,
+        templateData: { ticketId: payload.ticketId },
+      },
+    );
+  }
 
   @OnEvent('support.new_ticket')
   async handleNewTicket(payload: { ticketId: string; userId: string }) {

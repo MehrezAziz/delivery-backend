@@ -1,4 +1,4 @@
-import { IsString, IsEnum, IsOptional } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsBoolean } from 'class-validator';
 import { SupportTicketCategory, SupportTicketPriority } from '@prisma/client';
 
 export class CreateTicketDto {
@@ -19,4 +19,12 @@ export class SendMessageDto {
   @IsOptional()
   @IsString()
   image?: string;
+}
+
+export class AiFeedbackDto {
+  @IsString()
+  messageId!: string;
+
+  @IsBoolean()
+  helpful!: boolean;
 }
