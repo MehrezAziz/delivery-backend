@@ -19,6 +19,7 @@ import { ReferralModule } from './referral/referral.module';
 import { GeographyModule } from './geography/geography.module';
 import { SupportModule } from './support/support.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ControlPanelModule } from './control-panel/control-panel.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     ReferralModule,
     GeographyModule,
     SupportModule,
+    ControlPanelModule,
   ],
   controllers: [AppController],
   providers: [

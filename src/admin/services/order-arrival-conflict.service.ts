@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   CustomerStatus,
   DriverStatus,
@@ -8,7 +9,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class OrderArrivalConflictService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   async list(status?: string) {
     return this.prisma.orderDriverArrivalConflict.findMany({
@@ -72,6 +76,10 @@ export class OrderArrivalConflictService {
         });
       }
     });
+
+    if (action === 'SUSPEND_CUSTOMER') {
+      this.eventEmitter.emit('account.suspended', { userId: conflict.customer.userId });
+    }
 
     return { message: 'Resolution recorded' };
   }
