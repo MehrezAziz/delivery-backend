@@ -31,6 +31,7 @@
 
 - **`POST /support/tickets/:id/messages`**: Saves the user message first; if the ticket is **unassigned** and AI is **effectively enabled** (env + DB + Groq), the orchestrator runs and returns **`{ message, botMessage }`**. Otherwise `botMessage` is `null`.
 - **`POST /support/tickets/:id/messages/stream`**: Same as above but responds with **Server-Sent Events**: `user_message`, then **`chunk`** events (Groq **token stream** when enabled, otherwise 32-char slices of the final text), then **`done`** with the persisted `botMessage` (or `null`).
+- **`POST /support/tickets/:id/ai-followup`**: If SSE failed on the client but the **user message was already saved**, call this to **run the AI once** without inserting another user row (avoids duplicate lines). Throttled like stream.
 - **`POST /support/tickets/:id/ai-feedback`**: Body `{ messageId, helpful }` — stores feedback for a **BOT** message on the user’s ticket.
 - **`PATCH .../read` (user)**: Marks **`CUSTOMER_SERVICE`** and **`BOT`** messages as read.
 
@@ -59,6 +60,8 @@
 |----------|------|
 | `GROQ_API_KEY` | Groq API secret (server only). |
 | `GROQ_MODEL` | Model id (e.g. `llama-3.3-70b-versatile`). |
+| `GROQ_MODEL_FALLBACK` | Optional secondary model id used when the primary hits **daily** quota (TPD); TPM 429 uses retries instead. |
+| `GROQ_MAX_TOKENS` | Max output tokens for completions/stream (default 900; clamped 256–4096). |
 | `AI_SUPPORT_ENABLED` | Must be `true` / `1` / `on` / `yes` for AI to be eligible; admin can still disable via DB. |
 | `AI_SUPPORT_POLICIES` | Optional extra policy text appended to the system prompt. |
 
@@ -76,6 +79,8 @@ Apply with `npx prisma migrate deploy` in each environment (includes `ai_support
 | Message row (BOT, citations, track, helpfulness) | `components/support/SupportChatMessageItem.tsx` |
 | Customer chat (stream + track-driver link) | `app/(customer)/support-chat.tsx` |
 | Driver chat (stream, no track CTA) | `app/(driver)/support-chat.tsx` |
+
+**Mobile note:** On React Native, SSE uses **`XMLHttpRequest`** progressive `responseText` because `fetch` often has no `response.body`; on failure after the user row exists, call **`aiFollowup`** (see `support.service.ts`).
 
 ---
 
@@ -109,4 +114,4 @@ Apply with `npx prisma migrate deploy` in each environment (includes `ai_support
 
 ---
 
-*Last updated: token streaming, transcript cap, admin analytics API, throttles, delivery-control AI Support page, prompt-based policies (no RAG).*
+*Last updated: token streaming, `ai-followup`, Groq TPD fallback + `GROQ_MAX_TOKENS`, admin analytics API, throttles, delivery-control AI Support page, prompt-based policies (no RAG). Workspace summary: `../project-status.md`; rapport (conception IA): `../pde-rapport/conception-intelligence-artificielle.md`.*
