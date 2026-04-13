@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from './services/price-calculation.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { CreateOrderDto, PreviewOrderDto, ChangePaymentMethodDto, OrderResponseDto } from './dto/order.dto';
-import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus, DriverStatus, NotificationType } from '@prisma/client';
+import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus, DriverStatus, NotificationType, CustomerServiceRole } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -977,8 +977,9 @@ export class OrdersService {
         relatedEntityId: orderId,
         templateData: { reason: reason!.trim() },
       });
-      await this.notificationsService.sendToCustomerServiceForGovernorate(
-        govId,
+      await this.notificationsService.sendToCsWithPermissionForGovernorates(
+        [govId],
+        CustomerServiceRole.MANAGE_DISPUTES,
         NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_CS,
         {
           relatedEntityType: 'Order',
@@ -1030,8 +1031,9 @@ export class OrdersService {
     });
     const govId = orderForGov?.pickupAddress?.delegation?.governorateId;
     if (govId) {
-      await this.notificationsService.sendToCustomerServiceForGovernorate(
-        govId,
+      await this.notificationsService.sendToCsWithPermissionForGovernorates(
+        [govId],
+        CustomerServiceRole.MANAGE_DISPUTES,
         NotificationType.ARRIVAL_CONFLICT_DRIVER_FEEDBACK_CS,
         {
           relatedEntityType: 'Order',
