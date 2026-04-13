@@ -292,4 +292,61 @@ export class NotificationsService {
     );
     await Promise.allSettled(promises);
   }
+
+  /** CS agents assigned to this governorate (any role set on the CS row). */
+  async sendToCustomerServiceForGovernorate(
+    governorateId: string,
+    type: NotificationType,
+    options: Omit<SendNotificationDto, 'userId' | 'userType' | 'type'> = {},
+  ) {
+    const agents = await this.prisma.customerService.findMany({
+      where: {
+        governorates: { some: { governorateId } },
+        superUser: { status: 'ACTIVE' },
+      },
+      include: { superUser: { select: { id: true } } },
+    });
+    await Promise.allSettled(
+      agents.map((cs) =>
+        this.send({ ...options, userId: cs.superUser.id, userType: 'SUPER_USER', type }),
+      ),
+    );
+  }
+
+  /**
+   * CS agents with a permission and at least one matching governorate assignment.
+   * If governorateIds is empty, falls back to all CS with the permission (no geographic assignment on file).
+   */
+  async sendToCsWithPermissionForGovernorates(
+    governorateIds: string[],
+    permission: string,
+    type: NotificationType,
+    options: Omit<SendNotificationDto, 'userId' | 'userType' | 'type'> = {},
+  ) {
+    if (!governorateIds.length) {
+      return this.sendToCSWithPermission(permission, type, options);
+    }
+    const agents = await this.prisma.customerService.findMany({
+      where: {
+        roles: { has: permission as any },
+        governorates: { some: { governorateId: { in: governorateIds } } },
+        superUser: { status: 'ACTIVE' },
+      },
+      include: { superUser: { select: { id: true } } },
+    });
+    await Promise.allSettled(
+      agents.map((cs) =>
+        this.send({ ...options, userId: cs.superUser.id, userType: 'SUPER_USER', type }),
+      ),
+    );
+  }
+
+  async getGovernorateIdsForUser(userId: string): Promise<string[]> {
+    const addresses = await this.prisma.address.findMany({
+      where: { userId },
+      select: { delegation: { select: { governorateId: true } } },
+      take: 10,
+    });
+    return [...new Set(addresses.map((a) => a.delegation.governorateId))];
+  }
 }

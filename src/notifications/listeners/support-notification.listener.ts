@@ -16,7 +16,9 @@ export class SupportNotificationListener {
       relatedEntityType: 'SupportTicket',
       relatedEntityId: payload.ticketId,
     });
-    await this.notificationsService.sendToCSWithPermission(
+    const govIds = await this.notificationsService.getGovernorateIdsForUser(payload.userId);
+    await this.notificationsService.sendToCsWithPermissionForGovernorates(
+      govIds,
       'MANAGE_SUPPORT_TICKETS',
       NotificationType.SUPPORT_HUMAN_REQUESTED,
       {
@@ -37,7 +39,9 @@ export class SupportNotificationListener {
       priority: NotificationPriority.CRITICAL,
       templateData: { ticketId: payload.ticketId },
     });
-    await this.notificationsService.sendToCSWithPermission(
+    const govIds = await this.notificationsService.getGovernorateIdsForUser(payload.userId);
+    await this.notificationsService.sendToCsWithPermissionForGovernorates(
+      govIds,
       'MANAGE_SUPPORT_TICKETS',
       NotificationType.SUPPORT_HUMAN_REQUESTED,
       {
@@ -51,8 +55,9 @@ export class SupportNotificationListener {
 
   @OnEvent('support.new_ticket')
   async handleNewTicket(payload: { ticketId: string; userId: string }) {
-    // Notify CS agents with MANAGE_SUPPORT_TICKETS permission
-    await this.notificationsService.sendToCSWithPermission(
+    const govIds = await this.notificationsService.getGovernorateIdsForUser(payload.userId);
+    await this.notificationsService.sendToCsWithPermissionForGovernorates(
+      govIds,
       'MANAGE_SUPPORT_TICKETS',
       NotificationType.NEW_SUPPORT_TICKET,
       { relatedEntityType: 'SupportTicket', relatedEntityId: payload.ticketId },

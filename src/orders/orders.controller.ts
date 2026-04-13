@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
+import { OrderUrgentNotifyService } from './services/order-urgent-notify.service';
 import { CreateOrderDto, PreviewOrderDto, CancelOrderDto, ChangePaymentMethodDto, UpdateOrderStatusDto, SendChatMessageDto, CreateDisputeDto, RequestAssistanceDto, RateOrderDto } from './dto/order.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, CustomerGuard, DriverGuard, UserActiveGuard, UserRestrictionGuard, VerifiedDriverGuard } from '../auth/guards/auth.guards';
@@ -16,6 +17,7 @@ export class OrdersController {
   constructor(
     private readonly ordersService: OrdersService,
     private readonly driverAssignmentService: DriverAssignmentService,
+    private readonly orderUrgentNotifyService: OrderUrgentNotifyService,
   ) {}
 
   @Post()
@@ -34,6 +36,12 @@ export class OrdersController {
   @UseGuards(CustomerGuard)
   async getMyOrders(@CurrentUser() user: AuthenticatedUser) {
     return this.ordersService.getCustomerOrders(user.id);
+  }
+
+  @Post(':id/notify-drivers')
+  @UseGuards(CustomerGuard, UserActiveGuard, UserRestrictionGuard)
+  async notifyDrivers(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
+    return this.orderUrgentNotifyService.customerRequestNotify(orderId, user.id);
   }
 
   @Get(':id')
@@ -100,6 +108,16 @@ export class OrdersController {
   @UseGuards(CustomerGuard)
   async rejectDriver(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() body: { reason?: string }) {
     return this.ordersService.rejectDriver(orderId, user.id, body.reason);
+  }
+
+  @Post(':id/arrival-conflict/feedback')
+  @UseGuards(DriverGuard)
+  async arrivalConflictFeedback(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body() body: { feedback: string },
+  ) {
+    return this.ordersService.submitArrivalConflictDriverFeedback(orderId, user.id, body.feedback);
   }
 
   @Post(':id/approve-driver')

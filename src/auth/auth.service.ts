@@ -180,6 +180,7 @@ export class AuthService {
         data: {
           userId: user.id,
           referredByCodeId: validatedCode?.id,
+          termsAcceptedAt: new Date(),
         },
       });
 
@@ -647,7 +648,13 @@ export class AuthService {
   /**
    * Google OAuth login/register
    */
-  async googleAuth(idToken: string, role: UserRole, referralCode?: string, isLoginOnly: boolean = false): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
+  async googleAuth(
+    idToken: string,
+    role: UserRole,
+    referralCode?: string,
+    isLoginOnly: boolean = false,
+    acceptTerms?: boolean,
+  ): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
     const { OAuth2Client } = require('google-auth-library');
     const client = new OAuth2Client(this.configService.get('GOOGLE_CLIENT_ID'));
 
@@ -721,7 +728,9 @@ export class AuthService {
 
       // If user doesn't exist, register new user
       if (role === UserRole.CUSTOMER) {
-        // For customers, use the full registration flow with referral code support
+        if (acceptTerms !== true) {
+          throw new BadRequestException('You must accept the application terms to register');
+        }
         return await this.registerCustomerWithGoogle(
           googleId,
           googleEmail,
@@ -891,6 +900,7 @@ export class AuthService {
         data: {
           userId: user.id,
           referredByCodeId: validatedCode?.id,
+          termsAcceptedAt: new Date(),
         },
       });
 

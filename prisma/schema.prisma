@@ -279,6 +279,10 @@ enum NotificationType {
   DISPUTE_REQUIRES_DECISION
   // CS - Order Monitoring
   DELAYED_ORDER_ALERT
+  NEW_ORDER_FOR_CUSTOMER_SERVICE
+  CUSTOMER_REJECTED_ARRIVED_DRIVER_CS
+  CUSTOMER_REJECTED_ARRIVED_DRIVER_TO_DRIVER
+  ARRIVAL_CONFLICT_DRIVER_FEEDBACK_CS
 }
 
 enum NotificationPriority {
@@ -312,6 +316,13 @@ enum DeliveryZoneType {
   SAME_GOVERNORATE
   DIFFERENT_GOVERNORATE
   DIFFERENT_COUNTRY
+}
+
+enum OrderDriverArrivalConflictStatus {
+  PENDING
+  RESOLVED_FORGIVE
+  RESOLVED_SUSPEND_CUSTOMER
+  RESOLVED_SUSPEND_DRIVER
 }
 
 enum CustomerServiceRole {
@@ -387,6 +398,7 @@ model Customer {
   completedOrders  Int            @default(0) @map("completed_orders")
   customerStatus   CustomerStatus @default(CREATED) @map("customer_status")
   referredByCodeId String?        @map("referred_by_code_id")
+  termsAcceptedAt  DateTime?      @map("terms_accepted_at")
 
   // Relations
   user                      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -398,6 +410,7 @@ model Customer {
   commissionsAsReferrer     ReferralCommission[] @relation("ReferrerCommissions")
   commissionsAsReferred     ReferralCommission[] @relation("ReferredCommissions")
   chatRoomsAsCustomer       ChatRoom[]
+  orderArrivalConflicts     OrderDriverArrivalConflict[]
 
   @@map("customers")
 }
@@ -428,6 +441,8 @@ model Driver {
   performanceMetrics       DriverPerformanceMetrics?
   chatRoomsAsDriver        ChatRoom[]
   orderRejections          OrderDriverRejection[]
+  urgentNotifyTargets      OrderUrgentNotifyTarget[]
+  arrivalConflicts         OrderDriverArrivalConflict[]
 
   @@map("drivers")
 }
@@ -451,6 +466,7 @@ model CustomerService {
   superUser      SuperUser       @relation(fields: [superUserId], references: [id], onDelete: Cascade)
   disputes       Dispute[]
   supportTickets SupportTicket[]
+  governorates   CustomerServiceGovernorate[]
 
   @@map("customer_services")
 }
@@ -691,8 +707,9 @@ model Governorate {
   countryId       String @map("country_id")
 
   // Relations
-  country     Country      @relation(fields: [countryId], references: [id], onDelete: Cascade)
-  delegations Delegation[]
+  country                      Country                      @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  delegations                  Delegation[]
+  customerServiceGovernorates  CustomerServiceGovernorate[]
 
   @@map("governorates")
 }
@@ -715,6 +732,8 @@ model Address {
   latitude     Float?
   longitude    Float?
   street       String?
+  /// Customer-chosen label e.g. "house of my father" (saved addresses only)
+  nickname     String? @map("nickname")
   delegationId String  @map("delegation_id")
   userId       String? @map("user_id")
 
@@ -773,10 +792,16 @@ model Order {
   extraWeightFee    Decimal     @default(0) @db.Decimal(10, 2) @map("extra_weight_fee")
   cancelAfterMinutes Int        @default(15) @map("cancel_after_minutes")
   isNightDelivery   Boolean     @default(false) @map("is_night_delivery")
+  /// Pickup at customer location only; driver brings goods from within delegation (≤2 km pricing)
+  localPickupOnly   Boolean     @default(false) @map("local_pickup_only")
   guestCheckout     Boolean     @default(false) @map("guest_checkout")
   trackingToken     String?     @unique @map("tracking_token")
   trackingExpiresAt DateTime?   @map("tracking_expires_at")
   createdAt         DateTime    @default(now()) @map("created_at")
+  urgentNotifyWavesSent       Int       @default(0) @map("urgent_notify_waves_sent")
+  urgentNotifyCycleStartedAt  DateTime? @map("urgent_notify_cycle_started_at")
+  urgentNotifyLastButtonAt    DateTime? @map("urgent_notify_last_button_at")
+  urgentNotifyCycleId         String?   @map("urgent_notify_cycle_id")
 
   // Relations
   customer            Customer              @relation(fields: [customerId], references: [id])
@@ -792,10 +817,60 @@ model Order {
   chatRoom            ChatRoom?
   driverLocations     DriverLocation[]
   driverRejections    OrderDriverRejection[]
+  urgentNotifyTargets OrderUrgentNotifyTarget[]
+  arrivalConflict     OrderDriverArrivalConflict?
 
   @@index([customerId, status])
   @@index([status, createdAt])
   @@map("orders")
+}
+
+model CustomerServiceGovernorate {
+  id                  String          @id @default(uuid())
+  customerServiceId   String          @map("customer_service_id")
+  governorateId       String          @map("governorate_id")
+  customerService     CustomerService @relation(fields: [customerServiceId], references: [id], onDelete: Cascade)
+  governorate         Governorate     @relation(fields: [governorateId], references: [id], onDelete: Cascade)
+
+  @@unique([customerServiceId, governorateId])
+  @@map("customer_service_governorates")
+}
+
+model OrderUrgentNotifyTarget {
+  id        String   @id @default(uuid())
+  orderId   String   @map("order_id")
+  cycleId   String   @map("cycle_id")
+  driverId  String   @map("driver_id")
+  waveIndex Int      @map("wave_index")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, cycleId, driverId])
+  @@index([orderId, cycleId])
+  @@map("order_urgent_notify_targets")
+}
+
+model OrderDriverArrivalConflict {
+  id                     String                         @id @default(uuid())
+  orderId                String                         @unique @map("order_id")
+  customerId             String                         @map("customer_id")
+  driverId               String                         @map("driver_id")
+  customerReason         String                         @map("customer_reason")
+  driverFeedback         String?                        @map("driver_feedback")
+  status                 OrderDriverArrivalConflictStatus @default(PENDING)
+  resolvedBySuperUserId  String?                        @map("resolved_by_super_user_id")
+  resolvedAt             DateTime?                      @map("resolved_at")
+  resolutionNote         String?                        @map("resolution_note")
+  createdAt              DateTime                       @default(now()) @map("created_at")
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  driver   Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@map("order_driver_arrival_conflicts")
 }
 
 model DriverAssignment {

@@ -22,6 +22,7 @@ export class AddressService {
         latitude: dto.latitude,
         longitude: dto.longitude,
         street: dto.street,
+        nickname: dto.nickname?.trim() || null,
         delegationId: dto.delegationId,
       },
       include: {
@@ -128,6 +129,7 @@ export class AddressService {
       latitude: address.latitude,
       longitude: address.longitude,
       street: address.street,
+      nickname: address.nickname ?? null,
       userId: address.userId,
       delegation: {
         id: address.delegation.id,

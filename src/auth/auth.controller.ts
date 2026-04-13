@@ -159,7 +159,13 @@ export class AuthController {
   @Post('google')
   @HttpCode(HttpStatus.OK)
   async googleAuth(@Body() dto: GoogleAuthDto): Promise<RegisterCustomerResponseDto | AuthTokensDto> {
-    return this.authService.googleAuth(dto.idToken, dto.role, dto.referralCode, dto.isLoginOnly ?? false);
+    return this.authService.googleAuth(
+      dto.idToken,
+      dto.role,
+      dto.referralCode,
+      dto.isLoginOnly ?? false,
+      dto.acceptTerms,
+    );
   }
 
   /**

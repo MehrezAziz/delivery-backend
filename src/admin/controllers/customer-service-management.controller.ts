@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Put,
   Delete,
   Body,
   Param,
@@ -13,6 +14,7 @@ import type {
   CreateCustomerServiceDto,
   UpdateCustomerServiceDto,
   UpdateCustomerServiceRolesDto,
+  SetCustomerServiceGovernoratesDto,
 } from '../dto/customer-service.dto';
 import { JwtSuperUserGuard, AdminGuard } from '../../auth/guards/auth.guards';
 
@@ -37,6 +39,25 @@ export class CustomerServiceManagementController {
   @Get()
   async getAllCustomerServices() {
     return this.customerServiceManagementService.getAllCustomerServices();
+  }
+
+  /**
+   * Replace governorate coverage for a CS account (admin).
+   */
+  @Put(':id/governorates')
+  async setGovernorates(
+    @Param('id') id: string,
+    @Body() dto: SetCustomerServiceGovernoratesDto,
+  ) {
+    return this.customerServiceManagementService.setGovernorates(id, dto.governorateIds);
+  }
+
+  /**
+   * Assign every governorate of a country to this CS (merge; duplicates skipped).
+   */
+  @Post(':id/governorates/by-country/:countryId')
+  async addGovernoratesByCountry(@Param('id') id: string, @Param('countryId') countryId: string) {
+    return this.customerServiceManagementService.addAllGovernoratesForCountry(id, countryId);
   }
 
   /**

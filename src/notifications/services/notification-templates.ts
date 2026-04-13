@@ -317,6 +317,22 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
     title: 'Delayed Order Alert',
     body: `An order delivery is delayed beyond the expected time.`,
   }),
+  NEW_ORDER_FOR_CUSTOMER_SERVICE: (d) => ({
+    title: 'New order created',
+    body: `A new order was placed in your assigned governorate.`,
+  }),
+  CUSTOMER_REJECTED_ARRIVED_DRIVER_CS: (d) => ({
+    title: 'Customer rejected driver (arrived)',
+    body: `${d?.customerName || 'Customer'} rejected ${d?.driverName || 'driver'}: ${d?.reason || ''}`,
+  }),
+  CUSTOMER_REJECTED_ARRIVED_DRIVER_TO_DRIVER: (d) => ({
+    title: 'Customer declined after arrival',
+    body: `Reason given: ${d?.reason || '(none)'}. You may add your feedback in the app.`,
+  }),
+  ARRIVAL_CONFLICT_DRIVER_FEEDBACK_CS: (d) => ({
+    title: 'Driver responded to arrival incident',
+    body: `Order ${d?.orderIdShort || ''}: driver submitted feedback. Review in admin.`,
+  }),
 };
 
 export function getNotificationTemplate(

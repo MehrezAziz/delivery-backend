@@ -94,4 +94,8 @@ export const DEFAULT_PRIORITY: Record<NotificationType, NotificationPriority> = 
   [NotificationType.DISPUTE_REQUIRES_DECISION]: NotificationPriority.HIGH,
   // CS - Order Monitoring
   [NotificationType.DELAYED_ORDER_ALERT]: NotificationPriority.HIGH,
+  [NotificationType.NEW_ORDER_FOR_CUSTOMER_SERVICE]: NotificationPriority.HIGH,
+  [NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_CS]: NotificationPriority.CRITICAL,
+  [NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_TO_DRIVER]: NotificationPriority.HIGH,
+  [NotificationType.ARRIVAL_CONFLICT_DRIVER_FEEDBACK_CS]: NotificationPriority.HIGH,
 };

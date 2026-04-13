@@ -4,16 +4,19 @@ import { OrdersService } from './orders.service';
 import { PriceCalculationService } from './services/price-calculation.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { AutoCancelService } from './services/auto-cancel.service';
+import { OrderUrgentNotifyService } from './services/order-urgent-notify.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, NotificationsModule],
   controllers: [OrdersController, DriverOrdersController, AdminOrdersController, PublicTrackingController],
   providers: [
     OrdersService,
     PriceCalculationService,
     DriverAssignmentService,
     AutoCancelService,
+    OrderUrgentNotifyService,
   ],
   exports: [OrdersService, PriceCalculationService, DriverAssignmentService],
 })

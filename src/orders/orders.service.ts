@@ -2,15 +2,19 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from './services/price-calculation.service';
+import { DriverAssignmentService } from './services/driver-assignment.service';
 import { CreateOrderDto, PreviewOrderDto, ChangePaymentMethodDto, OrderResponseDto } from './dto/order.dto';
-import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus } from '@prisma/client';
+import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus, DriverStatus, NotificationType } from '@prisma/client';
 import { randomBytes } from 'crypto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly priceCalculationService: PriceCalculationService,
+    private readonly driverAssignmentService: DriverAssignmentService,
+    private readonly notificationsService: NotificationsService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -58,33 +62,59 @@ export class OrdersService {
     });
     if (!customer) throw new NotFoundException('Customer profile not found');
 
-    const [pickupAddr, dropoffAddr] = await Promise.all([
-      this.prisma.address.findUnique({
-        where: { id: dto.pickupAddressId },
-        include: { delegation: { include: { governorate: { include: { country: true } } } } },
-      }),
-      this.prisma.address.findUnique({
-        where: { id: dto.dropoffAddressId },
-        include: { delegation: { include: { governorate: { include: { country: true } } } } },
-      }),
-    ]);
-    if (!pickupAddr || !dropoffAddr) throw new NotFoundException('Address not found');
+    const localPickup = !!dto.localPickupOnly;
+    if (localPickup && dto.dropoffAddressId) {
+      throw new BadRequestException('Local pickup orders do not use a separate drop-off address');
+    }
+    if (!localPickup && !dto.dropoffAddressId) {
+      throw new BadRequestException('Drop-off address is required unless localPickupOnly is true');
+    }
+
+    const pickupAddr = await this.prisma.address.findUnique({
+      where: { id: dto.pickupAddressId },
+      include: { delegation: { include: { governorate: { include: { country: true } } } } },
+    });
+    if (!pickupAddr) throw new NotFoundException('Address not found');
 
     const country = pickupAddr.delegation.governorate.country;
     const isNight = this.isNightInCountry(country.isoCode);
 
-    const priceCalc = await this.priceCalculationService.calculatePrice(
-      dto.pickupAddressId, dto.dropoffAddressId, dto.weight, isNight,
-    );
-    const distance = this.priceCalculationService.calculateDistance(
-      pickupAddr.latitude!, pickupAddr.longitude!, dropoffAddr.latitude!, dropoffAddr.longitude!,
-    );
+    let priceCalc: Awaited<ReturnType<PriceCalculationService['calculatePrice']>>;
+    let distance: number;
+
+    if (localPickup) {
+      priceCalc = await this.priceCalculationService.calculateLocalPickupOnlyPrice(
+        dto.pickupAddressId,
+        dto.weight,
+        isNight,
+      );
+      distance = 2;
+    } else {
+      const dropoffAddr = await this.prisma.address.findUnique({
+        where: { id: dto.dropoffAddressId! },
+        include: { delegation: { include: { governorate: { include: { country: true } } } } },
+      });
+      if (!dropoffAddr) throw new NotFoundException('Address not found');
+      priceCalc = await this.priceCalculationService.calculatePrice(
+        dto.pickupAddressId,
+        dto.dropoffAddressId!,
+        dto.weight,
+        isNight,
+      );
+      distance = this.priceCalculationService.calculateDistance(
+        pickupAddr.latitude!,
+        pickupAddr.longitude!,
+        dropoffAddr.latitude!,
+        dropoffAddr.longitude!,
+      );
+    }
 
     const walletBalance = customer.wallet ? Number(customer.wallet.balance) : null;
 
     return {
       isNightDelivery: isNight,
       distanceKm: distance,
+      localPickupOnly: localPickup,
       deliveryZoneType: priceCalc.deliveryZoneType,
       baseFee: priceCalc.baseFee,
       distanceFee: priceCalc.distanceFee,
@@ -107,40 +137,80 @@ export class OrdersService {
     if (customer.customerStatus !== CustomerStatus.ACTIVE) {
       throw new ForbiddenException('Only active customers can create orders');
     }
-    const [pickupAddr, dropoffAddr] = await Promise.all([
-      this.prisma.address.findUnique({
-        where: { id: dto.pickupAddressId },
-        include: { delegation: { include: { governorate: { include: { country: true } } } } },
-      }),
-      this.prisma.address.findUnique({
-        where: { id: dto.dropoffAddressId },
-      }),
-    ]);
-    if (!pickupAddr || !dropoffAddr) throw new NotFoundException('Address not found');
+
+    const localPickup = !!dto.localPickupOnly;
+    if (localPickup && dto.dropoffAddressId) {
+      throw new BadRequestException('Local pickup orders do not use a separate drop-off address');
+    }
+    if (!localPickup && !dto.dropoffAddressId) {
+      throw new BadRequestException('Drop-off address is required unless localPickupOnly is true');
+    }
+
+    const pickupAddr = await this.prisma.address.findUnique({
+      where: { id: dto.pickupAddressId },
+      include: { delegation: { include: { governorate: { include: { country: true } } } } },
+    });
+    if (!pickupAddr) throw new NotFoundException('Address not found');
+
+    let dropoffAddr: { id: string; latitude: number | null; longitude: number | null } | null = null;
+    if (!localPickup) {
+      dropoffAddr = await this.prisma.address.findUnique({
+        where: { id: dto.dropoffAddressId! },
+      });
+      if (!dropoffAddr) throw new NotFoundException('Address not found');
+    }
+
     if (dto.paymentType === PaymentType.WALLET && !customer.wallet) {
       throw new BadRequestException('You do not have a digital wallet');
     }
 
-    // Auto-detect night delivery based on pickup country timezone
     const isNight = this.isNightInCountry(pickupAddr.delegation.governorate.country.isoCode);
 
-    const priceCalc = await this.priceCalculationService.calculatePrice(
-      dto.pickupAddressId, dto.dropoffAddressId, dto.weight, isNight,
-    );
-    const distance = this.priceCalculationService.calculateDistance(
-      pickupAddr.latitude!, pickupAddr.longitude!, dropoffAddr.latitude!, dropoffAddr.longitude!,
-    );
+    let priceCalc: Awaited<ReturnType<PriceCalculationService['calculatePrice']>>;
+    let distance: number;
+
+    if (localPickup) {
+      priceCalc = await this.priceCalculationService.calculateLocalPickupOnlyPrice(
+        dto.pickupAddressId,
+        dto.weight,
+        isNight,
+      );
+      distance = 2;
+    } else {
+      priceCalc = await this.priceCalculationService.calculatePrice(
+        dto.pickupAddressId,
+        dto.dropoffAddressId!,
+        dto.weight,
+        isNight,
+      );
+      distance = this.priceCalculationService.calculateDistance(
+        pickupAddr.latitude!,
+        pickupAddr.longitude!,
+        dropoffAddr!.latitude!,
+        dropoffAddr!.longitude!,
+      );
+    }
+
     if (dto.paymentType === PaymentType.WALLET && Number(customer.wallet!.balance) < priceCalc.totalPrice) {
       throw new BadRequestException('Insufficient wallet balance');
     }
+
     const order = await this.prisma.order.create({
       data: {
-        customerId: customer.id, pricingPolicyId: priceCalc.pricingPolicyId,
-        pickupAddressId: dto.pickupAddressId, dropoffAddressId: dto.dropoffAddressId,
-        status: OrderStatus.SEARCHING_DRIVER, paymentType: dto.paymentType,
-        description: dto.description, weight: dto.weight, distanceKm: distance,
-        price: priceCalc.totalPrice, nightFee: priceCalc.nightFee,
-        extraWeightFee: priceCalc.extraWeightFee, isNightDelivery: isNight,
+        customerId: customer.id,
+        pricingPolicyId: priceCalc.pricingPolicyId,
+        pickupAddressId: dto.pickupAddressId,
+        dropoffAddressId: localPickup ? null : dto.dropoffAddressId,
+        localPickupOnly: localPickup,
+        status: OrderStatus.SEARCHING_DRIVER,
+        paymentType: dto.paymentType,
+        description: dto.description,
+        weight: dto.weight,
+        distanceKm: distance,
+        price: priceCalc.totalPrice,
+        nightFee: priceCalc.nightFee,
+        extraWeightFee: priceCalc.extraWeightFee,
+        isNightDelivery: isNight,
         ...(dto.cancelAfterMinutes !== undefined && { cancelAfterMinutes: dto.cancelAfterMinutes }),
       },
       include: this.orderInclude(),
@@ -149,6 +219,7 @@ export class OrdersService {
       orderId: order.id,
       customerId: customer.id,
       userId,
+      pickupGovernorateId: pickupAddr.delegation.governorateId,
     });
     return this.mapToResponseDto(order);
   }
@@ -175,8 +246,17 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Order not found');
     const isCustomer = order.customer?.userId === userId;
     const isDriver = order.driverAssignment?.driver?.userId === userId;
-    if (!isCustomer && !isDriver) throw new ForbiddenException('No access to this order');
-    return this.mapToResponseDto(order);
+    const isConflictDriver = order.arrivalConflict?.driver?.userId === userId;
+    if (!isCustomer && !isDriver && !isConflictDriver) throw new ForbiddenException('No access to this order');
+    const dto = this.mapToResponseDto(order);
+    if (isCustomer && order.pickupAddress && order.status === OrderStatus.SEARCHING_DRIVER) {
+      dto.driverAvailability = await this.computeDriverAvailabilitySummary(
+        order.pickupAddress.delegationId,
+        order.pickupAddress.delegation.governorateId,
+      );
+      dto.urgentNotify = this.buildUrgentNotifySummary(order);
+    }
+    return dto;
   }
 
   async getCustomerOrders(userId: string): Promise<OrderResponseDto[]> {
@@ -808,32 +888,58 @@ export class OrdersService {
   async rejectDriver(orderId: string, userId: string, reason?: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: true, driverAssignment: { include: { driver: { select: { id: true, userId: true } } } } },
+      include: {
+        customer: { include: { user: { select: { firstName: true, secondName: true } } } },
+        pickupAddress: { include: { delegation: true } },
+        driverAssignment: {
+          include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true } } } } },
+        },
+      },
     });
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
-    if (order.status !== OrderStatus.DRIVER_ASSIGNED && (order.status as string) !== 'PENDING_CUSTOMER_APPROVAL') {
-      throw new BadRequestException('You can only reject a driver when the order is pending approval or assigned');
+    const allowedEarly =
+      order.status === OrderStatus.DRIVER_ASSIGNED || (order.status as string) === 'PENDING_CUSTOMER_APPROVAL';
+    const allowedArrived = order.status === OrderStatus.DRIVER_ARRIVED;
+    if (!allowedEarly && !allowedArrived) {
+      throw new BadRequestException('You cannot reject the driver at this stage');
     }
     if (!order.driverAssignment) throw new BadRequestException('No driver assigned');
 
+    if (allowedArrived) {
+      const r = (reason || '').trim();
+      if (r.length < 10) {
+        throw new BadRequestException('Please explain why you are rejecting the driver (at least 10 characters).');
+      }
+    }
+
     const driverId = order.driverAssignment.driverId;
     const rejectedDriverUserId = order.driverAssignment.driver.userId;
+    const customerName =
+      `${order.customer.user?.firstName || ''} ${order.customer.user?.secondName || ''}`.trim() || 'Customer';
+    const driverName =
+      `${order.driverAssignment.driver.user?.firstName || ''} ${order.driverAssignment.driver.user?.secondName || ''}`.trim() ||
+      'Driver';
 
     await this.prisma.$transaction(async (tx) => {
-      // Record the rejection so this driver can't accept again
       await tx.orderDriverRejection.create({
-        data: { orderId, driverId, reason: reason || null },
+        data: { orderId, driverId, reason: reason?.trim() || null },
       });
-      // Delete the assignment
+      if (allowedArrived) {
+        await tx.orderDriverArrivalConflict.create({
+          data: {
+            orderId,
+            customerId: order.customerId,
+            driverId,
+            customerReason: reason!.trim(),
+          },
+        });
+      }
       await tx.driverAssignment.delete({ where: { orderId } });
-      // Set order back to searching
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.SEARCHING_DRIVER } });
-      // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
     });
 
-    // Emit event so notification goes back to "Searching"
     this.eventEmitter.emit('order.driver_rejected', {
       orderId,
       customerUserId: userId,
@@ -843,7 +949,69 @@ export class OrdersService {
       driverUserId: rejectedDriverUserId,
     });
 
+    if (allowedArrived && order.pickupAddress) {
+      const govId = order.pickupAddress.delegation.governorateId;
+      await this.notificationsService.send({
+        userId: rejectedDriverUserId,
+        userType: 'USER',
+        type: NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_TO_DRIVER,
+        relatedEntityType: 'Order',
+        relatedEntityId: orderId,
+        templateData: { reason: reason!.trim() },
+      });
+      await this.notificationsService.sendToCustomerServiceForGovernorate(
+        govId,
+        NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_CS,
+        {
+          relatedEntityType: 'Order',
+          relatedEntityId: orderId,
+          templateData: {
+            customerName,
+            driverName,
+            reason: reason!.trim(),
+          },
+        },
+      );
+    }
+
     return { message: 'Driver rejected. Searching for a new driver.' };
+  }
+
+  async submitArrivalConflictDriverFeedback(orderId: string, driverUserId: string, feedback: string) {
+    const text = feedback.trim();
+    if (text.length < 5) {
+      throw new BadRequestException('Please write at least 5 characters.');
+    }
+    const conflict = await this.prisma.orderDriverArrivalConflict.findUnique({
+      where: { orderId },
+      include: { driver: { include: { user: { select: { id: true } } } } },
+    });
+    if (!conflict) throw new NotFoundException('No incident record for this order');
+    if (conflict.driver.userId !== driverUserId) throw new ForbiddenException('Not your incident');
+    if (conflict.status !== 'PENDING') throw new BadRequestException('This incident is already closed');
+    await this.prisma.orderDriverArrivalConflict.update({
+      where: { orderId },
+      data: { driverFeedback: text },
+    });
+
+    const orderForGov = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { pickupAddress: { include: { delegation: true } } },
+    });
+    const govId = orderForGov?.pickupAddress?.delegation?.governorateId;
+    if (govId) {
+      await this.notificationsService.sendToCustomerServiceForGovernorate(
+        govId,
+        NotificationType.ARRIVAL_CONFLICT_DRIVER_FEEDBACK_CS,
+        {
+          relatedEntityType: 'Order',
+          relatedEntityId: orderId,
+          templateData: { orderIdShort: orderId.slice(0, 8) },
+        },
+      );
+    }
+
+    return { message: 'Feedback saved' };
   }
 
   /** Close the chat room for an order (used on CANCELLED, DELIVERED, REFUNDED) */
@@ -861,12 +1029,98 @@ export class OrdersService {
     return orders.map((o: any) => this.mapToResponseDto(o));
   }
 
+  private capDriverDisplay(n: number): number | string {
+    return n > 10 ? '10+' : n;
+  }
+
+  private async computeDriverAvailabilitySummary(delegationId: string, governorateId: string) {
+    const [inDelegation, nearGov] = await Promise.all([
+      this.prisma.driver.findMany({
+        where: {
+          status: DriverStatus.VERIFIED,
+          user: { addresses: { some: { delegationId } } },
+        },
+        include: {
+          weeklyAvailability: { include: { dayAvailabilities: { include: { timePeriods: true } } } },
+        },
+      }),
+      this.prisma.driver.findMany({
+        where: {
+          status: DriverStatus.VERIFIED,
+          user: {
+            addresses: {
+              some: {
+                delegation: {
+                  governorateId,
+                  id: { not: delegationId },
+                },
+              },
+            },
+          },
+        },
+        include: {
+          weeklyAvailability: { include: { dayAvailabilities: { include: { timePeriods: true } } } },
+        },
+      }),
+    ]);
+
+    const inC = inDelegation.filter((d) =>
+      this.driverAssignmentService.isDriverCurrentlyAvailable(d.weeklyAvailability),
+    ).length;
+    const nearC = nearGov.filter((d) =>
+      this.driverAssignmentService.isDriverCurrentlyAvailable(d.weeklyAvailability),
+    ).length;
+
+    return {
+      availableInDelegation: this.capDriverDisplay(inC),
+      availableNearDelegationApprox: this.capDriverDisplay(nearC),
+    };
+  }
+
+  private buildUrgentNotifySummary(order: {
+    createdAt: Date;
+    urgentNotifyWavesSent?: number;
+    urgentNotifyLastButtonAt?: Date | null;
+  }) {
+    const created = order.createdAt.getTime();
+    const fiveMinDone = Date.now() >= created + 5 * 60_000;
+    const waves = order.urgentNotifyWavesSent ?? 0;
+    const lastBtn = order.urgentNotifyLastButtonAt ? order.urgentNotifyLastButtonAt.getTime() : 0;
+    const cycleInProgress = waves > 0 && waves < 3;
+
+    let canStartNewCycle = false;
+    let nextButtonEnabledAt: string | null = null;
+
+    if (!fiveMinDone) {
+      nextButtonEnabledAt = new Date(created + 5 * 60_000).toISOString();
+    } else if (cycleInProgress) {
+      nextButtonEnabledAt = null;
+    } else if (waves === 3 && lastBtn) {
+      const next = lastBtn + 15 * 60_000;
+      if (Date.now() < next) {
+        nextButtonEnabledAt = new Date(next).toISOString();
+      } else {
+        canStartNewCycle = true;
+      }
+    } else {
+      canStartNewCycle = true;
+    }
+
+    return {
+      canStartNewCycle,
+      nextButtonEnabledAt,
+      wavesSentThisCycle: waves,
+      cycleInProgress,
+    };
+  }
+
   private orderInclude() {
     return {
       customer: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true } } } },
       pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true, totalOrders: true, cancelledOrders: true, completionRate: true, avgDeliveryTimeMinutes: true } } } } } },
+      arrivalConflict: { include: { driver: { include: { user: { select: { id: true } } } } } },
       pricingPolicy: true, chatRoom: true, dispute: true, rating: true,
     } as const;
   }
@@ -876,10 +1130,14 @@ export class OrdersService {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
       description: order.description, weight: Number(order.weight), distanceKm: Number(order.distanceKm),
       price: Number(order.price), nightFee: Number(order.nightFee), extraWeightFee: Number(order.extraWeightFee),
-      isNightDelivery: order.isNightDelivery, deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null,
+      isNightDelivery: order.isNightDelivery,
+      localPickupOnly: !!order.localPickupOnly,
+      cancelAfterMinutes: order.cancelAfterMinutes ?? 15,
+      deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null,
       createdAt: order.createdAt,
       pickupAddress: order.pickupAddress ? {
         id: order.pickupAddress.id, street: order.pickupAddress.street,
+        nickname: order.pickupAddress.nickname ?? null,
         latitude: order.pickupAddress.latitude, longitude: order.pickupAddress.longitude,
         delegation: { nameDelegation: order.pickupAddress.delegation.nameDelegation,
           governorate: { nameGovernorate: order.pickupAddress.delegation.governorate.nameGovernorate,
@@ -887,6 +1145,7 @@ export class OrdersService {
       } : null,
       dropoffAddress: order.dropoffAddress ? {
         id: order.dropoffAddress.id, street: order.dropoffAddress.street,
+        nickname: order.dropoffAddress.nickname ?? null,
         latitude: order.dropoffAddress.latitude, longitude: order.dropoffAddress.longitude,
         delegation: { nameDelegation: order.dropoffAddress.delegation.nameDelegation,
           governorate: { nameGovernorate: order.dropoffAddress.delegation.governorate.nameGovernorate,
@@ -913,6 +1172,15 @@ export class OrdersService {
       chatRoom: order.chatRoom ? { id: order.chatRoom.id, status: order.chatRoom.status } : null,
       dispute: order.dispute ? { id: order.dispute.id, status: order.dispute.status, reason: order.dispute.reason, resolution: order.dispute.resolution || null } : null,
       rating: order.rating ? { id: order.rating.id, score: order.rating.score, comment: order.rating.comment, createdAt: order.rating.createdAt } : null,
+      arrivalConflict: order.arrivalConflict
+        ? {
+            id: order.arrivalConflict.id,
+            status: order.arrivalConflict.status,
+            customerReason: order.arrivalConflict.customerReason,
+            driverFeedback: order.arrivalConflict.driverFeedback ?? null,
+            createdAt: order.arrivalConflict.createdAt,
+          }
+        : null,
     };
   }
 }

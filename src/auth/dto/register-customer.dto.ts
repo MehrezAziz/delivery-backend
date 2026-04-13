@@ -6,6 +6,8 @@ import {
   MinLength,
   Matches,
   MaxLength,
+  Equals,
+  IsBoolean,
 } from 'class-validator';
 import { UserGender } from '@prisma/client';
 
@@ -44,4 +46,8 @@ export class RegisterCustomerDto {
   @MaxLength(12)
   @Matches(/^[A-Z0-9]+$/, { message: 'Referral code must contain only uppercase letters and numbers' })
   referralCode?: string;
+
+  @IsBoolean()
+  @Equals(true, { message: 'You must accept the application terms' })
+  acceptTerms!: boolean;
 }

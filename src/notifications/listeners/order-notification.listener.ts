@@ -21,7 +21,12 @@ export class OrderNotificationListener {
   constructor(private notificationsService: NotificationsService) {}
 
   @OnEvent('order.created')
-  async handleOrderCreated(payload: { orderId: string; customerId: string; userId: string }) {
+  async handleOrderCreated(payload: {
+    orderId: string;
+    customerId: string;
+    userId: string;
+    pickupGovernorateId: string;
+  }) {
     // Notify customer
     await this.notificationsService.send({
       userId: payload.userId,
@@ -33,13 +38,17 @@ export class OrderNotificationListener {
       ongoing: true,
     });
 
-    // Notify all admins about new order
-    await this.notificationsService.sendToAllAdmins(NotificationType.HIGH_VALUE_ORDER, {
-      relatedEntityType: 'Order',
-      relatedEntityId: payload.orderId,
-      title: 'New Order Created',
-      body: 'A new delivery order has been created.',
-    });
+    // Customer service only (by pickup governorate); admins are not notified for new orders
+    await this.notificationsService.sendToCustomerServiceForGovernorate(
+      payload.pickupGovernorateId,
+      NotificationType.NEW_ORDER_FOR_CUSTOMER_SERVICE,
+      {
+        relatedEntityType: 'Order',
+        relatedEntityId: payload.orderId,
+        title: 'New order created',
+        body: 'A new delivery order has been created in your governorate.',
+      },
+    );
   }
 
   @OnEvent('order.driver_assigned')

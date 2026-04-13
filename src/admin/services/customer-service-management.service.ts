@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateCustomerServiceDto, UpdateCustomerServiceDto, UpdateCustomerServiceRolesDto, CustomerServiceResponseDto, CustomerServiceListDto } from '../dto/customer-service.dto';
 import { SuperUserRole, UserStatus, CustomerServiceRole } from '@prisma/client';
@@ -93,6 +94,7 @@ export class CustomerServiceManagementService {
       where: { id },
       include: {
         superUser: true,
+        governorates: { include: { governorate: { include: { country: true } } } },
       },
     });
 
@@ -101,6 +103,60 @@ export class CustomerServiceManagementService {
     }
 
     return this.mapToResponseDto(customerService);
+  }
+
+  /** Replace all governorate assignments (admin). CS can cover multiple countries. */
+  async setGovernorates(id: string, governorateIds: string[]): Promise<CustomerServiceResponseDto> {
+    const cs = await this.prisma.customerService.findUnique({ where: { id } });
+    if (!cs) throw new NotFoundException('Customer service account not found');
+
+    if (governorateIds.length) {
+      const found = await this.prisma.governorate.findMany({
+        where: { id: { in: governorateIds } },
+        select: { id: true },
+      });
+      if (found.length !== governorateIds.length) {
+        throw new BadRequestException('One or more governorate IDs are invalid');
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.customerServiceGovernorate.deleteMany({ where: { customerServiceId: id } });
+      if (governorateIds.length) {
+        await tx.customerServiceGovernorate.createMany({
+          data: governorateIds.map((governorateId) => ({
+            id: randomUUID(),
+            customerServiceId: id,
+            governorateId,
+          })),
+        });
+      }
+    });
+
+    return this.getCustomerServiceById(id);
+  }
+
+  /** Merge all governorates of a country into this CS account (one-click). */
+  async addAllGovernoratesForCountry(id: string, countryId: string): Promise<CustomerServiceResponseDto> {
+    const cs = await this.prisma.customerService.findUnique({ where: { id } });
+    if (!cs) throw new NotFoundException('Customer service account not found');
+    const country = await this.prisma.country.findUnique({ where: { id: countryId } });
+    if (!country) throw new NotFoundException('Country not found');
+
+    const govs = await this.prisma.governorate.findMany({
+      where: { countryId },
+      select: { id: true },
+    });
+    await this.prisma.customerServiceGovernorate.createMany({
+      data: govs.map((g) => ({
+        id: randomUUID(),
+        customerServiceId: id,
+        governorateId: g.id,
+      })),
+      skipDuplicates: true,
+    });
+
+    return this.getCustomerServiceById(id);
   }
 
   /**
@@ -321,6 +377,13 @@ export class CustomerServiceManagementService {
       id: cs.id,
       superUserId: cs.superUserId,
       roles: cs.roles,
+      governorates: cs.governorates?.map((cg: any) => ({
+        id: cg.id,
+        governorateId: cg.governorateId,
+        nameGovernorate: cg.governorate.nameGovernorate,
+        countryId: cg.governorate.countryId,
+        countryName: cg.governorate.country?.name,
+      })),
       superUser: {
         id: cs.superUser.id,
         telephone: cs.superUser.telephone,

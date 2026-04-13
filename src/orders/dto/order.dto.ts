@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max, ValidateIf } from 'class-validator';
 import { PaymentType, OrderStatus, DeliveryZoneType } from '@prisma/client';
 
 export class CreateOrderDto {
@@ -6,9 +6,14 @@ export class CreateOrderDto {
   @IsNotEmpty()
   pickupAddressId: string;
 
+  @ValidateIf((o) => !o.localPickupOnly)
   @IsString()
   @IsNotEmpty()
-  dropoffAddressId: string;
+  dropoffAddressId?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  localPickupOnly?: boolean;
 
   @IsEnum(PaymentType)
   @IsNotEmpty()
@@ -38,9 +43,14 @@ export class PreviewOrderDto {
   @IsNotEmpty()
   pickupAddressId: string;
 
+  @ValidateIf((o) => !o.localPickupOnly)
   @IsString()
   @IsNotEmpty()
-  dropoffAddressId: string;
+  dropoffAddressId?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  localPickupOnly?: boolean;
 
   @IsEnum(PaymentType)
   @IsNotEmpty()
@@ -123,6 +133,8 @@ export class OrderResponseDto {
   nightFee: number;
   extraWeightFee: number;
   isNightDelivery: boolean;
+  localPickupOnly: boolean;
+  cancelAfterMinutes: number;
   deliveryZoneType: DeliveryZoneType | null;
   createdAt: Date;
   pickupAddress: any;
@@ -131,6 +143,23 @@ export class OrderResponseDto {
   chatRoom?: any;
   dispute?: any;
   rating?: any;
+  driverAvailability?: {
+    availableInDelegation: number | string;
+    availableNearDelegationApprox: number | string;
+  };
+  urgentNotify?: {
+    canStartNewCycle: boolean;
+    nextButtonEnabledAt: string | null;
+    wavesSentThisCycle: number;
+    cycleInProgress: boolean;
+  };
+  arrivalConflict?: {
+    id: string;
+    status: string;
+    customerReason: string;
+    driverFeedback: string | null;
+    createdAt: Date;
+  } | null;
 }
 
 export class AvailableOrdersResponseDto {

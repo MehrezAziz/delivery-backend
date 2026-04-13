@@ -16,6 +16,10 @@ export class CreateAddressDto {
   @IsString()
   @IsNotEmpty()
   delegationId: string;
+
+  @IsString()
+  @IsOptional()
+  nickname?: string;
 }
 
 export class UpdateAddressDto {
@@ -34,6 +38,10 @@ export class UpdateAddressDto {
   @IsString()
   @IsOptional()
   delegationId?: string;
+
+  @IsString()
+  @IsOptional()
+  nickname?: string | null;
 }
 
 export class AddressResponseDto {
@@ -41,6 +49,7 @@ export class AddressResponseDto {
   latitude: number | null;
   longitude: number | null;
   street: string | null;
+  nickname: string | null;
   userId: string | null;
   delegation: {
     id: string;

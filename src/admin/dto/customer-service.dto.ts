@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsEmail, IsArray, IsEnum, IsOptional, MinLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsEmail, IsArray, IsEnum, IsOptional, MinLength, ArrayMinSize } from 'class-validator';
 import { CustomerServiceRole } from '@prisma/client';
 
 export class CreateCustomerServiceDto {
@@ -51,10 +51,24 @@ export class UpdateCustomerServiceRolesDto {
   roles: CustomerServiceRole[];
 }
 
+export class SetCustomerServiceGovernoratesDto {
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMinSize(0)
+  governorateIds!: string[];
+}
+
 export class CustomerServiceResponseDto {
   id: string;
   superUserId: string;
   roles: CustomerServiceRole[];
+  governorates?: {
+    id: string;
+    governorateId: string;
+    nameGovernorate: string;
+    countryId: string;
+    countryName?: string;
+  }[];
   superUser: {
     id: string;
     telephone: string;

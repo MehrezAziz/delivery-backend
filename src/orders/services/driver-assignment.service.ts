@@ -76,7 +76,13 @@ export class DriverAssignmentService {
       const differentCountry: any[] = [];
 
       for (const order of availableOrders) {
-        if (!order.pickupAddress || !order.dropoffAddress) continue;
+        if (!order.pickupAddress) continue;
+        if (order.localPickupOnly || !order.dropoffAddress) {
+          if (driverDelegationId === order.pickupAddress.delegationId) {
+            sameDelegation.push(order);
+          }
+          continue;
+        }
         const zoneType = order.pricingPolicy?.deliveryZoneType;
         const pickupDelegationId = order.pickupAddress.delegationId;
         const dropoffDelegationId = order.dropoffAddress.delegationId;
@@ -251,6 +257,7 @@ export class DriverAssignmentService {
       weight: Number(order.weight), distanceKm: Number(order.distanceKm),
       price: Number(order.price), nightFee: Number(order.nightFee),
       extraWeightFee: Number(order.extraWeightFee), isNightDelivery: order.isNightDelivery,
+      localPickupOnly: !!order.localPickupOnly,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null, createdAt: order.createdAt,
       pickupAddress: order.pickupAddress ? {
         id: order.pickupAddress.id, street: order.pickupAddress.street,
@@ -272,7 +279,7 @@ export class DriverAssignmentService {
   /**
    * Check if driver is currently available based on their weekly schedule
    */
-  private isDriverCurrentlyAvailable(weeklyAvailability: any): boolean {
+  isDriverCurrentlyAvailable(weeklyAvailability: any): boolean {
     if (!weeklyAvailability || weeklyAvailability.status !== 'ACTIVE') return false;
     const now = new Date();
     const dayNames = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];

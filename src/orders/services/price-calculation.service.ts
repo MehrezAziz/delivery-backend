@@ -230,4 +230,81 @@ export class PriceCalculationService {
       deliveryZoneType,
     };
   }
+
+  /**
+   * Local pickup-only orders: customer stays at pickup; goods sourced within delegation (≤2 km billing distance).
+   * Uses SAME_DELEGATION policy and a fixed 2 km distance component for pricing.
+   */
+  async calculateLocalPickupOnlyPrice(
+    pickupAddressId: string,
+    weight: number,
+    isNightDelivery: boolean = false,
+  ): Promise<PriceCalculationResult> {
+    const pickupAddress = await this.prisma.address.findUnique({
+      where: { id: pickupAddressId },
+      include: {
+        delegation: {
+          include: {
+            governorate: { include: { country: true } },
+          },
+        },
+      },
+    });
+
+    if (!pickupAddress) {
+      throw new Error('Address not found');
+    }
+    if (
+      pickupAddress.latitude == null ||
+      pickupAddress.longitude == null
+    ) {
+      throw new Error('Pickup coordinates are required for this order type');
+    }
+
+    const countryId = pickupAddress.delegation.governorate.country.id;
+    const deliveryZoneType = DeliveryZoneType.SAME_DELEGATION;
+
+    const pricingPolicy = await this.prisma.countryPricingPolicy.findFirst({
+      where: {
+        countryId,
+        deliveryZoneType,
+        isActive: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!pricingPolicy) {
+      throw new Error(
+        `No active pricing policy found for country and zone type: ${deliveryZoneType}`,
+      );
+    }
+
+    const billingDistanceKm = 2;
+    const baseFee = Number(pricingPolicy.baseFee);
+    const distanceFee = Number(pricingPolicy.pricePerKm) * billingDistanceKm;
+
+    let extraWeightFee = 0;
+    const baseWeight = Number(pricingPolicy.baseWeight);
+    if (weight > baseWeight) {
+      const extraWeight = weight - baseWeight;
+      const extraWeightSteps = Math.ceil(
+        extraWeight / Number(pricingPolicy.extraWeightStep),
+      );
+      extraWeightFee =
+        extraWeightSteps * Number(pricingPolicy.extraWeightPrice);
+    }
+
+    const nightFee = isNightDelivery ? Number(pricingPolicy.nightFee) : 0;
+    const totalPrice = baseFee + distanceFee + extraWeightFee + nightFee;
+
+    return {
+      baseFee,
+      distanceFee,
+      extraWeightFee,
+      nightFee,
+      totalPrice: Math.round(totalPrice * 100) / 100,
+      pricingPolicyId: pricingPolicy.id,
+      deliveryZoneType,
+    };
+  }
 }

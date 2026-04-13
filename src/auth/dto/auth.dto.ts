@@ -144,4 +144,8 @@ export class GoogleAuthDto {
 
   @IsOptional()
   isLoginOnly?: boolean; // If true, reject if account doesn't exist (login screen)
+
+  /** Required when registering a new customer via Google (not used for login-only). */
+  @IsOptional()
+  acceptTerms?: boolean;
 }
