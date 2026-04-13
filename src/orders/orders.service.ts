@@ -241,6 +241,24 @@ export class OrdersService {
     return this.mapToResponseDto(updated);
   }
 
+  async updateCancelAfterMinutes(orderId: string, userId: string, cancelAfterMinutes: number): Promise<OrderResponseDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true },
+    }) as any;
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (![OrderStatus.SEARCHING_DRIVER, 'PENDING_CUSTOMER_APPROVAL' as any, OrderStatus.DRIVER_ASSIGNED].includes(order.status)) {
+      throw new BadRequestException('Cancel timer can only be changed before pickup');
+    }
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { cancelAfterMinutes },
+      include: this.orderInclude(),
+    });
+    return this.mapToResponseDto(updated);
+  }
+
   async getOrderById(orderId: string, userId: string): Promise<OrderResponseDto> {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.orderInclude() }) as any;
     if (!order) throw new NotFoundException('Order not found');
@@ -972,6 +990,18 @@ export class OrdersService {
           },
         },
       );
+      await this.notificationsService.sendToAllAdmins(
+        NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_CS,
+        {
+          relatedEntityType: 'Order',
+          relatedEntityId: orderId,
+          templateData: {
+            customerName,
+            driverName,
+            reason: reason!.trim(),
+          },
+        },
+      );
     }
 
     return { message: 'Driver rejected. Searching for a new driver.' };
@@ -1086,16 +1116,14 @@ export class OrdersService {
     const fiveMinDone = Date.now() >= created + 5 * 60_000;
     const waves = order.urgentNotifyWavesSent ?? 0;
     const lastBtn = order.urgentNotifyLastButtonAt ? order.urgentNotifyLastButtonAt.getTime() : 0;
-    const cycleInProgress = waves > 0 && waves < 3;
+    const cycleInProgress = false;
 
     let canStartNewCycle = false;
     let nextButtonEnabledAt: string | null = null;
 
     if (!fiveMinDone) {
       nextButtonEnabledAt = new Date(created + 5 * 60_000).toISOString();
-    } else if (cycleInProgress) {
-      nextButtonEnabledAt = null;
-    } else if (waves === 3 && lastBtn) {
+    } else if (lastBtn) {
       const next = lastBtn + 15 * 60_000;
       if (Date.now() < next) {
         nextButtonEnabledAt = new Date(next).toISOString();

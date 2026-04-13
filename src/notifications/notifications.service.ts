@@ -299,13 +299,21 @@ export class NotificationsService {
     type: NotificationType,
     options: Omit<SendNotificationDto, 'userId' | 'userType' | 'type'> = {},
   ) {
-    const agents = await this.prisma.customerService.findMany({
+    let agents = await this.prisma.customerService.findMany({
       where: {
         governorates: { some: { governorateId } },
         superUser: { status: 'ACTIVE' },
       },
       include: { superUser: { select: { id: true } } },
     });
+    // Safety fallback: if no governorate assignment exists yet, notify all active CS
+    // so critical incidents (e.g. reject-after-arrival) are never dropped.
+    if (agents.length === 0) {
+      agents = await this.prisma.customerService.findMany({
+        where: { superUser: { status: 'ACTIVE' } },
+        include: { superUser: { select: { id: true } } },
+      });
+    }
     await Promise.allSettled(
       agents.map((cs) =>
         this.send({ ...options, userId: cs.superUser.id, userType: 'SUPER_USER', type }),

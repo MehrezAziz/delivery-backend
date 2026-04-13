@@ -33,9 +33,16 @@ export class CreateOrderDto {
 
   @IsOptional()
   @IsInt()
-  @Min(5)
-  @Max(60)
+  @Min(15)
+  @Max(1440)
   cancelAfterMinutes?: number;
+}
+
+export class UpdateCancelAfterDto {
+  @IsInt()
+  @Min(15)
+  @Max(1440)
+  cancelAfterMinutes: number;
 }
 
 export class PreviewOrderDto {

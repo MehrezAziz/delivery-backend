@@ -1,6 +1,4 @@
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { DriverAssignmentService } from './driver-assignment.service';
@@ -27,36 +25,6 @@ export class OrderUrgentNotifyService {
     private readonly notificationsService: NotificationsService,
     private readonly driverAssignmentService: DriverAssignmentService,
   ) {}
-
-  @Cron('*/45 * * * * *')
-  async processScheduledWaves(): Promise<void> {
-    const orders = await this.prisma.order.findMany({
-      where: {
-        status: OrderStatus.SEARCHING_DRIVER,
-        urgentNotifyWavesSent: { in: [1, 2] },
-        urgentNotifyCycleStartedAt: { not: null },
-        urgentNotifyCycleId: { not: null },
-      },
-      include: {
-        pickupAddress: { include: { delegation: true } },
-        driverAssignment: true,
-      },
-    });
-
-    const now = Date.now();
-    for (const order of orders) {
-      if (order.driverAssignment) continue;
-      const start = order.urgentNotifyCycleStartedAt!.getTime();
-      const thirdMs = (order.cancelAfterMinutes / 3) * 60_000;
-      const wave = order.urgentNotifyWavesSent;
-
-      if (wave === 1 && now >= start + thirdMs) {
-        await this.sendWave(order.id, order.urgentNotifyCycleId!, 2);
-      } else if (wave === 2 && now >= start + 2 * thirdMs) {
-        await this.sendWave(order.id, order.urgentNotifyCycleId!, 3);
-      }
-    }
-  }
 
   /**
    * Ranked available drivers in order pickup delegation (verified, schedule on, not rejected on order).
@@ -108,19 +76,16 @@ export class OrderUrgentNotifyService {
     return eligible;
   }
 
-  private async sendWave(orderId: string, cycleId: string, waveIndex: 1 | 2 | 3): Promise<void> {
+  private async sendBatch(orderId: string, cycleId: string): Promise<number> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { pickupAddress: true, driverAssignment: true },
     });
-    if (!order || order.status !== OrderStatus.SEARCHING_DRIVER || order.driverAssignment) return;
-    if (!order.pickupAddress) return;
-
-    if (order.urgentNotifyWavesSent !== waveIndex - 1) return;
+    if (!order || order.status !== OrderStatus.SEARCHING_DRIVER || order.driverAssignment) return 0;
+    if (!order.pickupAddress) return 0;
 
     const delegationId = order.pickupAddress.delegationId;
     const ranked = await this.getRankedEligibleDrivers(orderId, delegationId);
-    const n = ranked.length;
 
     const existingTargets = await this.prisma.orderUrgentNotifyTarget.findMany({
       where: { orderId, cycleId },
@@ -128,31 +93,21 @@ export class OrderUrgentNotifyService {
     });
     const already = new Set(existingTargets.map((t) => t.driverId));
 
-    const chunk = Math.max(1, Math.ceil(n / 3));
-    let slice: typeof ranked;
-    if (waveIndex === 1) slice = ranked.slice(0, chunk);
-    else if (waveIndex === 2) slice = ranked.slice(chunk, Math.min(2 * chunk, n));
-    else slice = ranked.slice(2 * chunk);
-
-    slice = slice.filter((d) => !already.has(d.id));
+    let slice = ranked.filter((d) => !already.has(d.id)).slice(0, 10);
 
     if (slice.length === 0) {
-      await this.prisma.order.update({
-        where: { id: orderId },
-        data: { urgentNotifyWavesSent: waveIndex },
-      });
-      return;
+      return 0;
     }
 
     await this.prisma.$transaction(async (tx) => {
       for (const d of slice) {
         await tx.orderUrgentNotifyTarget.create({
-          data: { orderId, cycleId, driverId: d.id, waveIndex },
+          data: { orderId, cycleId, driverId: d.id, waveIndex: 1 },
         });
       }
       await tx.order.update({
         where: { id: orderId },
-        data: { urgentNotifyWavesSent: waveIndex },
+        data: { urgentNotifyWavesSent: { increment: 1 } },
       });
     });
 
@@ -169,10 +124,11 @@ export class OrderUrgentNotifyService {
       });
     }
 
-    this.logger.log(`Urgent notify wave ${waveIndex} for order ${orderId}: ${slice.length} drivers`);
+    this.logger.log(`Urgent notify batch for order ${orderId}: ${slice.length} drivers`);
+    return slice.length;
   }
 
-  async customerRequestNotify(orderId: string, userId: string): Promise<{ message: string }> {
+  async customerRequestNotify(orderId: string, userId: string): Promise<{ message: string; notifiedDrivers: number }> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { customer: true, pickupAddress: true, driverAssignment: true },
@@ -191,21 +147,15 @@ export class OrderUrgentNotifyService {
       throw new BadRequestException('You can notify drivers 5 minutes after creating the order');
     }
 
-    const waves = order.urgentNotifyWavesSent;
     const lastBtn = order.urgentNotifyLastButtonAt;
-
-    if (waves > 0 && waves < 3) {
-      throw new BadRequestException('A notify cycle is in progress. Wait for all driver groups to be contacted.');
-    }
-
-    if (waves === 3 && lastBtn) {
+    if (lastBtn) {
       const next = lastBtn.getTime() + 15 * 60_000;
       if (Date.now() < next) {
-        throw new BadRequestException('You can start another notify cycle 15 minutes after the last one');
+        throw new BadRequestException('You can notify again 15 minutes after the previous click');
       }
     }
 
-    const cycleId = randomUUID();
+    const cycleId = order.urgentNotifyCycleId || order.id;
     const now = new Date();
     await this.prisma.order.update({
       where: { id: orderId },
@@ -213,11 +163,10 @@ export class OrderUrgentNotifyService {
         urgentNotifyCycleId: cycleId,
         urgentNotifyCycleStartedAt: now,
         urgentNotifyLastButtonAt: now,
-        urgentNotifyWavesSent: 0,
       },
     });
 
-    await this.sendWave(orderId, cycleId, 1);
-    return { message: 'Drivers are being notified in groups.' };
+    const notified = await this.sendBatch(orderId, cycleId);
+    return { message: `We notified ${notified} drivers for you.`, notifiedDrivers: notified };
   }
 }
