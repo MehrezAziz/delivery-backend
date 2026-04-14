@@ -61,9 +61,9 @@ export class NotificationsService {
       // Create or update notification record in DB (IN_APP)
       let notificationId: string;
 
-      // If groupKey is provided, always try to update existing notification first
-      // This ensures only ONE notification per order/group in the DB
-      if (dto.groupKey) {
+      // Only update an existing grouped notification when explicitly requested.
+      // This keeps order timeline notifications collapsed, while chat/support can accumulate unread rows.
+      if (dto.groupKey && dto.updateExisting) {
         const existing = await this.prisma.notification.findFirst({
           where: { userId: dto.userId, groupKey: dto.groupKey },
           orderBy: { sentAt: 'desc' },
@@ -83,7 +83,7 @@ export class NotificationsService {
           `;
         }
       } else {
-        // No groupKey — always create new notification
+        // Create a new notification row (with or without groupKey)
         notificationId = require('crypto').randomUUID();
         await this.prisma.$executeRaw`
           INSERT INTO notifications (id, user_id, user_type, title, body, type, priority, channels, related_entity_type, related_entity_id, action_buttons, expires_at, group_key, sent_at, delivery_status)
