@@ -1,4 +1,5 @@
 import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
 import { PaymentType, OrderStatus, DeliveryZoneType } from '@prisma/client';
 
 export class CreateOrderDto {
@@ -36,6 +37,14 @@ export class CreateOrderDto {
   @Min(15)
   @Max(1440)
   cancelAfterMinutes?: number;
+
+  /** Extra amount (same currency as order) on top of calculated delivery price; optional, default 0. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(10000)
+  customerExtraAmount?: number;
 }
 
 export class UpdateCancelAfterDto {
@@ -66,6 +75,13 @@ export class PreviewOrderDto {
   @IsNumber()
   @Min(0)
   weight: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(10000)
+  customerExtraAmount?: number;
 }
 
 export class ChangePaymentMethodDto {
@@ -137,6 +153,7 @@ export class OrderResponseDto {
   weight: number;
   distanceKm: number;
   price: number;
+  customerExtraAmount: number;
   nightFee: number;
   extraWeightFee: number;
   isNightDelivery: boolean;

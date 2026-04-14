@@ -794,6 +794,8 @@ model Order {
   isNightDelivery   Boolean     @default(false) @map("is_night_delivery")
   /// Pickup at customer location only; driver brings goods from within delegation (≤2 km pricing)
   localPickupOnly   Boolean     @default(false) @map("local_pickup_only")
+  /// Optional extra amount chosen by customer (e.g. long errand / service time). Charged price = calculated + this.
+  customerExtraAmount Decimal   @default(0) @db.Decimal(10, 2) @map("customer_extra_amount")
   guestCheckout     Boolean     @default(false) @map("guest_checkout")
   trackingToken     String?     @unique @map("tracking_token")
   trackingExpiresAt DateTime?   @map("tracking_expires_at")

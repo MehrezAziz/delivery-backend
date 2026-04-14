@@ -40,6 +40,20 @@ export class OrdersService {
     return 5;
   }
 
+  private static readonly MAX_CUSTOMER_EXTRA = 10000;
+
+  /** Optional extra on top of calculated price (errand / long service). Same unit as order price. */
+  private normalizeCustomerExtraAmount(raw: unknown): number {
+    const n = Number(raw ?? 0);
+    if (!Number.isFinite(n) || n < 0) {
+      throw new BadRequestException('Invalid extra amount');
+    }
+    if (n > OrdersService.MAX_CUSTOMER_EXTRA) {
+      throw new BadRequestException(`Extra amount cannot exceed ${OrdersService.MAX_CUSTOMER_EXTRA}`);
+    }
+    return Math.round(n * 100) / 100;
+  }
+
   /**
    * Determine if it's night time (20:00-06:00) in the given country
    */
@@ -111,6 +125,10 @@ export class OrdersService {
 
     const walletBalance = customer.wallet ? Number(customer.wallet.balance) : null;
 
+    const extra = this.normalizeCustomerExtraAmount(dto.customerExtraAmount);
+    const calculatedPrice = priceCalc.totalPrice;
+    const totalPrice = Math.round((calculatedPrice + extra) * 100) / 100;
+
     return {
       isNightDelivery: isNight,
       distanceKm: distance,
@@ -120,7 +138,9 @@ export class OrdersService {
       distanceFee: priceCalc.distanceFee,
       extraWeightFee: priceCalc.extraWeightFee,
       nightFee: priceCalc.nightFee,
-      totalPrice: priceCalc.totalPrice,
+      calculatedPrice,
+      customerExtraAmount: extra,
+      totalPrice,
       currency: country.currencyCode,
       currencySymbol: country.currencySymbol,
       walletBalance,
@@ -191,7 +211,11 @@ export class OrdersService {
       );
     }
 
-    if (dto.paymentType === PaymentType.WALLET && Number(customer.wallet!.balance) < priceCalc.totalPrice) {
+    const extra = this.normalizeCustomerExtraAmount(dto.customerExtraAmount);
+    const calculatedPrice = priceCalc.totalPrice;
+    const finalPrice = Math.round((calculatedPrice + extra) * 100) / 100;
+
+    if (dto.paymentType === PaymentType.WALLET && Number(customer.wallet!.balance) < finalPrice) {
       throw new BadRequestException('Insufficient wallet balance');
     }
 
@@ -207,7 +231,8 @@ export class OrdersService {
         description: dto.description,
         weight: dto.weight,
         distanceKm: distance,
-        price: priceCalc.totalPrice,
+        price: finalPrice,
+        customerExtraAmount: extra,
         nightFee: priceCalc.nightFee,
         extraWeightFee: priceCalc.extraWeightFee,
         isNightDelivery: isNight,
@@ -1159,7 +1184,9 @@ export class OrdersService {
     return {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
       description: order.description, weight: Number(order.weight), distanceKm: Number(order.distanceKm),
-      price: Number(order.price), nightFee: Number(order.nightFee), extraWeightFee: Number(order.extraWeightFee),
+      price: Number(order.price),
+      customerExtraAmount: Number(order.customerExtraAmount ?? 0),
+      nightFee: Number(order.nightFee), extraWeightFee: Number(order.extraWeightFee),
       isNightDelivery: order.isNightDelivery,
       localPickupOnly: !!order.localPickupOnly,
       cancelAfterMinutes: order.cancelAfterMinutes ?? 15,
