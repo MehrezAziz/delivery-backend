@@ -279,6 +279,13 @@ export class OrdersService {
     if (![OrderStatus.SEARCHING_DRIVER, 'PENDING_CUSTOMER_APPROVAL' as any, OrderStatus.DRIVER_ASSIGNED].includes(order.status)) {
       throw new BadRequestException('Cancel timer can only be changed before pickup');
     }
+    if (order.localPickupOnly) {
+      if (cancelAfterMinutes < 5 || cancelAfterMinutes > 240) {
+        throw new BadRequestException('Local pickup auto-cancel time must be between 5 and 240 minutes');
+      }
+    } else if (cancelAfterMinutes < 15 || cancelAfterMinutes > 1440) {
+      throw new BadRequestException('Auto-cancel time must be between 15 and 1440 minutes');
+    }
     const currentRemaining = this.computeCancelRemainingSeconds(order);
     const currentCancelMinutes = order.cancelAfterMinutes ?? 15;
     const nextRemaining = Math.max(0, currentRemaining + ((cancelAfterMinutes - currentCancelMinutes) * 60));

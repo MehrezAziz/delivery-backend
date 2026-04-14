@@ -33,7 +33,12 @@ export class CreateOrderDto {
   isNightDelivery?: boolean;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
+  @ValidateIf((o) => !!o.localPickupOnly)
+  @Min(5)
+  @Max(240)
+  @ValidateIf((o) => !o.localPickupOnly)
   @Min(15)
   @Max(1440)
   cancelAfterMinutes?: number;
@@ -48,8 +53,9 @@ export class CreateOrderDto {
 }
 
 export class UpdateCancelAfterDto {
+  @Type(() => Number)
   @IsInt()
-  @Min(15)
+  @Min(5)
   @Max(1440)
   cancelAfterMinutes: number;
 }
