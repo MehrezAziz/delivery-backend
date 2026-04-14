@@ -237,6 +237,9 @@ export class OrdersService {
         extraWeightFee: priceCalc.extraWeightFee,
         isNightDelivery: isNight,
         ...(dto.cancelAfterMinutes !== undefined && { cancelAfterMinutes: dto.cancelAfterMinutes }),
+        cancelTimerRemainingSeconds: (dto.cancelAfterMinutes ?? 15) * 60,
+        cancelTimerLastResumedAt: new Date(),
+        cancelTimerPausedAt: null,
       },
       include: this.orderInclude(),
     });
@@ -276,9 +279,18 @@ export class OrdersService {
     if (![OrderStatus.SEARCHING_DRIVER, 'PENDING_CUSTOMER_APPROVAL' as any, OrderStatus.DRIVER_ASSIGNED].includes(order.status)) {
       throw new BadRequestException('Cancel timer can only be changed before pickup');
     }
+    const currentRemaining = this.computeCancelRemainingSeconds(order);
+    const currentCancelMinutes = order.cancelAfterMinutes ?? 15;
+    const nextRemaining = Math.max(0, currentRemaining + ((cancelAfterMinutes - currentCancelMinutes) * 60));
+    const now = new Date();
     const updated = await this.prisma.order.update({
       where: { id: orderId },
-      data: { cancelAfterMinutes },
+      data: {
+        cancelAfterMinutes,
+        cancelTimerRemainingSeconds: nextRemaining,
+        cancelTimerLastResumedAt: order.status === OrderStatus.SEARCHING_DRIVER ? now : null,
+        cancelTimerPausedAt: order.status === OrderStatus.SEARCHING_DRIVER ? null : (order.cancelTimerPausedAt ?? now),
+      },
       include: this.orderInclude(),
     });
     return this.mapToResponseDto(updated);
@@ -505,6 +517,9 @@ export class OrdersService {
     const orderUpdateData: any = { status: newStatus };
     if (newStatus === OrderStatus.PICKED_UP) {
       orderUpdateData.trackingToken = this.generateTrackingToken();
+    }
+    if (newStatus === OrderStatus.DRIVER_ARRIVED) {
+      Object.assign(orderUpdateData, this.buildPausedTimerUpdate(order));
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: orderUpdateData, include: this.orderInclude() });
     // Emit status change events for notifications
@@ -901,7 +916,10 @@ export class OrdersService {
 
     const updated = await this.prisma.order.update({
       where: { id: orderId },
-      data: { status: OrderStatus.DRIVER_ASSIGNED },
+      data: {
+        status: OrderStatus.DRIVER_ASSIGNED,
+        ...this.buildPausedTimerUpdate(order),
+      },
       include: this.orderInclude(),
     });
 
@@ -979,7 +997,13 @@ export class OrdersService {
         });
       }
       await tx.driverAssignment.delete({ where: { orderId } });
-      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.SEARCHING_DRIVER } });
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.SEARCHING_DRIVER,
+          ...this.buildResumedTimerUpdate(order),
+        },
+      });
       await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
     });
 
@@ -1181,6 +1205,7 @@ export class OrdersService {
   }
 
   mapToResponseDto(order: any): OrderResponseDto {
+    const cancelRemainingSeconds = this.computeCancelRemainingSeconds(order);
     return {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
       description: order.description, weight: Number(order.weight), distanceKm: Number(order.distanceKm),
@@ -1190,6 +1215,9 @@ export class OrdersService {
       isNightDelivery: order.isNightDelivery,
       localPickupOnly: !!order.localPickupOnly,
       cancelAfterMinutes: order.cancelAfterMinutes ?? 15,
+      cancelRemainingSeconds,
+      cancelTimerRunning: order.status === OrderStatus.SEARCHING_DRIVER,
+      cancelTimerLastResumedAt: order.cancelTimerLastResumedAt ?? null,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null,
       createdAt: order.createdAt,
       pickupAddress: order.pickupAddress ? {
@@ -1238,6 +1266,37 @@ export class OrdersService {
             createdAt: order.arrivalConflict.createdAt,
           }
         : null,
+    };
+  }
+
+  private computeCancelRemainingSeconds(order: any): number {
+    const fallback = Math.max(0, Number(order.cancelAfterMinutes ?? 15) * 60);
+    const baseRemaining = typeof order.cancelTimerRemainingSeconds === 'number'
+      ? order.cancelTimerRemainingSeconds
+      : fallback;
+    if (order.status !== OrderStatus.SEARCHING_DRIVER) {
+      return Math.max(0, baseRemaining);
+    }
+    const lastResumedAt = order.cancelTimerLastResumedAt ? new Date(order.cancelTimerLastResumedAt).getTime() : null;
+    if (!lastResumedAt) return Math.max(0, baseRemaining);
+    const elapsedSec = Math.floor((Date.now() - lastResumedAt) / 1000);
+    return Math.max(0, baseRemaining - elapsedSec);
+  }
+
+  private buildPausedTimerUpdate(order: any) {
+    const remaining = this.computeCancelRemainingSeconds(order);
+    return {
+      cancelTimerRemainingSeconds: remaining,
+      cancelTimerPausedAt: new Date(),
+      cancelTimerLastResumedAt: null,
+    };
+  }
+
+  private buildResumedTimerUpdate(order: any) {
+    return {
+      cancelTimerRemainingSeconds: this.computeCancelRemainingSeconds(order),
+      cancelTimerPausedAt: null,
+      cancelTimerLastResumedAt: new Date(),
     };
   }
 }

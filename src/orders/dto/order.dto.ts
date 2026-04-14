@@ -159,6 +159,9 @@ export class OrderResponseDto {
   isNightDelivery: boolean;
   localPickupOnly: boolean;
   cancelAfterMinutes: number;
+  cancelRemainingSeconds: number;
+  cancelTimerRunning: boolean;
+  cancelTimerLastResumedAt: Date | null;
   deliveryZoneType: DeliveryZoneType | null;
   createdAt: Date;
   pickupAddress: any;

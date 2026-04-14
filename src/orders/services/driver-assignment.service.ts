@@ -179,7 +179,13 @@ export class DriverAssignmentService {
       const assignment = await tx.driverAssignment.create({
         data: { orderId, driverId, acceptedAt: new Date() },
       });
-      await tx.order.update({ where: { id: orderId }, data: { status: 'PENDING_CUSTOMER_APPROVAL' as any } });
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: 'PENDING_CUSTOMER_APPROVAL' as any,
+          ...this.buildPausedTimerUpdate(order),
+        },
+      });
       // Open or reopen chat room between driver and customer
       const existingChat = await tx.chatRoom.findUnique({ where: { orderId } });
       if (existingChat) {
@@ -231,7 +237,13 @@ export class DriverAssignmentService {
       const driverId = order.driverAssignment!.driverId;
       // Delete the assignment so a new driver can accept
       await tx.driverAssignment.delete({ where: { orderId } });
-      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.SEARCHING_DRIVER } });
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.SEARCHING_DRIVER,
+          ...this.buildResumedTimerUpdate(order),
+        },
+      });
       // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId }, data: { status: ChatStatus.CLOSED } });
       // Update driver performance metrics — increment totalOrders and cancelledOrders
@@ -273,6 +285,34 @@ export class DriverAssignmentService {
           governorate: { nameGovernorate: order.dropoffAddress.delegation.governorate.nameGovernorate,
             country: { name: order.dropoffAddress.delegation.governorate.country.name } } },
       } : null,
+    };
+  }
+
+  private computeCancelRemainingSeconds(order: any): number {
+    const fallback = Math.max(0, Number(order.cancelAfterMinutes ?? 15) * 60);
+    const baseRemaining = typeof order.cancelTimerRemainingSeconds === 'number'
+      ? order.cancelTimerRemainingSeconds
+      : fallback;
+    if (order.status !== OrderStatus.SEARCHING_DRIVER) return Math.max(0, baseRemaining);
+    const lastResumedAt = order.cancelTimerLastResumedAt ? new Date(order.cancelTimerLastResumedAt).getTime() : null;
+    if (!lastResumedAt) return Math.max(0, baseRemaining);
+    const elapsedSec = Math.floor((Date.now() - lastResumedAt) / 1000);
+    return Math.max(0, baseRemaining - elapsedSec);
+  }
+
+  private buildPausedTimerUpdate(order: any) {
+    return {
+      cancelTimerRemainingSeconds: this.computeCancelRemainingSeconds(order),
+      cancelTimerPausedAt: new Date(),
+      cancelTimerLastResumedAt: null,
+    };
+  }
+
+  private buildResumedTimerUpdate(order: any) {
+    return {
+      cancelTimerRemainingSeconds: this.computeCancelRemainingSeconds(order),
+      cancelTimerPausedAt: null,
+      cancelTimerLastResumedAt: new Date(),
     };
   }
 

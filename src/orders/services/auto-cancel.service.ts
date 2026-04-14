@@ -19,11 +19,7 @@ export class AutoCancelService {
       where: { status: OrderStatus.SEARCHING_DRIVER },
     });
 
-    const now = new Date();
-    const expiredOrders = orders.filter(
-      (order) =>
-        now > new Date(order.createdAt.getTime() + order.cancelAfterMinutes * 60000),
-    );
+    const expiredOrders = orders.filter((order) => this.computeCancelRemainingSeconds(order) <= 0);
 
     let cancelledCount = 0;
 
@@ -55,5 +51,16 @@ export class AutoCancelService {
     }
 
     return cancelledCount;
+  }
+
+  private computeCancelRemainingSeconds(order: any): number {
+    const fallback = Math.max(0, Number(order.cancelAfterMinutes ?? 15) * 60);
+    const baseRemaining = typeof order.cancelTimerRemainingSeconds === 'number'
+      ? order.cancelTimerRemainingSeconds
+      : fallback;
+    const lastResumedAt = order.cancelTimerLastResumedAt ? new Date(order.cancelTimerLastResumedAt).getTime() : null;
+    if (!lastResumedAt) return Math.max(0, baseRemaining);
+    const elapsedSec = Math.floor((Date.now() - lastResumedAt) / 1000);
+    return Math.max(0, baseRemaining - elapsedSec);
   }
 }

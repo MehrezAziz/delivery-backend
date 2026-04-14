@@ -791,6 +791,12 @@ model Order {
   nightFee          Decimal     @default(0) @db.Decimal(10, 2) @map("night_fee")
   extraWeightFee    Decimal     @default(0) @db.Decimal(10, 2) @map("extra_weight_fee")
   cancelAfterMinutes Int        @default(15) @map("cancel_after_minutes")
+  /// Remaining auto-cancel seconds while order is searching for a driver.
+  cancelTimerRemainingSeconds Int @default(900) @map("cancel_timer_remaining_seconds")
+  /// Last timestamp when auto-cancel countdown resumed in SEARCHING_DRIVER.
+  cancelTimerLastResumedAt   DateTime? @map("cancel_timer_last_resumed_at")
+  /// Timestamp when auto-cancel countdown was paused.
+  cancelTimerPausedAt        DateTime? @map("cancel_timer_paused_at")
   isNightDelivery   Boolean     @default(false) @map("is_night_delivery")
   /// Pickup at customer location only; driver brings goods from within delegation (≤2 km pricing)
   localPickupOnly   Boolean     @default(false) @map("local_pickup_only")
