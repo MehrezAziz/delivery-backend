@@ -357,4 +357,37 @@ export class NotificationsService {
     });
     return [...new Set(addresses.map((a) => a.delegation.governorateId))];
   }
+
+  /**
+   * Resolve governorates for a support ticket.
+   * Priority:
+   * 1) If ticket description references an order id ("Order #<uuid>"), use pickup/dropoff governorates of that order.
+   * 2) Fallback to the ticket owner's address governorates.
+   */
+  async getGovernorateIdsForSupportTicket(ticketId: string, userId: string): Promise<string[]> {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { description: true },
+    });
+    if (!ticket) return this.getGovernorateIdsForUser(userId);
+
+    const orderIdMatch = ticket.description?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    const orderId = orderIdMatch?.[0];
+    if (orderId) {
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          pickupAddress: { select: { delegation: { select: { governorateId: true } } } },
+          dropoffAddress: { select: { delegation: { select: { governorateId: true } } } },
+        },
+      });
+      const fromOrder = [
+        order?.pickupAddress?.delegation?.governorateId,
+        order?.dropoffAddress?.delegation?.governorateId,
+      ].filter((v): v is string => !!v);
+      if (fromOrder.length) return [...new Set(fromOrder)];
+    }
+
+    return this.getGovernorateIdsForUser(userId);
+  }
 }

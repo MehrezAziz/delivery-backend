@@ -16,19 +16,25 @@ export class SupportNotificationListener {
       relatedEntityType: 'SupportTicket',
       relatedEntityId: payload.ticketId,
     });
-    const govIds = await this.notificationsService.getGovernorateIdsForUser(payload.userId);
-    await this.notificationsService.sendToCsWithPermissionForGovernorates(
-      govIds,
-      'MANAGE_SUPPORT_TICKETS',
-      NotificationType.SUPPORT_HUMAN_REQUESTED,
-      {
-        title: 'AI support rated not helpful twice',
-        body: `Ticket ${payload.ticketId}: two "not helpful" ratings on AI replies.`,
-        priority: NotificationPriority.HIGH,
-        relatedEntityType: 'SupportTicket',
-        relatedEntityId: payload.ticketId,
-      },
+    const govIds = await this.notificationsService.getGovernorateIdsForSupportTicket(
+      payload.ticketId,
+      payload.userId,
     );
+    // Security: do NOT fallback to all CS here; notify only CS with permission and matching governorate coverage.
+    if (govIds.length > 0) {
+      await this.notificationsService.sendToCsWithPermissionForGovernorates(
+        govIds,
+        'MANAGE_SUPPORT_TICKETS',
+        NotificationType.SUPPORT_HUMAN_REQUESTED,
+        {
+          title: 'AI support rated not helpful twice',
+          body: `Ticket ${payload.ticketId}: two "not helpful" ratings on AI replies.`,
+          priority: NotificationPriority.HIGH,
+          relatedEntityType: 'SupportTicket',
+          relatedEntityId: payload.ticketId,
+        },
+      );
+    }
   }
 
   @OnEvent('support.human_requested')
