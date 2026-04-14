@@ -168,6 +168,12 @@ export class OrderResponseDto {
   dropoffAddress: any;
   driverAssignment?: any;
   chatRoom?: any;
+  chatRooms?: Array<{
+    id: string;
+    driverId: string;
+    status: string;
+    createdAt: Date;
+  }>;
   dispute?: any;
   rating?: any;
   driverAvailability?: {

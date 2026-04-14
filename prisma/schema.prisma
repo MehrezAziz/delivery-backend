@@ -822,7 +822,7 @@ model Order {
   referralCommissions ReferralCommission[]
   rating              Rating?
   dispute             Dispute?
-  chatRoom            ChatRoom?
+  chatRooms           ChatRoom[]
   driverLocations     DriverLocation[]
   driverRejections    OrderDriverRejection[]
   urgentNotifyTargets OrderUrgentNotifyTarget[]
@@ -1054,7 +1054,7 @@ model Rating {
 
 model ChatRoom {
   id         String     @id @default(uuid())
-  orderId    String     @unique @map("order_id")
+  orderId    String     @map("order_id")
   customerId String     @map("customer_id")
   driverId   String     @map("driver_id")
   status     ChatStatus @default(ACTIVE)
@@ -1066,6 +1066,7 @@ model ChatRoom {
   driver   Driver    @relation(fields: [driverId], references: [id])
   messages Message[]
 
+  @@index([orderId, status, createdAt])
   @@map("chat_rooms")
 }
 

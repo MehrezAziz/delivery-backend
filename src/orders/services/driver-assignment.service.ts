@@ -186,18 +186,14 @@ export class DriverAssignmentService {
           ...this.buildPausedTimerUpdate(order),
         },
       });
-      // Open or reopen chat room between driver and customer
-      const existingChat = await tx.chatRoom.findUnique({ where: { orderId } });
-      if (existingChat) {
-        await tx.chatRoom.update({
-          where: { id: existingChat.id },
-          data: { driverId, status: ChatStatus.ACTIVE },
-        });
-      } else {
-        await tx.chatRoom.create({
-          data: { orderId, customerId: order.customerId, driverId, status: ChatStatus.ACTIVE },
-        });
-      }
+      // Keep history: close previous active chat rooms and create a new one for this driver.
+      await tx.chatRoom.updateMany({
+        where: { orderId, status: ChatStatus.ACTIVE },
+        data: { status: ChatStatus.CLOSED },
+      });
+      await tx.chatRoom.create({
+        data: { orderId, customerId: order.customerId, driverId, status: ChatStatus.ACTIVE },
+      });
       return assignment;
     });
 
@@ -237,12 +233,25 @@ export class DriverAssignmentService {
       const driverId = order.driverAssignment!.driverId;
       // Delete the assignment so a new driver can accept
       await tx.driverAssignment.delete({ where: { orderId } });
+      const resumedTimer = this.buildResumedTimerUpdate(order);
+      const nextStatus =
+        resumedTimer.cancelTimerRemainingSeconds <= 0
+          ? OrderStatus.CANCELLED
+          : OrderStatus.SEARCHING_DRIVER;
       await tx.order.update({
         where: { id: orderId },
-        data: {
-          status: OrderStatus.SEARCHING_DRIVER,
-          ...this.buildResumedTimerUpdate(order),
-        },
+        data:
+          nextStatus === OrderStatus.CANCELLED
+            ? {
+                status: OrderStatus.CANCELLED,
+                cancelTimerRemainingSeconds: 0,
+                cancelTimerPausedAt: new Date(),
+                cancelTimerLastResumedAt: null,
+              }
+            : {
+                status: OrderStatus.SEARCHING_DRIVER,
+                ...resumedTimer,
+              },
       });
       // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId }, data: { status: ChatStatus.CLOSED } });

@@ -289,8 +289,6 @@ export class AdminOrdersController {
 
   @Get(':id')
   async getOrder(@Param('id') id: string) {
-    // Admin can view any order - pass a dummy userId that won't match, use direct query
-    const order = await this.ordersService.getAllOrders();
-    return order.find(o => o.id === id);
+    return this.ordersService.getOrderForAdmin(id);
   }
 }

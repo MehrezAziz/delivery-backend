@@ -743,27 +743,61 @@ export class OrdersService {
   async getChatRoom(orderId: string, userId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: true, driverAssignment: { include: { driver: true } }, chatRoom: { include: { messages: { orderBy: { timestamp: 'asc' } } } } },
+      include: {
+        customer: true,
+        driverAssignment: { include: { driver: true } },
+        chatRooms: {
+          where: { status: 'ACTIVE' as any },
+          include: { messages: { orderBy: { timestamp: 'asc' } } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
     });
     if (!order) throw new NotFoundException('Order not found');
     const isCust = order.customer.userId === userId;
     const isDrv = order.driverAssignment?.driver.userId === userId;
     if (!isCust && !isDrv) throw new ForbiddenException('Not authorized');
-    return order.chatRoom;
+    const activeRoom = order.chatRooms?.[0] || null;
+    if (!activeRoom) return null;
+    if (isDrv && activeRoom.driverId !== order.driverAssignment?.driverId) {
+      throw new ForbiddenException('Not authorized');
+    }
+    return activeRoom;
   }
 
   async sendChatMessage(orderId: string, userId: string, content: string, image?: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: { include: { user: true } }, driverAssignment: { include: { driver: { include: { user: true } } } }, chatRoom: true },
+      include: {
+        customer: { include: { user: true } },
+        driverAssignment: { include: { driver: { include: { user: true } } } },
+        chatRooms: {
+          where: { status: 'ACTIVE' as any },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
     });
     if (!order) throw new NotFoundException('Order not found');
-    if (!order.chatRoom) throw new BadRequestException('No chat room');
+    const activeRoom = order.chatRooms?.[0];
+    if (!activeRoom) throw new BadRequestException('No active chat room');
     const isCust = order.customer.userId === userId;
     const isDrv = order.driverAssignment?.driver.userId === userId;
     if (!isCust && !isDrv) throw new ForbiddenException('Not authorized');
-    if (order.chatRoom.status === 'CLOSED') throw new ForbiddenException('Chat closed');
-    const message = await this.prisma.message.create({ data: { chatRoomId: order.chatRoom.id, senderId: userId, senderType: isCust ? 'CUSTOMER' : 'DRIVER', content, image } });
+    if (isDrv && activeRoom.driverId !== order.driverAssignment?.driverId) {
+      throw new ForbiddenException('Not authorized');
+    }
+    if (activeRoom.status === 'CLOSED') throw new ForbiddenException('Chat closed');
+    const message = await this.prisma.message.create({
+      data: {
+        chatRoomId: activeRoom.id,
+        senderId: userId,
+        senderType: isCust ? 'CUSTOMER' : 'DRIVER',
+        content,
+        image,
+      },
+    });
 
     // Emit chat notification event
     if (isCust && order.driverAssignment?.driver) {
@@ -997,12 +1031,25 @@ export class OrdersService {
         });
       }
       await tx.driverAssignment.delete({ where: { orderId } });
+      const resumedTimer = this.buildResumedTimerUpdate(order);
+      const nextStatus =
+        resumedTimer.cancelTimerRemainingSeconds <= 0
+          ? OrderStatus.CANCELLED
+          : OrderStatus.SEARCHING_DRIVER;
       await tx.order.update({
         where: { id: orderId },
-        data: {
-          status: OrderStatus.SEARCHING_DRIVER,
-          ...this.buildResumedTimerUpdate(order),
-        },
+        data:
+          nextStatus === OrderStatus.CANCELLED
+            ? {
+                status: OrderStatus.CANCELLED,
+                cancelTimerRemainingSeconds: 0,
+                cancelTimerPausedAt: new Date(),
+                cancelTimerLastResumedAt: null,
+              }
+            : {
+                status: OrderStatus.SEARCHING_DRIVER,
+                ...resumedTimer,
+              },
       });
       await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
     });
@@ -1011,6 +1058,13 @@ export class OrdersService {
       orderId,
       customerUserId: userId,
     });
+    const refreshed = await this.prisma.order.findUnique({ where: { id: orderId }, select: { status: true, customer: { select: { userId: true } } } });
+    if (refreshed?.status === OrderStatus.CANCELLED) {
+      this.eventEmitter.emit('order.no_driver_found', {
+        orderId,
+        customerUserId: refreshed.customer.userId,
+      });
+    }
     this.eventEmitter.emit('order.driver_rejected_notify_driver', {
       orderId,
       driverUserId: rejectedDriverUserId,
@@ -1110,6 +1164,65 @@ export class OrdersService {
     return orders.map((o: any) => this.mapToResponseDto(o));
   }
 
+  async getOrderForAdmin(orderId: string) {
+    const include: any = this.orderInclude();
+    include.chatRooms = {
+      orderBy: { createdAt: 'desc' },
+      include: {
+        driver: {
+          include: {
+            user: { select: { id: true, firstName: true, secondName: true, phone: true } },
+          },
+        },
+        messages: {
+          orderBy: { timestamp: 'asc' },
+          include: {
+            sender: { select: { id: true, firstName: true, secondName: true, phone: true } },
+          },
+        },
+      },
+    };
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include,
+    }) as any;
+    if (!order) throw new NotFoundException('Order not found');
+
+    const base = this.mapToResponseDto(order);
+    return {
+      ...base,
+      chatRoomsHistory: (order.chatRooms || []).map((room: any) => ({
+        id: room.id,
+        status: room.status,
+        createdAt: room.createdAt,
+        driver: room.driver
+          ? {
+              id: room.driver.id,
+              userId: room.driver.userId,
+              name: `${room.driver.user?.firstName || ''} ${room.driver.user?.secondName || ''}`.trim() || 'Driver',
+              phone: room.driver.user?.phone || null,
+            }
+          : null,
+        messages: (room.messages || []).map((msg: any) => ({
+          id: msg.id,
+          senderId: msg.senderId,
+          senderType: msg.senderType,
+          content: msg.content,
+          image: msg.image,
+          timestamp: msg.timestamp,
+          sender: msg.sender
+            ? {
+                id: msg.sender.id,
+                name: `${msg.sender.firstName || ''} ${msg.sender.secondName || ''}`.trim() || null,
+                phone: msg.sender.phone || null,
+              }
+            : null,
+        })),
+      })),
+    };
+  }
+
   private capDriverDisplay(n: number): number | string {
     return n > 10 ? '10+' : n;
   }
@@ -1200,12 +1313,16 @@ export class OrdersService {
       dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true, totalOrders: true, cancelledOrders: true, completionRate: true, avgDeliveryTimeMinutes: true } } } } } },
       arrivalConflict: { include: { driver: { include: { user: { select: { id: true } } } } } },
-      pricingPolicy: true, chatRoom: true, dispute: true, rating: true,
+      pricingPolicy: true,
+      chatRooms: { orderBy: { createdAt: 'desc' } },
+      dispute: true,
+      rating: true,
     } as const;
   }
 
   mapToResponseDto(order: any): OrderResponseDto {
     const cancelRemainingSeconds = this.computeCancelRemainingSeconds(order);
+    const activeChatRoom = (order.chatRooms || []).find((r: any) => r.status === 'ACTIVE') || null;
     return {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
       description: order.description, weight: Number(order.weight), distanceKm: Number(order.distanceKm),
@@ -1254,7 +1371,13 @@ export class OrdersService {
           avgDeliveryTimeMinutes: order.driverAssignment.driver.performanceMetrics?.avgDeliveryTimeMinutes || null,
         } : null,
       } : null,
-      chatRoom: order.chatRoom ? { id: order.chatRoom.id, status: order.chatRoom.status } : null,
+      chatRoom: activeChatRoom ? { id: activeChatRoom.id, status: activeChatRoom.status } : null,
+      chatRooms: (order.chatRooms || []).map((room: any) => ({
+        id: room.id,
+        driverId: room.driverId,
+        status: room.status,
+        createdAt: room.createdAt,
+      })),
       dispute: order.dispute ? { id: order.dispute.id, status: order.dispute.status, reason: order.dispute.reason, resolution: order.dispute.resolution || null } : null,
       rating: order.rating ? { id: order.rating.id, score: order.rating.score, comment: order.rating.comment, createdAt: order.rating.createdAt } : null,
       arrivalConflict: order.arrivalConflict
