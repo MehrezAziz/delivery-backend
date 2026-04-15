@@ -760,23 +760,24 @@ export class OrdersService {
         customer: true,
         driverAssignment: { include: { driver: true } },
         chatRooms: {
-          where: { status: 'ACTIVE' as any },
-          include: { messages: { orderBy: { timestamp: 'asc' } } },
+          include: {
+            driver: { select: { userId: true } },
+            messages: { orderBy: { timestamp: 'asc' } },
+          },
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
       },
     });
     if (!order) throw new NotFoundException('Order not found');
+    const room = order.chatRooms?.[0] || null;
     const isCust = order.customer.userId === userId;
-    const isDrv = order.driverAssignment?.driver.userId === userId;
+    const isDrv =
+      order.driverAssignment?.driver.userId === userId ||
+      room?.driver?.userId === userId;
     if (!isCust && !isDrv) throw new ForbiddenException('Not authorized');
-    const activeRoom = order.chatRooms?.[0] || null;
-    if (!activeRoom) return null;
-    if (isDrv && activeRoom.driverId !== order.driverAssignment?.driverId) {
-      throw new ForbiddenException('Not authorized');
-    }
-    return activeRoom;
+    if (!room) return null;
+    return room;
   }
 
   async sendChatMessage(orderId: string, userId: string, content: string, image?: string) {
@@ -1367,7 +1368,7 @@ export class OrdersService {
 
   mapToResponseDto(order: any): OrderResponseDto {
     const cancelRemainingSeconds = this.computeCancelRemainingSeconds(order);
-    const activeChatRoom = (order.chatRooms || []).find((r: any) => r.status === 'ACTIVE') || null;
+    const latestChatRoom = (order.chatRooms || [])[0] || null;
     return {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
       description: order.description, weight: Number(order.weight), distanceKm: Number(order.distanceKm),
@@ -1416,7 +1417,7 @@ export class OrdersService {
           avgDeliveryTimeMinutes: order.driverAssignment.driver.performanceMetrics?.avgDeliveryTimeMinutes || null,
         } : null,
       } : null,
-      chatRoom: activeChatRoom ? { id: activeChatRoom.id, status: activeChatRoom.status } : null,
+      chatRoom: latestChatRoom ? { id: latestChatRoom.id, status: latestChatRoom.status } : null,
       chatRooms: (order.chatRooms || []).map((room: any) => ({
         id: room.id,
         driverId: room.driverId,
