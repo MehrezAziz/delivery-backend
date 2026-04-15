@@ -95,6 +95,7 @@ export class SupportNotificationListener {
       type: NotificationType.SUPPORT_TICKET_REPLY,
       relatedEntityType: 'SupportTicket',
       relatedEntityId: payload.ticketId,
+      groupKey: `support:${payload.ticketId}`,
     });
   }
 
@@ -106,6 +107,7 @@ export class SupportNotificationListener {
       type: NotificationType.CUSTOMER_REPLIED_TICKET,
       relatedEntityType: 'SupportTicket',
       relatedEntityId: payload.ticketId,
+      groupKey: `support:${payload.ticketId}`,
     });
   }
 
@@ -118,6 +120,7 @@ export class SupportNotificationListener {
       type: NotificationType.DISPUTE_OPENED,
       relatedEntityType: 'Dispute',
       relatedEntityId: payload.disputeId,
+      groupKey: `dispute:${payload.disputeId}`,
     });
 
     // Notify admins
@@ -135,6 +138,7 @@ export class SupportNotificationListener {
       type: NotificationType.DISPUTE_RESOLVED,
       relatedEntityType: 'Dispute',
       relatedEntityId: payload.disputeId,
+      groupKey: `dispute:${payload.disputeId}`,
     });
   }
 

@@ -23,4 +23,18 @@ export class NotificationQueryDto {
   @IsOptional()
   @IsIn(['read', 'unread', 'all'])
   status?: 'read' | 'unread' | 'all' = 'all';
+
+  /** Full inbox: `sentAt` = newest first; `type` = group by type then newest. */
+  @IsOptional()
+  @IsIn(['sentAt', 'type'])
+  sortBy?: 'sentAt' | 'type' = 'sentAt';
+}
+
+export class NotificationPreviewQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  limit?: number = 8;
 }

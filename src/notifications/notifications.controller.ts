@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { RegisterTokenDto } from './dto/register-token.dto';
-import { NotificationQueryDto } from './dto/notification-query.dto';
+import { NotificationQueryDto, NotificationPreviewQueryDto } from './dto/notification-query.dto';
 import { JwtUserGuard } from '../auth/guards/auth.guards';
 import { JwtSuperUserGuard } from '../auth/guards/auth.guards';
 import { PrismaService } from '../prisma/prisma.service';
@@ -48,6 +48,12 @@ export class UserNotificationsController {
   @Get()
   async getNotifications(@Request() req, @Query() query: NotificationQueryDto) {
     return this.notificationsService.getNotifications(req.user.id, 'USER', query);
+  }
+
+  /** Short grouped list for in-app “reminder” sheet (not full history). */
+  @Get('preview')
+  async getPreview(@Request() req, @Query() query: NotificationPreviewQueryDto) {
+    return this.notificationsService.getPreviewGroups(req.user.id, 'USER', query.limit ?? 8);
   }
 
   @Get('unread-count')

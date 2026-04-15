@@ -10,6 +10,8 @@ export interface PushPayload {
   actionButtons?: Array<{ id: string; title: string; action: string }>;
   groupKey?: string;
   ongoing?: boolean; // For persistent Android notifications
+  /** Stable thread for Android notification tag + iOS thread-id (chat / order / support grouping). */
+  threadId?: string;
 }
 
 @Injectable()
@@ -96,25 +98,42 @@ export class FirebaseService implements OnModuleInit {
           },
         };
       } else {
-        // Non-order notifications: standard notification display
+        const threadId =
+          payload.threadId ||
+          payload.groupKey ||
+          (dataPayload.relatedEntityType && dataPayload.relatedEntityId
+            ? `${dataPayload.relatedEntityType}:${dataPayload.relatedEntityId}`
+            : undefined);
+        const androidTag =
+          threadId && threadId.length <= 64 ? threadId : threadId?.slice(0, 64);
+
+        // Non-order notifications: standard notification display + stable thread for OS grouping
         message = {
           token: payload.token,
           notification: {
             title: payload.title,
             body: payload.body,
           },
-          data: dataPayload,
+          data: {
+            ...dataPayload,
+            ...(threadId ? { threadId } : {}),
+          },
           android: {
             priority: 'high',
+            ...(threadId ? { collapseKey: threadId.slice(0, 128) } : {}),
             notification: {
               channelId: 'default',
               sound: 'default',
+              ...(androidTag ? { tag: androidTag } : {}),
             },
           },
           apns: {
             headers: { 'apns-priority': '10' },
             payload: {
-              aps: { sound: 'default' },
+              aps: {
+                sound: 'default',
+                ...(threadId ? { 'thread-id': threadId } : {}),
+              },
             },
           },
         };

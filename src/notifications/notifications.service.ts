@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  Notification,
   NotificationType,
   NotificationPriority,
   NotificationChannel,
@@ -152,10 +153,17 @@ export class NotificationsService {
       };
       const orderStatus = dto.orderStatus || ORDER_STATUS_BY_TYPE[dto.type];
 
+      const threadId =
+        dto.groupKey?.trim() ||
+        (dto.relatedEntityType && dto.relatedEntityId
+          ? `${dto.relatedEntityType}:${dto.relatedEntityId}`
+          : `singleton:${notificationId}`);
+
       const result = await this.firebaseService.sendPush({
         token: user.fcmToken,
         title,
         body,
+        threadId,
         data: {
           notificationId,
           type: dto.type,
@@ -226,7 +234,13 @@ export class NotificationsService {
   async getNotifications(
     userId: string,
     userType: string,
-    query: { page?: number; limit?: number; type?: NotificationType; status?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      type?: NotificationType;
+      status?: string;
+      sortBy?: 'sentAt' | 'type';
+    },
   ) {
     const page = query.page || 1;
     const limit = query.limit || 20;
@@ -237,10 +251,16 @@ export class NotificationsService {
     if (query.status === 'read') where.readAt = { not: null };
     if (query.status === 'unread') where.readAt = null;
 
+    const sortBy = query.sortBy || 'sentAt';
+    const orderBy =
+      sortBy === 'type'
+        ? [{ type: 'asc' as const }, { sentAt: 'desc' as const }]
+        : [{ sentAt: 'desc' as const }];
+
     const [notifications, total] = await Promise.all([
       this.prisma.notification.findMany({
         where,
-        orderBy: { sentAt: 'desc' },
+        orderBy,
         skip,
         take: limit,
       }),
@@ -250,6 +270,56 @@ export class NotificationsService {
     return {
       data: notifications,
       meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  /** Stable inbox key: DB groupKey, else related entity, else one row per id. */
+  static inboxGroupKey(n: Notification): string {
+    if (n.groupKey?.trim()) return n.groupKey.trim();
+    if (n.relatedEntityType && n.relatedEntityId) {
+      return `${n.relatedEntityType}:${n.relatedEntityId}`;
+    }
+    return `singleton:${n.id}`;
+  }
+
+  groupNotificationsIntoRows(notifications: Notification[]) {
+    const map = new Map<string, Notification[]>();
+    for (const n of notifications) {
+      const key = NotificationsService.inboxGroupKey(n);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(n);
+    }
+    const rows: {
+      groupKey: string;
+      latest: Notification;
+      unreadCount: number;
+      itemCount: number;
+    }[] = [];
+    for (const [groupKey, items] of map.entries()) {
+      items.sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+      const latest = items[0];
+      const unreadCount = items.filter((x) => !x.readAt).length;
+      rows.push({ groupKey, latest, unreadCount, itemCount: items.length });
+    }
+    return rows;
+  }
+
+  async getPreviewGroups(userId: string, userType: string, limitGroups = 8) {
+    const recent = await this.prisma.notification.findMany({
+      where: { userId, userType },
+      orderBy: { sentAt: 'desc' },
+      take: 250,
+    });
+    const allRows = this.groupNotificationsIntoRows(recent);
+    allRows.sort((a, b) => {
+      const ur = (b.unreadCount > 0 ? 1 : 0) - (a.unreadCount > 0 ? 1 : 0);
+      if (ur !== 0) return ur;
+      return b.latest.sentAt.getTime() - a.latest.sentAt.getTime();
+    });
+    const data = allRows.slice(0, Math.min(20, Math.max(1, limitGroups)));
+    return {
+      data,
+      meta: { limit: data.length, totalGroups: allRows.length },
     };
   }
 
