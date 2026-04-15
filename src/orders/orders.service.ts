@@ -893,7 +893,17 @@ export class OrdersService {
 
   /** Revert order to previous status (driver go-back) */
   async revertOrderStatus(orderId: string, driverId: string): Promise<OrderResponseDto> {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { driverAssignment: true } });
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: { select: { id: true, userId: true } },
+        driverAssignment: {
+          include: {
+            driver: { include: { user: { select: { id: true, firstName: true, secondName: true } } } },
+          },
+        },
+      },
+    });
     if (!order) throw new NotFoundException('Order not found');
     if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
     const revertMap: Record<string, OrderStatus> = {
@@ -914,6 +924,28 @@ export class OrdersService {
       await this.prisma.driverAssignment.update({ where: { orderId }, data: clearData });
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: { status: prevStatus }, include: this.orderInclude() });
+
+    const customerUserId = order.customer?.userId;
+    const driverUserId = order.driverAssignment.driver?.user?.id;
+    if (customerUserId && driverUserId) {
+      if (prevStatus === OrderStatus.DRIVER_ASSIGNED) {
+        const u = order.driverAssignment.driver.user;
+        const driverName = `${u.firstName || ''} ${u.secondName || ''}`.trim() || 'Driver';
+        this.eventEmitter.emit('order.driver_assigned', {
+          orderId,
+          customerId: order.customer.id,
+          customerUserId,
+          driverId: order.driverAssignment.driverId,
+          driverUserId,
+          driverName,
+        });
+      } else if (prevStatus === OrderStatus.DRIVER_ARRIVED) {
+        this.eventEmitter.emit('order.driver_arrived', { orderId, customerUserId, driverUserId });
+      } else if (prevStatus === OrderStatus.PICKED_UP) {
+        this.eventEmitter.emit('order.picked_up', { orderId, customerUserId, driverUserId });
+      }
+    }
+
     return this.mapToResponseDto(updated as any);
   }
 

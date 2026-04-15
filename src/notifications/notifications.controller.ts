@@ -12,6 +12,7 @@ import {
 import { NotificationsService } from './notifications.service';
 import { RegisterTokenDto } from './dto/register-token.dto';
 import { NotificationQueryDto, NotificationPreviewQueryDto } from './dto/notification-query.dto';
+import { MarkThreadReadDto } from './dto/mark-thread-read.dto';
 import { JwtUserGuard } from '../auth/guards/auth.guards';
 import { JwtSuperUserGuard } from '../auth/guards/auth.guards';
 import { PrismaService } from '../prisma/prisma.service';
@@ -60,6 +61,13 @@ export class UserNotificationsController {
   async getUnreadCount(@Request() req) {
     const count = await this.notificationsService.getUnreadCount(req.user.id, 'USER');
     return { count };
+  }
+
+  /** Mark all notifications in the same thread as read (e.g. entire chat group). */
+  @Patch('thread/read')
+  async markThreadRead(@Request() req, @Body() dto: MarkThreadReadDto) {
+    await this.notificationsService.markThreadAsRead(req.user.id, 'USER', dto.groupKey);
+    return { message: 'Thread marked as read' };
   }
 
   @Patch(':id/read')

@@ -231,6 +231,47 @@ export class NotificationsService {
     });
   }
 
+  /** Mark every unread row in the same inbox thread (matches mobile grouping / preview `groupKey`). */
+  async markThreadAsRead(userId: string, userType: string, groupKeyRaw: string) {
+    const key = (groupKeyRaw || '').trim();
+    if (!key) return { count: 0 };
+    const now = new Date();
+
+    if (key.startsWith('singleton:')) {
+      const id = key.slice('singleton:'.length);
+      return this.prisma.notification.updateMany({
+        where: { id, userId, userType, readAt: null },
+        data: { readAt: now },
+      });
+    }
+
+    const colonIdx = key.indexOf(':');
+    const isPrefixedThread =
+      colonIdx > 0 &&
+      ['order', 'chat', 'support', 'dispute'].includes(key.slice(0, colonIdx).toLowerCase());
+
+    const orBranches: Array<{ groupKey: string } | { relatedEntityType: string; relatedEntityId: string }> = [
+      { groupKey: key },
+    ];
+    if (!isPrefixedThread && colonIdx > 0) {
+      const relatedEntityType = key.slice(0, colonIdx);
+      const relatedEntityId = key.slice(colonIdx + 1);
+      if (relatedEntityType && relatedEntityId) {
+        orBranches.push({ relatedEntityType, relatedEntityId });
+      }
+    }
+
+    return this.prisma.notification.updateMany({
+      where: {
+        userId,
+        userType,
+        readAt: null,
+        OR: orBranches as any,
+      },
+      data: { readAt: now },
+    });
+  }
+
   async getNotifications(
     userId: string,
     userType: string,
