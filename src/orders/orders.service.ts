@@ -571,7 +571,13 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { customer: true } });
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
-    const active: OrderStatus[] = [OrderStatus.DRIVER_ASSIGNED, OrderStatus.DRIVER_ARRIVED, OrderStatus.PICKED_UP, OrderStatus.DELIVERING];
+    const active: OrderStatus[] = [
+      OrderStatus.PENDING_CUSTOMER_APPROVAL,
+      OrderStatus.DRIVER_ASSIGNED,
+      OrderStatus.DRIVER_ARRIVED,
+      OrderStatus.PICKED_UP,
+      OrderStatus.DELIVERING,
+    ];
     if (order.status === OrderStatus.DELIVERED) {
       return this.prisma.driverLocation.findFirst({ where: { orderId }, orderBy: { timestamp: 'desc' } });
     }
