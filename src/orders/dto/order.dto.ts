@@ -1,6 +1,6 @@
 import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
-import { PaymentType, OrderStatus, DeliveryZoneType } from '@prisma/client';
+import { PaymentType, OrderStatus, DeliveryZoneType, OrderSourceType } from '@prisma/client';
 
 export class CreateOrderDto {
   @IsString()
@@ -150,11 +150,23 @@ export class RateOrderDto {
   comment?: string;
 }
 
+export class ReturnDepositFeedbackDto {
+  @IsString()
+  @IsNotEmpty()
+  feedback: string;
+
+  @IsBoolean()
+  @IsOptional()
+  conditionIssue?: boolean;
+}
+
 export class OrderResponseDto {
   id: string;
   customerId: string;
   status: OrderStatus;
   paymentType: PaymentType;
+  sourceType: OrderSourceType;
+  deliveryCompanyId?: string | null;
   description: string | null;
   weight: number;
   distanceKm: number;
@@ -197,6 +209,13 @@ export class OrderResponseDto {
     status: string;
     customerReason: string;
     driverFeedback: string | null;
+    createdAt: Date;
+  } | null;
+  returnDepositFeedback?: {
+    id: string;
+    reportedByUserId: string;
+    conditionIssue: boolean;
+    feedback: string;
     createdAt: Date;
   } | null;
 }

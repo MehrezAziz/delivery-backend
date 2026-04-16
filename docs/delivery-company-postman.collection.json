@@ -1,0 +1,138 @@
+{
+  "info": {
+    "name": "Delivery Company API",
+    "_postman_id": "a8f4d8a2-184f-4c82-b1f4-6ef2f7f381df",
+    "description": "Collection for delivery company integration API.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://api.example.com/api/v1/company" },
+    { "key": "apiKey", "value": "dck_xxx" },
+    { "key": "orderId", "value": "order-id" }
+  ],
+  "item": [
+    {
+      "name": "Profile",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/profile"
+      }
+    },
+    {
+      "name": "Create Department",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"label\":\"Main Hub\",\"city\":\"Tunis\",\"country\":\"TN\"}"
+        },
+        "url": "{{baseUrl}}/departments"
+      }
+    },
+    {
+      "name": "Preview Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"pickupAddressId\":\"addr1\",\"dropoffAddressId\":\"addr2\",\"weight\":2.5,\"description\":\"Package\"}"
+        },
+        "url": "{{baseUrl}}/orders/preview"
+      }
+    },
+    {
+      "name": "Create Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"pickupAddressId\":\"addr1\",\"dropoffAddressId\":\"addr2\",\"weight\":2.5,\"description\":\"Package\"}"
+        },
+        "url": "{{baseUrl}}/orders"
+      }
+    },
+    {
+      "name": "List Orders",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/orders"
+      }
+    },
+    {
+      "name": "Submit Return Deposit Feedback",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"feedback\":\"Package not in good condition\",\"conditionIssue\":true}"
+        },
+        "url": "{{baseUrl}}/orders/{{orderId}}/return-deposit-feedback"
+      }
+    },
+    {
+      "name": "Wallet",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/wallet"
+      }
+    },
+    {
+      "name": "Wallet Transactions",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/wallet/transactions"
+      }
+    },
+    {
+      "name": "Create Refund Request",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"amountCoins\":100,\"destinationType\":\"BANK_TRANSFER\",\"reason\":\"Periodic payout\"}"
+        },
+        "url": "{{baseUrl}}/refund-requests"
+      }
+    },
+    {
+      "name": "List Refund Requests",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/refund-requests"
+      }
+    },
+    {
+      "name": "Stats",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/stats?from=2026-01-01T00:00:00.000Z&to=2026-01-31T23:59:59.000Z"
+      }
+    }
+  ]
+}

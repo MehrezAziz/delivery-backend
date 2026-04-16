@@ -2,7 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } f
 import { OrdersService } from './orders.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { OrderUrgentNotifyService } from './services/order-urgent-notify.service';
-import { CreateOrderDto, PreviewOrderDto, CancelOrderDto, ChangePaymentMethodDto, UpdateOrderStatusDto, SendChatMessageDto, CreateDisputeDto, RequestAssistanceDto, RateOrderDto, UpdateCancelAfterDto } from './dto/order.dto';
+import { CreateOrderDto, PreviewOrderDto, CancelOrderDto, ChangePaymentMethodDto, UpdateOrderStatusDto, SendChatMessageDto, CreateDisputeDto, RequestAssistanceDto, RateOrderDto, UpdateCancelAfterDto, ReturnDepositFeedbackDto } from './dto/order.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, CustomerGuard, DriverGuard, UserActiveGuard, UserRestrictionGuard, VerifiedDriverGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
@@ -145,6 +145,16 @@ export class OrdersController {
   @UseGuards(CustomerGuard)
   async getTrackingToken(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
     return this.ordersService.getTrackingInfo(orderId, user.id);
+  }
+
+  @Post(':id/return-deposit-feedback')
+  @UseGuards(CustomerGuard)
+  async submitReturnDepositFeedback(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body() dto: ReturnDepositFeedbackDto,
+  ) {
+    return this.ordersService.submitReturnDepositFeedback(orderId, user.id, dto.feedback, !!dto.conditionIssue);
   }
 }
 

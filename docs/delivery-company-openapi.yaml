@@ -1,0 +1,141 @@
+openapi: 3.0.3
+info:
+  title: Delivery Company API
+  version: 1.0.0
+  description: API for delivery companies integrating with local delivery operations.
+servers:
+  - url: https://api.example.com/api/v1/company
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+  schemas:
+    CompanyOrderCreate:
+      type: object
+      required: [pickupAddressId, weight]
+      properties:
+        pickupAddressId: { type: string }
+        dropoffAddressId: { type: string, nullable: true }
+        localPickupOnly: { type: boolean, default: false }
+        weight: { type: number, minimum: 0 }
+        customerExtraAmount: { type: number, minimum: 0, maximum: 10000 }
+        description: { type: string }
+    RefundRequestCreate:
+      type: object
+      required: [amountCoins, destinationType]
+      properties:
+        amountCoins: { type: number, minimum: 0.01 }
+        destinationType:
+          type: string
+          enum: [BANK_TRANSFER, CARD_REFUND]
+        reason: { type: string }
+paths:
+  /profile:
+    get:
+      summary: Get company profile
+      responses:
+        '200':
+          description: Company profile
+  /departments:
+    post:
+      summary: Create company department
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+                city: { type: string }
+                country: { type: string }
+      responses:
+        '201': { description: Department created }
+  /orders:
+    get:
+      summary: List company orders
+      responses:
+        '200': { description: Orders list }
+    post:
+      summary: Create order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyOrderCreate'
+      responses:
+        '201': { description: Order created }
+  /orders/preview:
+    post:
+      summary: Preview order price/capacity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyOrderCreate'
+      responses:
+        '200': { description: Preview result }
+  /orders/{id}/return-deposit-feedback:
+    post:
+      summary: Submit return deposit feedback
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [feedback]
+              properties:
+                feedback: { type: string }
+                conditionIssue: { type: boolean, default: false }
+      responses:
+        '200': { description: Feedback saved }
+  /wallet:
+    get:
+      summary: Get wallet summary
+      responses:
+        '200': { description: Wallet data }
+  /wallet/transactions:
+    get:
+      summary: Get wallet transactions
+      responses:
+        '200': { description: Transactions list }
+  /refund-requests:
+    get:
+      summary: Get refund requests
+      responses:
+        '200': { description: Refund list }
+    post:
+      summary: Create refund request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequestCreate'
+      responses:
+        '201': { description: Refund created }
+  /stats:
+    get:
+      summary: Get aggregated stats
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        '200': { description: Stats object }

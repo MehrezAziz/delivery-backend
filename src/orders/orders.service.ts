@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from './services/price-calculation.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { CreateOrderDto, PreviewOrderDto, ChangePaymentMethodDto, OrderResponseDto } from './dto/order.dto';
-import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus, DriverStatus, NotificationType, CustomerServiceRole } from '@prisma/client';
+import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus, DriverStatus, NotificationType, CustomerServiceRole, OrderSourceType, DeliveryCompanyTransactionType } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -232,6 +232,7 @@ export class OrdersService {
         weight: dto.weight,
         distanceKm: distance,
         price: finalPrice,
+        sourceType: OrderSourceType.NORMAL_CUSTOMER,
         customerExtraAmount: extra,
         nightFee: priceCalc.nightFee,
         extraWeightFee: priceCalc.extraWeightFee,
@@ -428,7 +429,7 @@ export class OrdersService {
             },
           });
         }
-      } else if (order.customer.wallet) {
+      } else if (order.customer.wallet && order.sourceType !== OrderSourceType.DELIVERY_COMPANY) {
         const nb = Number(order.customer.wallet.balance) - Number(order.price);
         await tx.digitalWallet.update({ where: { id: order.customer.wallet.id }, data: { balance: nb } });
         await tx.walletTransaction.create({ data: { walletId: order.customer.wallet.id, orderId, type: WalletTransactionType.ORDER_PAYMENT, amount: -Number(order.price), status: TransactionStatus.SUCCESS, referenceId: orderId, referenceType: ReferenceType.ORDER, balanceAfter: nb } });
@@ -437,7 +438,9 @@ export class OrdersService {
       if (order.customer.referredByCode?.ownerId) {
         const ex = await tx.referralCommission.findFirst({ where: { orderId } });
         if (!ex && order.pricingPolicy) {
-          const ca = Number(order.pricingPolicy.baseFee);
+          const baseCommission = Number(order.pricingPolicy.baseFee);
+          const multiplier = order.sourceType === OrderSourceType.DELIVERY_COMPANY ? 0.5 : 1;
+          const ca = Math.round(baseCommission * multiplier * 100) / 100;
           await tx.referralCommission.create({ data: { referralCodeId: order.customer.referredByCode.id, referrerCustomerId: order.customer.referredByCode.ownerId, referredCustomerId: order.customerId, orderId, commissionAmount: ca, status: ReferralCommissionStatus.PAID } });
           const rw = await tx.digitalWallet.findUnique({ where: { customerId: order.customer.referredByCode.ownerId } });
           if (rw) {
@@ -450,6 +453,18 @@ export class OrdersService {
 
       await tx.driverPerformanceMetrics.updateMany({ where: { driverId: order.driverAssignment.driverId }, data: { totalOrders: { increment: 1 }, completedOrders: { increment: 1 }, lastCalculatedAt: new Date() } });
       await tx.driverAccount.updateMany({ where: { driverId: order.driverAssignment.driverId }, data: { completedDeliveries: { increment: 1 } } });
+
+      if (order.deliveryCompanyId) {
+        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
+        if (company) {
+          const reserve = Math.round(Number(order.price) * 0.5 * 100) / 100;
+          const nextLocked = Math.max(0, Number(company.lockedCoins) - reserve);
+          await tx.deliveryCompany.update({
+            where: { id: company.id },
+            data: { lockedCoins: nextLocked },
+          });
+        }
+      }
 
       // Recalculate performance metrics
       const metrics = await tx.driverPerformanceMetrics.findUnique({ where: { driverId: order.driverAssignment.driverId } });
@@ -507,7 +522,8 @@ export class OrdersService {
     if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
     const valid: Record<string, OrderStatus[]> = {
       DRIVER_ASSIGNED: [OrderStatus.DRIVER_ARRIVED], DRIVER_ARRIVED: [OrderStatus.PICKED_UP],
-      PICKED_UP: [OrderStatus.DELIVERING], DELIVERING: [OrderStatus.DELIVERED],
+      PICKED_UP: [OrderStatus.DELIVERING], DELIVERING: [OrderStatus.DELIVERED, OrderStatus.RETURNED],
+      RETURNED: [OrderStatus.RETURN_DEPOSIT],
     };
     if (!(valid[order.status] || []).includes(newStatus)) throw new BadRequestException(`Cannot transition from ${order.status} to ${newStatus}`);
     if (newStatus === OrderStatus.DELIVERED) {
@@ -517,8 +533,50 @@ export class OrdersService {
       }
       return this.completeOrder(orderId, driverId);
     }
+    if (newStatus === OrderStatus.RETURNED) {
+      if (!order.driverAssignment.image1Proof) {
+        throw new BadRequestException('You must upload at least the first proof image before marking the order as returned');
+      }
+      if (order.deliveryCompanyId) {
+        await this.prisma.$transaction(async (tx) => {
+          const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
+          if (!company) return;
+          const surcharge = Math.round(Number(order.price) * 0.5 * 100) / 100;
+          const consumeFromLocked = Math.min(Number(company.lockedCoins), surcharge);
+          const remainingCharge = surcharge - consumeFromLocked;
+          const nextLocked = Number(company.lockedCoins) - consumeFromLocked;
+          const nextBalance = Number(company.coinBalance) - remainingCharge;
+          await tx.deliveryCompany.update({
+            where: { id: company.id },
+            data: { coinBalance: nextBalance, lockedCoins: nextLocked },
+          });
+          await tx.deliveryCompanyTransaction.create({
+            data: {
+              deliveryCompanyId: company.id,
+              orderId: order.id,
+              type: DeliveryCompanyTransactionType.RETURN_SURCHARGE,
+              amount: -surcharge,
+              balanceAfter: nextBalance,
+              description: `Return surcharge (50%) for order ${order.id}`,
+            },
+          });
+        });
+      }
+    }
     if (newStatus === OrderStatus.DRIVER_ARRIVED) await this.prisma.driverAssignment.update({ where: { orderId }, data: { arrivedAt: new Date() } });
     else if (newStatus === OrderStatus.PICKED_UP) await this.prisma.driverAssignment.update({ where: { orderId }, data: { pickedUpAt: new Date() } });
+    else if (newStatus === OrderStatus.RETURN_DEPOSIT && order.deliveryCompanyId) {
+      await this.prisma.$transaction(async (tx) => {
+        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
+        if (!company) return;
+        const reserve = Math.round(Number(order.price) * 0.5 * 100) / 100;
+        const nextLocked = Math.max(0, Number(company.lockedCoins) - reserve);
+        await tx.deliveryCompany.update({
+          where: { id: company.id },
+          data: { lockedCoins: nextLocked },
+        });
+      });
+    }
 
     // Generate tracking token when order is picked up
     const orderUpdateData: any = { status: newStatus };
@@ -535,6 +593,8 @@ export class OrdersService {
       DRIVER_ARRIVED: 'order.driver_arrived',
       PICKED_UP: 'order.picked_up',
       DELIVERING: 'order.delivering',
+      RETURNED: 'order.returned',
+      RETURN_DEPOSIT: 'order.return_deposit',
     };
     const eventName = statusEventMap[newStatus];
     const driverUserId = order.driverAssignment?.driver?.userId;
@@ -1195,6 +1255,38 @@ export class OrdersService {
     return { message: 'Feedback saved' };
   }
 
+  /**
+   * Feedback after driver marks RETURN_DEPOSIT.
+   * Currently attached to customer identity; for delivery-company role this should be moved to company auth guard.
+   */
+  async submitReturnDepositFeedback(orderId: string, userId: string, feedback: string, conditionIssue = false) {
+    const text = feedback.trim();
+    if (text.length < 5) {
+      throw new BadRequestException('Please write at least 5 characters.');
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true, returnDepositFeedback: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (order.status !== OrderStatus.RETURN_DEPOSIT) {
+      throw new BadRequestException('Feedback is allowed only after return deposit.');
+    }
+
+    const saved = order.returnDepositFeedback
+      ? await this.prisma.orderReturnDepositFeedback.update({
+          where: { orderId },
+          data: { feedback: text, conditionIssue, reportedByUserId: userId },
+        })
+      : await this.prisma.orderReturnDepositFeedback.create({
+          data: { orderId, feedback: text, conditionIssue, reportedByUserId: userId },
+        });
+
+    return { message: 'Return deposit feedback saved', feedback: saved };
+  }
+
   /** Close the chat room for an order (used on CANCELLED, DELIVERED, REFUNDED) */
   private async closeChatRoomForOrder(orderId: string) {
     await this.prisma.chatRoom.updateMany({
@@ -1359,6 +1451,7 @@ export class OrdersService {
       dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true, totalOrders: true, cancelledOrders: true, completionRate: true, avgDeliveryTimeMinutes: true } } } } } },
       arrivalConflict: { include: { driver: { include: { user: { select: { id: true } } } } } },
+      returnDepositFeedback: true,
       pricingPolicy: true,
       chatRooms: { orderBy: { createdAt: 'desc' } },
       dispute: true,
@@ -1371,6 +1464,8 @@ export class OrdersService {
     const latestChatRoom = (order.chatRooms || [])[0] || null;
     return {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
+      sourceType: order.sourceType,
+      deliveryCompanyId: order.deliveryCompanyId ?? null,
       description: order.description, weight: Number(order.weight), distanceKm: Number(order.distanceKm),
       price: Number(order.price),
       customerExtraAmount: Number(order.customerExtraAmount ?? 0),
@@ -1433,6 +1528,15 @@ export class OrdersService {
             customerReason: order.arrivalConflict.customerReason,
             driverFeedback: order.arrivalConflict.driverFeedback ?? null,
             createdAt: order.arrivalConflict.createdAt,
+          }
+        : null,
+      returnDepositFeedback: order.returnDepositFeedback
+        ? {
+            id: order.returnDepositFeedback.id,
+            reportedByUserId: order.returnDepositFeedback.reportedByUserId,
+            conditionIssue: order.returnDepositFeedback.conditionIssue,
+            feedback: order.returnDepositFeedback.feedback,
+            createdAt: order.returnDepositFeedback.createdAt,
           }
         : null,
     };

@@ -20,6 +20,7 @@ import { GeographyModule } from './geography/geography.module';
 import { SupportModule } from './support/support.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ControlPanelModule } from './control-panel/control-panel.module';
+import { DeliveryCompanyModule } from './delivery-company/delivery-company.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { ControlPanelModule } from './control-panel/control-panel.module';
     GeographyModule,
     SupportModule,
     ControlPanelModule,
+    DeliveryCompanyModule,
   ],
   controllers: [AppController],
   providers: [

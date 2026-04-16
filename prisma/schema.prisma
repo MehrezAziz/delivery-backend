@@ -59,6 +59,8 @@ enum OrderStatus {
   DRIVER_ARRIVED
   PICKED_UP
   DELIVERING
+  RETURNED
+  RETURN_DEPOSIT
   DELIVERED
   CANCELLED
   REFUNDED
@@ -69,6 +71,43 @@ enum OrderStatus {
 enum PaymentType {
   COD
   WALLET
+}
+
+enum OrderSourceType {
+  NORMAL_CUSTOMER
+  DELIVERY_COMPANY
+}
+
+enum DeliveryCompanyStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum DeliveryCompanyApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum DeliveryCompanyRefundDestinationType {
+  BANK_TRANSFER
+  CARD_REFUND
+}
+
+enum DeliveryCompanyRefundStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+  FAILED
+}
+
+enum DeliveryCompanyTransactionType {
+  ORDER_PAYMENT
+  RETURN_SURCHARGE
+  REFUND_REQUEST
+  REFUND_REVERSED
+  ADMIN_ADJUSTMENT
 }
 
 enum DriverTransactionType {
@@ -333,6 +372,8 @@ enum CustomerServiceRole {
   VERIFY_ACCOUNTS
   ACCEPT_LOCAL_PAYMENT
   VIEW_DELIVERIES
+  SEE_DELIVERY_COMPANY
+  MANAGE_DELIVERY_COMPANY
   MANAGE_DISPUTES
   MANAGE_SUPPORT_TICKETS
   VIEW_FINANCIAL_REPORTS
@@ -411,6 +452,7 @@ model Customer {
   commissionsAsReferred     ReferralCommission[] @relation("ReferredCommissions")
   chatRoomsAsCustomer       ChatRoom[]
   orderArrivalConflicts     OrderDriverArrivalConflict[]
+  deliveryCompanyProxyFor   DeliveryCompany?       @relation("DeliveryCompanyProxyCustomer")
 
   @@map("customers")
 }
@@ -788,6 +830,8 @@ model Order {
   weight            Decimal     @db.Decimal(10, 2)
   distanceKm        Decimal     @db.Decimal(10, 2) @map("distance_km")
   price             Decimal     @db.Decimal(10, 2)
+  sourceType        OrderSourceType @default(NORMAL_CUSTOMER) @map("source_type")
+  deliveryCompanyId String?     @map("delivery_company_id")
   nightFee          Decimal     @default(0) @db.Decimal(10, 2) @map("night_fee")
   extraWeightFee    Decimal     @default(0) @db.Decimal(10, 2) @map("extra_weight_fee")
   cancelAfterMinutes Int        @default(15) @map("cancel_after_minutes")
@@ -813,6 +857,7 @@ model Order {
 
   // Relations
   customer            Customer              @relation(fields: [customerId], references: [id])
+  deliveryCompany     DeliveryCompany?      @relation(fields: [deliveryCompanyId], references: [id])
   pricingPolicy       CountryPricingPolicy  @relation(fields: [pricingPolicyId], references: [id])
   pickupAddress       Address?              @relation("PickupAddress", fields: [pickupAddressId], references: [id])
   dropoffAddress      Address?              @relation("DropoffAddress", fields: [dropoffAddressId], references: [id])
@@ -827,10 +872,175 @@ model Order {
   driverRejections    OrderDriverRejection[]
   urgentNotifyTargets OrderUrgentNotifyTarget[]
   arrivalConflict     OrderDriverArrivalConflict?
+  returnDepositFeedback OrderReturnDepositFeedback?
+  deliveryCompanyTransactions DeliveryCompanyTransaction[]
 
   @@index([customerId, status])
+  @@index([deliveryCompanyId, status])
   @@index([status, createdAt])
   @@map("orders")
+}
+
+model DeliveryCompany {
+  id                      String               @id @default(uuid())
+  name                    String
+  contactEmail            String?              @unique @map("contact_email")
+  passwordHash            String?              @map("password_hash")
+  legalName               String?              @map("legal_name")
+  taxId                   String?              @map("tax_id")
+  status                  DeliveryCompanyStatus @default(PENDING)
+  onboardingCompleted     Boolean              @default(false) @map("onboarding_completed")
+  defaultRefundDestinationType DeliveryCompanyRefundDestinationType? @map("default_refund_destination_type")
+  defaultDiscountPercent  Decimal?             @db.Decimal(5, 2) @map("default_discount_percent")
+  maxNegativeBalance      Decimal              @default(0) @db.Decimal(10, 2) @map("max_negative_balance")
+  coinBalance             Decimal              @default(0) @db.Decimal(12, 2) @map("coin_balance")
+  lockedCoins             Decimal              @default(0) @db.Decimal(12, 2) @map("locked_coins")
+  proxyCustomerId         String?              @unique @map("proxy_customer_id")
+  createdAt               DateTime             @default(now()) @map("created_at")
+  updatedAt               DateTime             @updatedAt @map("updated_at")
+
+  proxyCustomer           Customer?            @relation("DeliveryCompanyProxyCustomer", fields: [proxyCustomerId], references: [id])
+  addresses               DeliveryCompanyAddress[]
+  bankAccounts            DeliveryCompanyBankAccount[]
+  apiKeys                 DeliveryCompanyApiKey[]
+  refundRequests          DeliveryCompanyRefundRequest[]
+  transactions            DeliveryCompanyTransaction[]
+  orders                  Order[]
+  auditLogs               DeliveryCompanyAuditLog[]
+
+  @@index([status, createdAt])
+  @@map("delivery_companies")
+}
+
+model DeliveryCompanyAuditLog {
+  id                String   @id @default(uuid())
+  deliveryCompanyId String   @map("delivery_company_id")
+  actionType        String   @map("action_type")
+  actorType         String   @map("actor_type")
+  actorRef          String?  @map("actor_ref")
+  details           Json?
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  deliveryCompany   DeliveryCompany @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryCompanyId, createdAt])
+  @@index([actionType, createdAt])
+  @@map("delivery_company_audit_logs")
+}
+
+model DeliveryCompanyAddress {
+  id                String   @id @default(uuid())
+  deliveryCompanyId String   @map("delivery_company_id")
+  label             String
+  contactName       String?  @map("contact_name")
+  contactPhone      String?  @map("contact_phone")
+  street            String?
+  city              String?
+  country           String?
+  postalCode        String?  @map("postal_code")
+  latitude          Float?
+  longitude         Float?
+  isDefault         Boolean  @default(false) @map("is_default")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  deliveryCompany   DeliveryCompany @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryCompanyId, isDefault])
+  @@map("delivery_company_addresses")
+}
+
+model DeliveryCompanyBankAccount {
+  id                 String   @id @default(uuid())
+  deliveryCompanyId  String   @map("delivery_company_id")
+  iban               String?
+  rib                String?
+  swiftBic           String?  @map("swift_bic")
+  bankName           String?  @map("bank_name")
+  accountHolderName  String   @map("account_holder_name")
+  accountHolderId    String?  @map("account_holder_id")
+  currency           String?  @map("currency")
+  isVerified         Boolean  @default(false) @map("is_verified")
+  verifiedAt         DateTime? @map("verified_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  deliveryCompany    DeliveryCompany @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryCompanyId, isVerified])
+  @@map("delivery_company_bank_accounts")
+}
+
+model DeliveryCompanyApiKey {
+  id                String                      @id @default(uuid())
+  deliveryCompanyId String                      @map("delivery_company_id")
+  name              String
+  keyPrefix         String                      @map("key_prefix")
+  keyHash           String                      @map("key_hash")
+  scopes            String[]                    @default([])
+  status            DeliveryCompanyApiKeyStatus @default(ACTIVE)
+  expiresAt         DateTime?                   @map("expires_at")
+  lastUsedAt        DateTime?                   @map("last_used_at")
+  createdAt         DateTime                    @default(now()) @map("created_at")
+  updatedAt         DateTime                    @updatedAt @map("updated_at")
+
+  deliveryCompany   DeliveryCompany             @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryCompanyId, status])
+  @@unique([keyPrefix, keyHash])
+  @@map("delivery_company_api_keys")
+}
+
+model DeliveryCompanyRefundRequest {
+  id                String                                @id @default(uuid())
+  deliveryCompanyId String                                @map("delivery_company_id")
+  amountCoins       Decimal                               @db.Decimal(12, 2) @map("amount_coins")
+  amountMoney       Decimal                               @db.Decimal(12, 2) @map("amount_money")
+  destinationType   DeliveryCompanyRefundDestinationType  @map("destination_type")
+  status            DeliveryCompanyRefundStatus           @default(PENDING)
+  reason            String?
+  providerReference String?                               @map("provider_reference")
+  approvedBy        String?                               @map("approved_by")
+  processedAt       DateTime?                             @map("processed_at")
+  createdAt         DateTime                              @default(now()) @map("created_at")
+  updatedAt         DateTime                              @updatedAt @map("updated_at")
+
+  deliveryCompany   DeliveryCompany                       @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryCompanyId, status, createdAt])
+  @@map("delivery_company_refund_requests")
+}
+
+model DeliveryCompanyTransaction {
+  id                String                         @id @default(uuid())
+  deliveryCompanyId String                         @map("delivery_company_id")
+  orderId           String?                        @map("order_id")
+  type              DeliveryCompanyTransactionType
+  amount            Decimal                        @db.Decimal(12, 2)
+  balanceAfter      Decimal                        @db.Decimal(12, 2) @map("balance_after")
+  description       String?
+  createdAt         DateTime                       @default(now()) @map("created_at")
+
+  deliveryCompany   DeliveryCompany                @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+  order             Order?                         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([deliveryCompanyId, createdAt])
+  @@index([orderId])
+  @@map("delivery_company_transactions")
+}
+
+model OrderReturnDepositFeedback {
+  id             String   @id @default(uuid())
+  orderId        String   @unique @map("order_id")
+  reportedByUserId String @map("reported_by_user_id")
+  conditionIssue Boolean  @default(false) @map("condition_issue")
+  feedback       String   @map("feedback")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([reportedByUserId, createdAt])
+  @@map("order_return_deposit_feedbacks")
 }
 
 model CustomerServiceGovernorate {
