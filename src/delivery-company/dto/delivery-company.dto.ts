@@ -102,6 +102,18 @@ export class CreateDeliveryCompanyOrderDto {
   @IsOptional()
   dropoffAddressId?: string;
 
+  @IsString()
+  @IsOptional()
+  dropoffGovernorateId?: string;
+
+  @IsString()
+  @IsOptional()
+  dropoffDelegationId?: string;
+
+  @IsString()
+  @IsOptional()
+  dropoffStreet?: string;
+
   @IsBoolean()
   @IsOptional()
   localPickupOnly?: boolean;
@@ -185,7 +197,13 @@ export class CompanyOrderPreviewResponseDto {
   paymentType: PaymentType;
   effectiveDiscountPercent: number;
   calculatedPrice: number;
+  discountedPrice: number;
   customerExtraAmount: number;
+  weightKg: number;
+  distanceKm: number;
+  billingDistanceKm: number;
+  pricePerKm: number;
+  nightFee: number;
   totalPrice: number;
   reserveAmount: number;
   requiredCapacity: number;

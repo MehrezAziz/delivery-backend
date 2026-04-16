@@ -7,6 +7,9 @@ export interface PriceCalculationResult {
   distanceFee: number;
   extraWeightFee: number;
   nightFee: number;
+  distanceKm: number;
+  billingDistanceKm: number;
+  pricePerKm: number;
   totalPrice: number;
   pricingPolicyId: string;
   deliveryZoneType: DeliveryZoneType;
@@ -200,7 +203,8 @@ export class PriceCalculationService {
 
     // Calculate fees
     const baseFee = Number(pricingPolicy.baseFee);
-    const distanceFee = Number(pricingPolicy.pricePerKm) * billingDistanceKm;
+    const pricePerKm = Number(pricingPolicy.pricePerKm);
+    const distanceFee = pricePerKm * billingDistanceKm;
 
     // Calculate extra weight fee
     let extraWeightFee = 0;
@@ -225,6 +229,9 @@ export class PriceCalculationService {
       distanceFee,
       extraWeightFee,
       nightFee,
+      distanceKm,
+      billingDistanceKm,
+      pricePerKm,
       totalPrice: Math.round(totalPrice * 100) / 100,
       pricingPolicyId: pricingPolicy.id,
       deliveryZoneType,
@@ -281,7 +288,8 @@ export class PriceCalculationService {
 
     const billingDistanceKm = 2;
     const baseFee = Number(pricingPolicy.baseFee);
-    const distanceFee = Number(pricingPolicy.pricePerKm) * billingDistanceKm;
+    const pricePerKm = Number(pricingPolicy.pricePerKm);
+    const distanceFee = pricePerKm * billingDistanceKm;
 
     let extraWeightFee = 0;
     const baseWeight = Number(pricingPolicy.baseWeight);
@@ -302,6 +310,9 @@ export class PriceCalculationService {
       distanceFee,
       extraWeightFee,
       nightFee,
+      distanceKm: billingDistanceKm,
+      billingDistanceKm,
+      pricePerKm,
       totalPrice: Math.round(totalPrice * 100) / 100,
       pricingPolicyId: pricingPolicy.id,
       deliveryZoneType,

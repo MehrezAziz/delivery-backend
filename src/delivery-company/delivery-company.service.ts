@@ -353,10 +353,15 @@ export class DeliveryCompanyService {
     }
     const extra = this.normalizeExtra(dto.customerExtraAmount);
     const isNight = false;
+    const resolvedPickupAddressId = await this.resolvePickupAddressIdForCompanyOrder(
+      companyId,
+      dto.pickupAddressId,
+      departmentId,
+    );
 
     const priceCalc = localPickup
-      ? await this.priceCalculationService.calculateLocalPickupOnlyPrice(dto.pickupAddressId, dto.weight, isNight)
-      : await this.priceCalculationService.calculatePrice(dto.pickupAddressId, dto.dropoffAddressId!, dto.weight, isNight);
+      ? await this.priceCalculationService.calculateLocalPickupOnlyPrice(resolvedPickupAddressId, dto.weight, isNight)
+      : await this.calculateCompanyDropoffPrice(resolvedPickupAddressId, dto, isNight);
 
     const discount = await this.getEffectiveDiscountPercent(company);
     const discounted = Math.round(priceCalc.totalPrice * (1 + discount / 100) * 100) / 100;
@@ -367,7 +372,13 @@ export class DeliveryCompanyService {
       paymentType: PaymentType.WALLET,
       effectiveDiscountPercent: discount,
       calculatedPrice: discounted,
+      discountedPrice: discounted,
       customerExtraAmount: extra,
+      weightKg: dto.weight,
+      distanceKm: priceCalc.distanceKm,
+      billingDistanceKm: priceCalc.billingDistanceKm,
+      pricePerKm: priceCalc.pricePerKm,
+      nightFee: priceCalc.nightFee,
       totalPrice: total,
       reserveAmount: reserve,
       requiredCapacity: required,
@@ -381,13 +392,18 @@ export class DeliveryCompanyService {
     idempotencyKey?: string,
     requestHash?: string,
   ) {
-    const company = await this.prisma.deliveryCompany.findUnique({
+    let company = await this.prisma.deliveryCompany.findUnique({
       where: { id: companyId },
       include: { proxyCustomer: true },
     });
     if (!company) throw new NotFoundException('Delivery company not found');
     if (!company.proxyCustomerId || !company.proxyCustomer) {
-      throw new BadRequestException('Delivery company is not linked to a proxy customer');
+      const proxy = await this.ensureProxyCustomer(company);
+      company = await this.prisma.deliveryCompany.update({
+        where: { id: companyId },
+        data: { proxyCustomerId: proxy.id },
+        include: { proxyCustomer: true },
+      });
     }
 
     const preview = await this.previewOrder(companyId, dto, departmentId);
@@ -402,15 +418,17 @@ export class DeliveryCompanyService {
       throw new BadRequestException('Insufficient company balance capacity');
     }
 
-    const pickupAddr = await this.prisma.address.findUnique({ where: { id: dto.pickupAddressId } });
+    const resolvedPickupAddressId = await this.resolvePickupAddressIdForCompanyOrder(
+      companyId,
+      dto.pickupAddressId,
+      departmentId,
+    );
+    const pickupAddr = await this.prisma.address.findUnique({ where: { id: resolvedPickupAddressId } });
     if (!pickupAddr) throw new NotFoundException('Pickup address not found');
     const localPickup = !!dto.localPickupOnly;
-    if (!localPickup && !dto.dropoffAddressId) {
-      throw new BadRequestException('Drop-off address is required');
-    }
+    let resolvedDropoffAddressId: string | undefined;
     if (!localPickup) {
-      const dropAddr = await this.prisma.address.findUnique({ where: { id: dto.dropoffAddressId! } });
-      if (!dropAddr) throw new NotFoundException('Drop-off address not found');
+      resolvedDropoffAddressId = await this.resolveDropoffAddressIdForCompanyOrder(dto);
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -485,8 +503,8 @@ export class DeliveryCompanyService {
           sourceType: OrderSourceType.DELIVERY_COMPANY,
           deliveryCompanyDepartmentId: departmentId ?? null,
           pricingPolicyId: (await tx.countryPricingPolicy.findFirst({ where: { isActive: true } }))!.id,
-          pickupAddressId: dto.pickupAddressId,
-          dropoffAddressId: localPickup ? null : dto.dropoffAddressId,
+          pickupAddressId: resolvedPickupAddressId,
+          dropoffAddressId: localPickup ? null : resolvedDropoffAddressId,
           localPickupOnly: localPickup,
           status: OrderStatus.SEARCHING_DRIVER,
           paymentType: PaymentType.WALLET,
@@ -516,6 +534,238 @@ export class DeliveryCompanyService {
       }
       return order;
     });
+  }
+
+  private async resolvePickupAddressIdForCompanyOrder(
+    companyId: string,
+    pickupAddressId: string,
+    departmentId?: string,
+  ): Promise<string> {
+    const directAddress = await this.prisma.address.findUnique({
+      where: { id: pickupAddressId },
+      select: { id: true },
+    });
+    if (directAddress) return directAddress.id;
+
+    const where: any = { id: pickupAddressId, deliveryCompanyId: companyId };
+    if (departmentId) where.id = departmentId;
+    const department = await (this.prisma as any).deliveryCompanyAddress.findFirst({
+      where,
+      select: {
+        id: true,
+        country: true,
+        city: true,
+        street: true,
+        latitude: true,
+        longitude: true,
+      },
+    });
+    if (!department) {
+      throw new NotFoundException('Pickup address not found');
+    }
+    if (department.latitude == null || department.longitude == null) {
+      throw new BadRequestException('Department coordinates are required for pickup');
+    }
+
+    const country = await this.prisma.country.findFirst({
+      where: { name: { equals: String(department.country || ''), mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (!country) throw new BadRequestException('Department country mapping is invalid');
+
+    const governorate = await this.prisma.governorate.findFirst({
+      where: {
+        countryId: country.id,
+        nameGovernorate: { equals: String(department.city || ''), mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    if (!governorate) throw new BadRequestException('Department governorate mapping is invalid');
+
+    const delegation = await this.prisma.delegation.findFirst({
+      where: {
+        governorateId: governorate.id,
+        nameDelegation: { equals: String(department.street || ''), mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    if (!delegation) throw new BadRequestException('Department delegation mapping is invalid');
+
+    const existing = await this.prisma.address.findFirst({
+      where: {
+        userId: null,
+        delegationId: delegation.id,
+        street: department.street || null,
+        latitude: department.latitude,
+        longitude: department.longitude,
+      },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+
+    const created = await this.prisma.address.create({
+      data: {
+        delegationId: delegation.id,
+        street: department.street || null,
+        latitude: department.latitude,
+        longitude: department.longitude,
+        userId: null,
+      },
+      select: { id: true },
+    });
+    return created.id;
+  }
+
+  private async resolveDropoffAddressIdForCompanyOrder(dto: CreateDeliveryCompanyOrderDto): Promise<string> {
+    if (dto.dropoffAddressId) {
+      const dropAddr = await this.prisma.address.findUnique({ where: { id: dto.dropoffAddressId } });
+      if (!dropAddr) throw new NotFoundException('Drop-off address not found');
+      return dropAddr.id;
+    }
+    if (!dto.dropoffDelegationId || !dto.dropoffGovernorateId) {
+      throw new BadRequestException('Drop-off governorate and delegation are required');
+    }
+    const center = await this.resolveDelegationCenter(dto.dropoffDelegationId, dto.dropoffGovernorateId);
+    const created = await this.prisma.address.create({
+      data: {
+        delegationId: dto.dropoffDelegationId,
+        street: dto.dropoffStreet?.trim() || null,
+        latitude: center.latitude,
+        longitude: center.longitude,
+        userId: null,
+      },
+      select: { id: true },
+    });
+    return created.id;
+  }
+
+  private async calculateCompanyDropoffPrice(
+    pickupAddressId: string,
+    dto: CreateDeliveryCompanyOrderDto,
+    isNight: boolean,
+  ) {
+    if (dto.dropoffAddressId) {
+      return this.priceCalculationService.calculatePrice(pickupAddressId, dto.dropoffAddressId, dto.weight, isNight);
+    }
+    if (!dto.dropoffDelegationId || !dto.dropoffGovernorateId) {
+      throw new BadRequestException('Drop-off governorate and delegation are required');
+    }
+    const pickupAddress = await this.prisma.address.findUnique({
+      where: { id: pickupAddressId },
+      include: {
+        delegation: { include: { governorate: { include: { country: true } } } },
+      },
+    });
+    if (!pickupAddress) throw new NotFoundException('Pickup address not found');
+    if (pickupAddress.latitude == null || pickupAddress.longitude == null) {
+      throw new BadRequestException('Pickup coordinates are required');
+    }
+
+    const dropDelegation = await this.prisma.delegation.findFirst({
+      where: { id: dto.dropoffDelegationId, governorateId: dto.dropoffGovernorateId },
+      include: { governorate: { include: { country: true } } },
+    });
+    if (!dropDelegation) {
+      throw new BadRequestException('Drop-off delegation is invalid for selected governorate');
+    }
+    if (dropDelegation.governorate.countryId !== pickupAddress.delegation.governorate.countryId) {
+      throw new BadRequestException('Drop-off country must match the pickup department country');
+    }
+
+    const center = await this.resolveDelegationCenter(dropDelegation.id, dto.dropoffGovernorateId);
+    const distanceKm = this.priceCalculationService.calculateDistance(
+      pickupAddress.latitude,
+      pickupAddress.longitude,
+      center.latitude,
+      center.longitude,
+    );
+    const deliveryZoneType =
+      pickupAddress.delegation.id === dropDelegation.id
+        ? 'SAME_DELEGATION'
+        : pickupAddress.delegation.governorate.id === dropDelegation.governorate.id
+          ? 'SAME_GOVERNORATE'
+          : 'DIFFERENT_GOVERNORATE';
+    const pricingPolicy = await this.prisma.countryPricingPolicy.findFirst({
+      where: {
+        countryId: pickupAddress.delegation.governorate.country.id,
+        deliveryZoneType: deliveryZoneType as any,
+        isActive: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!pricingPolicy) {
+      throw new BadRequestException(`No active pricing policy found for zone type: ${deliveryZoneType}`);
+    }
+    const billingDistanceKm = Math.max(1, Math.ceil(distanceKm));
+    const pricePerKm = Number(pricingPolicy.pricePerKm);
+    const baseFee = Number(pricingPolicy.baseFee);
+    const distanceFee = pricePerKm * billingDistanceKm;
+    let extraWeightFee = 0;
+    const baseWeight = Number(pricingPolicy.baseWeight);
+    if (dto.weight > baseWeight) {
+      const extraWeight = dto.weight - baseWeight;
+      const extraWeightSteps = Math.ceil(extraWeight / Number(pricingPolicy.extraWeightStep));
+      extraWeightFee = extraWeightSteps * Number(pricingPolicy.extraWeightPrice);
+    }
+    const nightFee = isNight ? Number(pricingPolicy.nightFee) : 0;
+    const totalPrice = baseFee + distanceFee + extraWeightFee + nightFee;
+    return {
+      baseFee,
+      distanceFee,
+      extraWeightFee,
+      nightFee,
+      distanceKm,
+      billingDistanceKm,
+      pricePerKm,
+      totalPrice: Math.round(totalPrice * 100) / 100,
+      pricingPolicyId: pricingPolicy.id,
+      deliveryZoneType: deliveryZoneType as any,
+    };
+  }
+
+  private async ensureProxyCustomer(company: any) {
+    const seed = createHash('sha256').update(company.id).digest('hex').slice(0, 8);
+    const user = await this.prisma.user.create({
+      data: {
+        role: 'CUSTOMER' as any,
+        firstName: company.name || 'Delivery',
+        secondName: 'Company',
+        myEmail: company.contactEmail || null,
+        phone: `dc-${seed}`,
+      } as any,
+    });
+    const customer = await this.prisma.customer.create({
+      data: {
+        userId: user.id,
+      },
+    });
+    await this.logAudit(company.id, 'PROXY_CUSTOMER_AUTO_CREATED', 'SYSTEM', null, {
+      userId: user.id,
+      customerId: customer.id,
+    });
+    return customer;
+  }
+
+  private async resolveDelegationCenter(delegationId: string, governorateId: string): Promise<{ latitude: number; longitude: number }> {
+    const delegation = await this.prisma.delegation.findFirst({
+      where: { id: delegationId, governorateId },
+      select: {
+        id: true,
+        addresses: {
+          where: { latitude: { not: null }, longitude: { not: null } },
+          select: { latitude: true, longitude: true },
+        },
+      },
+    });
+    if (!delegation) throw new BadRequestException('Delegation not found');
+    if (!delegation.addresses.length) {
+      throw new BadRequestException('Delegation center is unavailable. Please add a mapped address in this delegation.');
+    }
+    const latitude =
+      delegation.addresses.reduce((sum, addr) => sum + Number(addr.latitude), 0) / delegation.addresses.length;
+    const longitude =
+      delegation.addresses.reduce((sum, addr) => sum + Number(addr.longitude), 0) / delegation.addresses.length;
+    return { latitude, longitude };
   }
 
   async createRefundRequest(

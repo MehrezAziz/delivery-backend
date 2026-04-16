@@ -184,11 +184,12 @@ export class DeliveryCompanyController {
     const actorRole = this.actorRole(req);
     this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
     const companyId = req.deliveryCompany.id;
-    const departmentId = this.departmentId(req);
-    if (!departmentId) throw new BadRequestException('Department context is missing');
-    await this.requireDepartmentContext(companyId, actorRole, departmentId);
-    await this.service.ensureDepartmentBelongsToCompany(companyId, departmentId);
-    return this.service.previewOrder(companyId, dto, departmentId);
+    const departmentIdHeader = this.departmentId(req);
+    const resolvedDepartmentId =
+      actorRole === 'MAIN_ADMIN' ? departmentIdHeader || dto.pickupAddressId : departmentIdHeader;
+    await this.requireDepartmentContext(companyId, actorRole, resolvedDepartmentId);
+    await this.service.ensureDepartmentBelongsToCompany(companyId, resolvedDepartmentId);
+    return this.service.previewOrder(companyId, dto, resolvedDepartmentId);
   }
 
   @Post('orders')
@@ -196,10 +197,11 @@ export class DeliveryCompanyController {
     const actorRole = this.actorRole(req);
     this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
     const companyId = req.deliveryCompany.id;
-    const departmentId = this.departmentId(req);
-    if (!departmentId) throw new BadRequestException('Department context is missing');
-    await this.requireDepartmentContext(companyId, actorRole, departmentId);
-    await this.service.ensureDepartmentBelongsToCompany(companyId, departmentId);
+    const departmentIdHeader = this.departmentId(req);
+    const resolvedDepartmentId =
+      actorRole === 'MAIN_ADMIN' ? departmentIdHeader || dto.pickupAddressId : departmentIdHeader;
+    await this.requireDepartmentContext(companyId, actorRole, resolvedDepartmentId);
+    await this.service.ensureDepartmentBelongsToCompany(companyId, resolvedDepartmentId);
 
     const idemKeyHeader =
       (req?.headers?.['idempotency-key'] as string | undefined) ||
@@ -208,11 +210,11 @@ export class DeliveryCompanyController {
       throw new BadRequestException('Idempotency-Key header is required');
     }
     const requestHash = createHash('sha256')
-      .update(JSON.stringify(dto) + '|' + String(companyId) + '|' + String(departmentId ?? ''))
+      .update(JSON.stringify(dto) + '|' + String(companyId) + '|' + String(resolvedDepartmentId ?? ''))
       .digest('hex');
     const idempotencyKey = idemKeyHeader;
 
-    return this.service.createOrder(companyId, dto, departmentId, idempotencyKey, requestHash);
+    return this.service.createOrder(companyId, dto, resolvedDepartmentId, idempotencyKey, requestHash);
   }
 
   @Get('wallet')
