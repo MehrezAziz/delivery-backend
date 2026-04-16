@@ -56,8 +56,17 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         }
       }
 
-      // Store user info on socket — control panel tokens have superUserId, mobile tokens have sub
-      client.data.userId = payload.superUserId || payload.sub || payload.id;
+      // Store user info on socket
+      // - control panel tokens have `superUserId`
+      // - mobile/user tokens typically have `sub` or `id`
+      // - delivery-company portal tokens are shaped around `companyId` + `departmentId` / `departmentAccountId`
+      client.data.userId =
+        payload.superUserId ||
+        payload.sub ||
+        payload.id ||
+        payload.departmentAccountId ||
+        payload.departmentId ||
+        payload.companyId;
       client.data.userType = payload.superUserId ? 'SUPER_USER' : 'USER';
 
       if (!client.data.userId) {
@@ -66,8 +75,20 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         return;
       }
 
-      // Join a room based on user ID for targeted notifications
-      client.join(`user:${client.data.userId}`);
+      // Join rooms for targeted notifications.
+      // Company portal tokens may carry both `departmentAccountId` and `departmentId`.
+      // Dispatchers might send to either scope; joining both prevents silent drops.
+      const joinIds = new Set<string>();
+      if (payload.superUserId) joinIds.add(String(payload.superUserId));
+      if (payload.sub) joinIds.add(String(payload.sub));
+      if (payload.id) joinIds.add(String(payload.id));
+      if (payload.departmentAccountId) joinIds.add(String(payload.departmentAccountId));
+      if (payload.departmentId) joinIds.add(String(payload.departmentId));
+      if (payload.companyId) joinIds.add(String(payload.companyId));
+
+      for (const id of joinIds) {
+        client.join(`user:${id}`);
+      }
 
       this.logger.log(`Client connected: ${client.data.userId} (${client.data.userType})`);
     } catch (error) {

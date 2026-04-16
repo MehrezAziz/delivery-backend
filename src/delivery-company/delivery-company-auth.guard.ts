@@ -71,6 +71,7 @@ export class DeliveryCompanyApiKeyGuard implements CanActivate {
     const write = method === 'POST' || method === 'PATCH' || method === 'PUT' || method === 'DELETE';
     const requiredScope =
       req.includes('wallet') ? 'wallet:read'
+      : req.includes('notifications') ? 'orders:read'
       : req.includes('refund-requests') ? (write ? 'refunds:write' : 'refunds:read')
       : req.includes('orders') ? (write ? 'orders:write' : 'orders:read')
       : req.includes('departments') ? (write ? 'departments:write' : 'departments:read')

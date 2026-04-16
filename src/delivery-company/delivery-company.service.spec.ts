@@ -34,6 +34,11 @@ describe('DeliveryCompanyService', () => {
     deliveryCompanyAuditLog: {
       create: jest.fn(),
     },
+    deliveryCompanyIdempotencyKey: {
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+    },
     $transaction: jest.fn(async (cb: any) => cb(mockPrisma)),
   };
   const mockPriceCalc: any = {
@@ -114,5 +119,93 @@ describe('DeliveryCompanyService', () => {
     expect(out).toEqual({ id: 'rr1' });
     expect(mockPrisma.deliveryCompany.update).toHaveBeenCalled();
     expect(mockPrisma.deliveryCompanyTransaction.create).toHaveBeenCalled();
+  });
+
+  it('returns persisted idempotent response for createRefundRequest', async () => {
+    mockPrisma.deliveryCompany.findUnique.mockResolvedValue({
+      id: 'c1',
+      coinBalance: 1000,
+      lockedCoins: 0,
+    });
+    mockPrisma.deliveryCompanyIdempotencyKey.findFirst.mockResolvedValue({
+      id: 'ik1',
+      requestHash: 'h1',
+      responseBody: { id: 'rr-existing', status: 'PENDING' },
+      responseStatus: 201,
+    });
+
+    const out = await service.createRefundRequest(
+      'c1',
+      {
+        amountCoins: 100,
+        destinationType: 'BANK_TRANSFER',
+      } as any,
+      'idem-1',
+      'h1',
+    );
+
+    expect(out).toEqual({ id: 'rr-existing', status: 'PENDING' });
+    expect(mockPrisma.deliveryCompanyRefundRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('throws on idempotency key reuse with different body hash', async () => {
+    mockPrisma.deliveryCompany.findUnique.mockResolvedValue({
+      id: 'c1',
+      coinBalance: 1000,
+      lockedCoins: 0,
+    });
+    mockPrisma.deliveryCompanyIdempotencyKey.findFirst.mockResolvedValue({
+      id: 'ik1',
+      requestHash: 'old-hash',
+      responseBody: null,
+      responseStatus: 0,
+    });
+
+    await expect(
+      service.createRefundRequest(
+        'c1',
+        {
+          amountCoins: 100,
+          destinationType: 'BANK_TRANSFER',
+        } as any,
+        'idem-1',
+        'new-hash',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('throws when idempotency insert races (P2002 with inflight row)', async () => {
+    mockPrisma.deliveryCompany.findUnique.mockResolvedValue({
+      id: 'c1',
+      coinBalance: 1000,
+      lockedCoins: 0,
+    });
+
+    mockPrisma.deliveryCompanyIdempotencyKey.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'ik1',
+        requestHash: 'h1',
+        responseBody: null,
+        responseStatus: 0,
+      });
+
+    mockPrisma.deliveryCompanyIdempotencyKey.create.mockImplementationOnce(() => {
+      const err: any = new Error('Unique constraint failed');
+      err.code = 'P2002';
+      throw err;
+    });
+
+    await expect(
+      service.createRefundRequest(
+        'c1',
+        {
+          amountCoins: 100,
+          destinationType: 'BANK_TRANSFER',
+        } as any,
+        'idem-1',
+        'h1',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

@@ -1,5 +1,93 @@
 # Delivery backend — AI support assistant: current status
 
+---
+
+## Delivery Company Program (PFE) — Current Status
+
+This section is the delivery-company baseline for the PFE report (`pfe-rapport`), covering feature scope, security system, and secure sequence conception.
+
+### A) Feature scope implemented/planned
+
+- Dedicated `delivery_company` domain exists (company profile, addresses/departments, API keys, refunds, transactions, audit logs).
+- Company portal routes exist under `/company/*` in `delivery-control`:
+  - overview dashboard
+  - orders (preview + create + details + return feedback)
+  - wallet
+  - stats
+  - refunds
+  - departments
+  - api keys
+  - setup
+- Company auth supports email/password (legacy companyId + apiKey fallback still present).
+- Admin and CS access gates for delivery companies exist and are role-protected.
+- Return lifecycle is implemented with `RETURNED -> RETURN_DEPOSIT -> feedback`.
+
+### B) Security system (top security target)
+
+Reference design docs:
+
+- `../design.md`
+- `../design-security-matrix.md`
+- `../design-sequence-diagrams.md`
+
+Security model defined:
+
+1. Zero-trust per request
+   - authenticate, authorize, resolve context server-side, audit every critical action.
+2. Scoped authorization
+   - endpoint scope and role checks (`orders:*`, `wallet:*`, `refunds:*`, `departments:*`, etc.).
+3. API key hardening
+   - hash-only storage, revoke/reactivate lifecycle, expiration support.
+4. Replay/race protections
+   - idempotency keys for financial writes.
+   - row-level wallet locking in transaction engine.
+5. Financial invariants
+   - enforce max negative balance and lock-safe operations.
+6. Audit/compliance
+   - immutable delivery-company audit logs for high-risk actions.
+
+### C) Conception artifacts completed
+
+- Enterprise architecture and bounded contexts documented.
+- Domain class diagram documented.
+- Secure sequence diagrams documented for:
+  - order creation (preview + lock + invariant checks)
+  - refund request (withdrawable check + hold lock)
+  - urgent budget request (auto-approval policy path)
+
+### D) Remaining implementation phases (tracking)
+
+Phase A (Domain foundation) — **In progress**
+- Department account model (main + child departments).
+- Budget policy and urgent budget request models.
+- Idempotency entity for critical writes.
+
+Phase B (Secure transaction engine) — **Pending**
+- Wallet lock orchestration service with invariant guardrails.
+- Budget transfer and auto-approval engine.
+
+Phase C (Portal/BFF enforcement) — **In progress**
+- Department geo + coordinates constraints, setup security, refund guards implemented.
+- Main-vs-child hard isolation and budget UI workflows pending.
+
+Phase D (Admin governance) — **Pending**
+- Approval queue for budget exceed / urgent requests.
+- Advanced override history and reconciliation views.
+
+Phase E (Hardening & tests) — **Pending**
+- E2E and concurrency-focused financial tests.
+- Security abuse testing and alert playbooks.
+
+### E) PFE report note
+
+For the final report, use this section plus:
+
+- `../design.md` for architecture/conception
+- `../design-security-matrix.md` for endpoint-level security policy
+- `../design-sequence-diagrams.md` for transaction sequence behavior
+
+---
+
 ## Is Phase 1 complete?
 
 **Yes.** Phase 1 was defined as: integrated **AI orchestrator** in NestJS (not a separate microservice), **tool dispatcher** backed by Prisma with fixed selects, **persisted assistant messages** on support tickets, and a **feature flag / kill switch**. All of that is implemented and wired into the existing support flow.
