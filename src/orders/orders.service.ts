@@ -592,6 +592,12 @@ export class OrdersService {
       Object.assign(orderUpdateData, this.buildPausedTimerUpdate(order));
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: orderUpdateData, include: this.orderInclude() });
+    if (updated.sourceType === OrderSourceType.DELIVERY_COMPANY && updated.deliveryCompanyId) {
+      const refreshTargets = [updated.deliveryCompanyDepartmentId, updated.deliveryCompanyId].filter(
+        (id, i, arr) => id && arr.indexOf(id) === i,
+      ) as string[];
+      this.notificationsGateway.emitOrderUpdated(refreshTargets, updated.id, String(updated.status));
+    }
     // Emit status change events for notifications
     const customerUserId = (updated as any).customer?.userId;
     const statusEventMap: Record<string, string> = {
@@ -893,7 +899,19 @@ export class OrdersService {
       });
       if (order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.deliveryCompanyId) {
         const targetCompanyUserId = order.deliveryCompanyDepartmentId || order.deliveryCompanyId;
-        const refreshTargets = [targetCompanyUserId, order.deliveryCompanyId].filter(
+        const driverName = `${order.driverAssignment!.driver.user.firstName || ''} ${order.driverAssignment!.driver.user.secondName || ''}`.trim();
+        const mirror = targetCompanyUserId !== order.deliveryCompanyId ? [order.deliveryCompanyId] : undefined;
+        await this.notificationsService.send({
+          userId: targetCompanyUserId,
+          userType: 'USER',
+          type: NotificationType.NEW_MESSAGE_FROM_DRIVER,
+          relatedEntityType: 'Order',
+          relatedEntityId: orderId,
+          groupKey: `chat:${orderId}`,
+          templateData: { driverName: driverName || 'Driver' },
+          socketMirrorUserIds: mirror,
+        } as any);
+        const refreshTargets = [order.deliveryCompanyDepartmentId, order.deliveryCompanyId].filter(
           (id, i, arr) => id && arr.indexOf(id) === i,
         ) as string[];
         this.notificationsGateway.emitOrderChatRefresh(refreshTargets, orderId);

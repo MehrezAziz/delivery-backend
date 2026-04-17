@@ -122,6 +122,14 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
   }
 
+  /** Lightweight order status refresh for company portal order views. */
+  emitOrderUpdated(userIds: string[], orderId: string, status?: string) {
+    const uniq = [...new Set(userIds.filter(Boolean))];
+    for (const uid of uniq) {
+      this.server.to(`user:${uid}`).emit('order_updated', { orderId, status: status ?? null });
+    }
+  }
+
   // Send notification to all connected clients (broadcast)
   broadcast(notification: any) {
     this.server.emit('notification', notification);

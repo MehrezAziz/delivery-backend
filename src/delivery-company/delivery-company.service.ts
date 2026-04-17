@@ -374,6 +374,8 @@ export class DeliveryCompanyService {
     return {
       paymentType: PaymentType.WALLET,
       effectiveDiscountPercent: discount,
+      baseFee: priceCalc.baseFee,
+      distanceFee: priceCalc.distanceFee,
       calculatedPrice: discounted,
       discountedPrice: discounted,
       customerExtraAmount: extra,

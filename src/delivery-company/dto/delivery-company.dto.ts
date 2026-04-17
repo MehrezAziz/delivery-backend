@@ -207,6 +207,8 @@ export class CreateDeliveryCompanyRefundRequestDto {
 export class CompanyOrderPreviewResponseDto {
   paymentType: PaymentType;
   effectiveDiscountPercent: number;
+  baseFee: number;
+  distanceFee: number;
   calculatedPrice: number;
   discountedPrice: number;
   customerExtraAmount: number;
