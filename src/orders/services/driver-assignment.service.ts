@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
-import { OrderStatus, DriverStatus, ChatStatus } from '@prisma/client';
+import { DeliveryCompanyTransactionType, OrderSourceType, OrderStatus, DriverStatus, ChatStatus } from '@prisma/client';
 
 @Injectable()
 export class DriverAssignmentService {
@@ -66,6 +66,7 @@ export class DriverAssignmentService {
           pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
           dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
           pricingPolicy: true,
+          deliveryCompany: { select: { name: true } },
         },
         orderBy: { createdAt: 'asc' },
       });
@@ -253,6 +254,31 @@ export class DriverAssignmentService {
                 ...resumedTimer,
               },
       });
+      if (nextStatus === OrderStatus.CANCELLED && order.deliveryCompanyId && order.sourceType === OrderSourceType.DELIVERY_COMPANY) {
+        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
+        if (company) {
+          const price = Math.round(Number(order.price || 0) * 100) / 100;
+          const reserve = Math.round(price * 0.5 * 100) / 100;
+          const unlock = Math.min(Number(company.lockedCoins), reserve);
+          const restoreAmount = Math.round((price + unlock) * 100) / 100;
+          const nextBalance = Math.round((Number(company.coinBalance) + restoreAmount) * 100) / 100;
+          const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
+          await tx.deliveryCompany.update({
+            where: { id: company.id },
+            data: { coinBalance: nextBalance, lockedCoins: nextLocked },
+          });
+          await tx.deliveryCompanyTransaction.create({
+            data: {
+              deliveryCompanyId: company.id,
+              orderId: order.id,
+              type: DeliveryCompanyTransactionType.ADMIN_ADJUSTMENT,
+              amount: restoreAmount,
+              balanceAfter: nextBalance,
+              description: `Budget rollback for CANCELLED order ${order.id}`,
+            },
+          });
+        }
+      }
       // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId }, data: { status: ChatStatus.CLOSED } });
       // Update driver performance metrics — increment totalOrders and cancelledOrders
@@ -272,8 +298,17 @@ export class DriverAssignmentService {
   }
 
   private mapOrderToResponse(order: any) {
+    const companyName =
+      order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.deliveryCompany?.name
+        ? String(order.deliveryCompany.name)
+        : null;
     return {
-      id: order.id, customerId: order.customerId, status: order.status,
+      id: order.id,
+      customerId: order.customerId,
+      status: order.status,
+      sourceType: order.sourceType,
+      deliveryCompanyId: order.deliveryCompanyId ?? null,
+      deliveryCompanyName: companyName,
       paymentType: order.paymentType, description: order.description,
       weight: Number(order.weight), distanceKm: Number(order.distanceKm),
       price: Number(order.price), nightFee: Number(order.nightFee),
@@ -387,6 +422,7 @@ export class DriverAssignmentService {
         pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         pricingPolicy: true,
+        deliveryCompany: { select: { name: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -437,6 +473,7 @@ export class DriverAssignmentService {
         pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         pricingPolicy: true,
+        deliveryCompany: { select: { name: true } },
       },
       orderBy: { createdAt: 'asc' },
     });

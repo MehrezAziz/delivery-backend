@@ -167,6 +167,8 @@ export class OrderResponseDto {
   paymentType: PaymentType;
   sourceType: OrderSourceType;
   deliveryCompanyId?: string | null;
+  /** Company legal/display name when sourceType is DELIVERY_COMPANY. */
+  deliveryCompanyName?: string | null;
   description: string | null;
   weight: number;
   distanceKm: number;

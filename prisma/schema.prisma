@@ -975,6 +975,7 @@ model DeliveryCompanyAddress {
   id                String   @id @default(uuid())
   deliveryCompanyId String   @map("delivery_company_id")
   label             String
+  contactEmail      String?  @map("contact_email")
   contactName       String?  @map("contact_name")
   contactPhone      String?  @map("contact_phone")
   street            String?

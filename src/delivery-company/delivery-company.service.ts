@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'crypto';
 import { DeliveryCompanyRefundDestinationType, DeliveryCompanyRefundStatus, DeliveryCompanyTransactionType, OrderSourceType, OrderStatus, PaymentType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from '../orders/services/price-calculation.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   CompanyOrderPreviewResponseDto,
   CreateDeliveryCompanyAddressDto,
@@ -20,6 +21,7 @@ export class DeliveryCompanyService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly priceCalculationService: PriceCalculationService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async ensureDepartmentBelongsToCompany(companyId: string, departmentId?: string | null) {
@@ -352,6 +354,7 @@ export class DeliveryCompanyService {
       if (!dept) throw new BadRequestException('Department context is invalid');
     }
     const extra = this.normalizeExtra(dto.customerExtraAmount);
+    const confirmationDelayMinutes = Math.max(1, Math.min(180, Number(dto.maxConfirmationDelayMinutes ?? 15)));
     const isNight = false;
     const resolvedPickupAddressId = await this.resolvePickupAddressIdForCompanyOrder(
       companyId,
@@ -379,6 +382,9 @@ export class DeliveryCompanyService {
       billingDistanceKm: priceCalc.billingDistanceKm,
       pricePerKm: priceCalc.pricePerKm,
       nightFee: priceCalc.nightFee,
+      extraWeightFee: priceCalc.extraWeightFee,
+      pricingPolicyId: priceCalc.pricingPolicyId,
+      maxConfirmationDelayMinutes: confirmationDelayMinutes,
       totalPrice: total,
       reserveAmount: reserve,
       requiredCapacity: required,
@@ -407,6 +413,7 @@ export class DeliveryCompanyService {
     }
 
     const preview = await this.previewOrder(companyId, dto, departmentId);
+    const confirmationDelayMinutes = Math.max(1, Math.min(180, Number(dto.maxConfirmationDelayMinutes ?? 15)));
 
     const endpointKey = 'delivery-company/orders:POST';
     const idemKey = idempotencyKey && requestHash ? idempotencyKey : undefined;
@@ -502,7 +509,7 @@ export class DeliveryCompanyService {
           deliveryCompanyId: company.id,
           sourceType: OrderSourceType.DELIVERY_COMPANY,
           deliveryCompanyDepartmentId: departmentId ?? null,
-          pricingPolicyId: (await tx.countryPricingPolicy.findFirst({ where: { isActive: true } }))!.id,
+          pricingPolicyId: preview.pricingPolicyId,
           pickupAddressId: resolvedPickupAddressId,
           dropoffAddressId: localPickup ? null : resolvedDropoffAddressId,
           localPickupOnly: localPickup,
@@ -510,13 +517,14 @@ export class DeliveryCompanyService {
           paymentType: PaymentType.WALLET,
           description: dto.description,
           weight: dto.weight,
-          distanceKm: 2,
+          distanceKm: preview.distanceKm,
           price: preview.totalPrice,
           customerExtraAmount: preview.customerExtraAmount,
-          nightFee: 0,
-          extraWeightFee: 0,
+          nightFee: preview.nightFee,
+          extraWeightFee: preview.extraWeightFee,
           isNightDelivery: false,
-          cancelTimerRemainingSeconds: 15 * 60,
+          cancelAfterMinutes: confirmationDelayMinutes,
+          cancelTimerRemainingSeconds: confirmationDelayMinutes * 60,
           cancelTimerLastResumedAt: new Date(),
           cancelTimerPausedAt: null,
         },
@@ -541,16 +549,13 @@ export class DeliveryCompanyService {
     pickupAddressId: string,
     departmentId?: string,
   ): Promise<string> {
-    const directAddress = await this.prisma.address.findUnique({
-      where: { id: pickupAddressId },
-      select: { id: true },
-    });
-    if (directAddress) return directAddress.id;
+    // Company orders always pick up from the department facility: never resolve a random Address row first.
+    const whereDept: any = departmentId
+      ? { id: departmentId, deliveryCompanyId: companyId }
+      : { id: pickupAddressId, deliveryCompanyId: companyId };
 
-    const where: any = { id: pickupAddressId, deliveryCompanyId: companyId };
-    if (departmentId) where.id = departmentId;
     const department = await (this.prisma as any).deliveryCompanyAddress.findFirst({
-      where,
+      where: whereDept,
       select: {
         id: true,
         country: true,
@@ -672,19 +677,33 @@ export class DeliveryCompanyService {
       throw new BadRequestException('Drop-off country must match the pickup department country');
     }
 
-    const center = await this.resolveDelegationCenter(dropDelegation.id, dto.dropoffGovernorateId);
-    const distanceKm = this.priceCalculationService.calculateDistance(
-      pickupAddress.latitude,
-      pickupAddress.longitude,
-      center.latitude,
-      center.longitude,
-    );
     const deliveryZoneType =
       pickupAddress.delegation.id === dropDelegation.id
         ? 'SAME_DELEGATION'
         : pickupAddress.delegation.governorate.id === dropDelegation.governorate.id
           ? 'SAME_GOVERNORATE'
           : 'DIFFERENT_GOVERNORATE';
+    let distanceKm = 0;
+    if (deliveryZoneType === 'SAME_DELEGATION') {
+      // Business override: keep same-delegation company deliveries at a fixed 4km distance.
+      distanceKm = 4;
+    } else if (deliveryZoneType === 'SAME_GOVERNORATE') {
+      const govCenter = await this.resolveGovernorateCenter(dto.dropoffGovernorateId);
+      distanceKm = this.priceCalculationService.calculateDistance(
+        pickupAddress.latitude,
+        pickupAddress.longitude,
+        govCenter.latitude,
+        govCenter.longitude,
+      );
+    } else {
+      const center = await this.resolveDelegationCenter(dropDelegation.id, dto.dropoffGovernorateId);
+      distanceKm = this.priceCalculationService.calculateDistance(
+        pickupAddress.latitude,
+        pickupAddress.longitude,
+        center.latitude,
+        center.longitude,
+      );
+    }
     const pricingPolicy = await this.prisma.countryPricingPolicy.findFirst({
       where: {
         countryId: pickupAddress.delegation.governorate.country.id,
@@ -696,7 +715,7 @@ export class DeliveryCompanyService {
     if (!pricingPolicy) {
       throw new BadRequestException(`No active pricing policy found for zone type: ${deliveryZoneType}`);
     }
-    const billingDistanceKm = Math.max(1, Math.ceil(distanceKm));
+    const billingDistanceKm = deliveryZoneType === 'SAME_DELEGATION' ? 4 : Math.max(1, Math.ceil(distanceKm));
     const pricePerKm = Number(pricingPolicy.pricePerKm);
     const baseFee = Number(pricingPolicy.baseFee);
     const distanceFee = pricePerKm * billingDistanceKm;
@@ -758,13 +777,50 @@ export class DeliveryCompanyService {
       },
     });
     if (!delegation) throw new BadRequestException('Delegation not found');
-    if (!delegation.addresses.length) {
-      throw new BadRequestException('Delegation center is unavailable. Please add a mapped address in this delegation.');
+    if (delegation.addresses.length) {
+      const latitude =
+        delegation.addresses.reduce((sum, addr) => sum + Number(addr.latitude), 0) / delegation.addresses.length;
+      const longitude =
+        delegation.addresses.reduce((sum, addr) => sum + Number(addr.longitude), 0) / delegation.addresses.length;
+      return { latitude, longitude };
     }
-    const latitude =
-      delegation.addresses.reduce((sum, addr) => sum + Number(addr.latitude), 0) / delegation.addresses.length;
-    const longitude =
-      delegation.addresses.reduce((sum, addr) => sum + Number(addr.longitude), 0) / delegation.addresses.length;
+    // Fallback: centroid of any mapped addresses in this governorate (many DBs only seed coords per governorate).
+    const govAddrs = await this.prisma.address.findMany({
+      where: {
+        latitude: { not: null },
+        longitude: { not: null },
+        delegation: { governorateId },
+      },
+      select: { latitude: true, longitude: true },
+      take: 500,
+    });
+    if (!govAddrs.length) {
+      throw new BadRequestException(
+        'No coordinates are available for this destination yet. Pick another delegation or ask an admin to add at least one address with latitude/longitude in this governorate.',
+      );
+    }
+    const latitude = govAddrs.reduce((sum, a) => sum + Number(a.latitude), 0) / govAddrs.length;
+    const longitude = govAddrs.reduce((sum, a) => sum + Number(a.longitude), 0) / govAddrs.length;
+    return { latitude, longitude };
+  }
+
+  private async resolveGovernorateCenter(governorateId: string): Promise<{ latitude: number; longitude: number }> {
+    const govAddrs = await this.prisma.address.findMany({
+      where: {
+        latitude: { not: null },
+        longitude: { not: null },
+        delegation: { governorateId },
+      },
+      select: { latitude: true, longitude: true },
+      take: 1000,
+    });
+    if (!govAddrs.length) {
+      throw new BadRequestException(
+        'No coordinates are available for this governorate yet. Please add at least one mapped address first.',
+      );
+    }
+    const latitude = govAddrs.reduce((sum, a) => sum + Number(a.latitude), 0) / govAddrs.length;
+    const longitude = govAddrs.reduce((sum, a) => sum + Number(a.longitude), 0) / govAddrs.length;
     return { latitude, longitude };
   }
 
@@ -904,6 +960,405 @@ export class DeliveryCompanyService {
       returned,
       cancelled,
       grossAmount: Number(gross._sum.price ?? 0),
+    };
+  }
+
+  async addOrderConfirmationDelayMinutes(
+    companyId: string,
+    orderId: string,
+    minutesToAdd: number,
+    departmentId?: string,
+  ) {
+    const add = Math.floor(Number(minutesToAdd));
+    if (!Number.isFinite(add) || add < 1 || add > 180) {
+      throw new BadRequestException('Minutes to add must be between 1 and 180');
+    }
+
+    const where: any = {
+      id: orderId,
+      deliveryCompanyId: companyId,
+      sourceType: OrderSourceType.DELIVERY_COMPANY,
+      ...(departmentId ? { deliveryCompanyDepartmentId: departmentId } : {}),
+    };
+
+    const order = await this.prisma.order.findFirst({ where });
+    if (!order) throw new NotFoundException('Order not found for this company');
+    const status = String(order.status);
+    if (!['SEARCHING_DRIVER', 'PENDING_CUSTOMER_APPROVAL', 'DRIVER_ASSIGNED'].includes(status)) {
+      throw new BadRequestException('Confirmation timer can only be extended before pickup');
+    }
+
+    const now = Date.now();
+    const baseRemaining =
+      typeof (order as any).cancelTimerRemainingSeconds === 'number'
+        ? Number((order as any).cancelTimerRemainingSeconds)
+        : Number((order as any).cancelAfterMinutes ?? 15) * 60;
+    const lastResumedAt = (order as any).cancelTimerLastResumedAt
+      ? new Date((order as any).cancelTimerLastResumedAt).getTime()
+      : null;
+    const elapsed =
+      status === 'SEARCHING_DRIVER' && lastResumedAt ? Math.floor((now - lastResumedAt) / 1000) : 0;
+    const currentRemaining = Math.max(0, baseRemaining - elapsed);
+    const nextRemaining = currentRemaining + add * 60;
+    const nextCancelAfterMinutes = Math.max(1, Math.ceil(nextRemaining / 60));
+
+    const updated = await this.prisma.order.update({
+      where: { id: order.id },
+      data: {
+        cancelAfterMinutes: nextCancelAfterMinutes,
+        cancelTimerRemainingSeconds: nextRemaining,
+        cancelTimerLastResumedAt: status === 'SEARCHING_DRIVER' ? new Date() : null,
+        cancelTimerPausedAt:
+          status === 'SEARCHING_DRIVER'
+            ? null
+            : ((order as any).cancelTimerPausedAt ? (order as any).cancelTimerPausedAt : new Date()),
+      },
+      select: {
+        id: true,
+        cancelAfterMinutes: true,
+        cancelTimerRemainingSeconds: true,
+      },
+    });
+
+    await this.logAudit(companyId, 'ORDER_CONFIRMATION_DELAY_EXTENDED', 'COMPANY', null, {
+      orderId: updated.id,
+      minutesAdded: add,
+      cancelAfterMinutes: updated.cancelAfterMinutes,
+      cancelTimerRemainingSeconds: updated.cancelTimerRemainingSeconds,
+      departmentId: departmentId ?? null,
+    });
+
+    return {
+      message: 'Confirmation delay updated',
+      orderId: updated.id,
+      minutesAdded: add,
+      cancelAfterMinutes: updated.cancelAfterMinutes,
+      cancelTimerRemainingSeconds: updated.cancelTimerRemainingSeconds,
+    };
+  }
+
+  async approveOrderDriver(companyId: string, orderId: string, departmentId?: string) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        deliveryCompanyId: companyId,
+        sourceType: OrderSourceType.DELIVERY_COMPANY,
+        ...(departmentId ? { deliveryCompanyDepartmentId: departmentId } : {}),
+      },
+      include: {
+        customer: { include: { user: { select: { id: true, firstName: true, secondName: true } } } },
+        driverAssignment: { include: { driver: { include: { user: { select: { id: true } } } } } },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found for this company');
+    if (String(order.status) !== 'PENDING_CUSTOMER_APPROVAL') {
+      throw new BadRequestException('Order is not pending driver approval');
+    }
+    if (!order.driverAssignment) {
+      throw new BadRequestException('No driver assigned');
+    }
+
+    const remaining = (() => {
+      const fallback = Math.max(0, Number((order as any).cancelAfterMinutes ?? 15) * 60);
+      const base =
+        typeof (order as any).cancelTimerRemainingSeconds === 'number'
+          ? Number((order as any).cancelTimerRemainingSeconds)
+          : fallback;
+      if (String(order.status) !== 'SEARCHING_DRIVER') return Math.max(0, base);
+      const last = (order as any).cancelTimerLastResumedAt
+        ? new Date((order as any).cancelTimerLastResumedAt).getTime()
+        : null;
+      if (!last) return Math.max(0, base);
+      return Math.max(0, base - Math.floor((Date.now() - last) / 1000));
+    })();
+
+    const updated = await this.prisma.order.update({
+      where: { id: order.id },
+      data: {
+        status: OrderStatus.DRIVER_ASSIGNED,
+        cancelTimerRemainingSeconds: remaining,
+        cancelTimerPausedAt: new Date(),
+        cancelTimerLastResumedAt: null,
+      },
+      include: {
+        driverAssignment: { include: { driver: { include: { user: true } } } },
+      },
+    });
+
+    const driverUserId = (updated as any)?.driverAssignment?.driver?.user?.id;
+    if (driverUserId) {
+      await this.notificationsService.send({
+        userId: driverUserId,
+        userType: 'USER',
+        type: 'DRIVER_ASSIGNED' as any,
+        relatedEntityType: 'Order',
+        relatedEntityId: updated.id,
+        groupKey: `order:${updated.id}`,
+        updateExisting: true,
+        ongoing: true,
+        orderStatus: 'DRIVER_ASSIGNED',
+        trackingAudience: 'DRIVER',
+      } as any);
+    }
+
+    await this.logAudit(companyId, 'ORDER_DRIVER_APPROVED', 'COMPANY', null, {
+      orderId: updated.id,
+      driverId: updated.driverAssignment?.driverId ?? null,
+      departmentId: departmentId ?? null,
+    });
+    return updated;
+  }
+
+  async rejectOrderDriver(companyId: string, orderId: string, reason?: string, departmentId?: string) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        deliveryCompanyId: companyId,
+        sourceType: OrderSourceType.DELIVERY_COMPANY,
+        ...(departmentId ? { deliveryCompanyDepartmentId: departmentId } : {}),
+      },
+      include: { driverAssignment: { include: { driver: { select: { userId: true } } } } },
+    });
+    if (!order) throw new NotFoundException('Order not found for this company');
+    const status = String(order.status);
+    const allowed = ['PENDING_CUSTOMER_APPROVAL', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVED'];
+    if (!allowed.includes(status)) {
+      throw new BadRequestException('Driver cannot be rejected at this stage');
+    }
+    if (!order.driverAssignment) {
+      throw new BadRequestException('No driver assigned');
+    }
+    if (status === 'DRIVER_ARRIVED' && String(reason || '').trim().length < 10) {
+      throw new BadRequestException('Please provide a rejection reason (minimum 10 characters)');
+    }
+
+    const minutes = Math.max(1, Number((order as any).cancelAfterMinutes ?? 15));
+    const totalSec = minutes * 60;
+    const acceptMs = order.driverAssignment?.acceptedAt
+      ? new Date(order.driverAssignment.acceptedAt).getTime()
+      : null;
+    const elapsedSinceAccept =
+      acceptMs != null ? Math.max(0, Math.floor((Date.now() - acceptMs) / 1000)) : 0;
+    const nextRemaining =
+      acceptMs != null ? Math.max(0, totalSec - elapsedSinceAccept) : totalSec;
+    const nextStatus = nextRemaining <= 0 ? OrderStatus.CANCELLED : OrderStatus.SEARCHING_DRIVER;
+
+    const driverUserId = order.driverAssignment?.driver?.userId ?? null;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.orderDriverRejection.create({
+        data: {
+          orderId: order.id,
+          driverId: order.driverAssignment!.driverId,
+          reason: String(reason || '').trim() || null,
+        },
+      });
+      if (status === 'DRIVER_ARRIVED') {
+        await tx.orderDriverArrivalConflict.create({
+          data: {
+            orderId: order.id,
+            customerId: order.customerId,
+            driverId: order.driverAssignment!.driverId,
+            customerReason: String(reason || '').trim(),
+          },
+        });
+      }
+      await tx.driverAssignment.delete({ where: { orderId: order.id } });
+      await tx.order.update({
+        where: { id: order.id },
+        data:
+          nextStatus === OrderStatus.CANCELLED
+            ? {
+                status: OrderStatus.CANCELLED,
+                cancelTimerRemainingSeconds: 0,
+                cancelTimerPausedAt: new Date(),
+                cancelTimerLastResumedAt: null,
+              }
+            : {
+                status: OrderStatus.SEARCHING_DRIVER,
+                cancelTimerRemainingSeconds: nextRemaining,
+                cancelTimerPausedAt: null,
+                cancelTimerLastResumedAt: new Date(),
+              },
+      });
+      if (nextStatus === OrderStatus.CANCELLED) {
+        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
+        if (company) {
+          const price = Math.round(Number(order.price || 0) * 100) / 100;
+          const reserve = Math.round(price * 0.5 * 100) / 100;
+          const unlock = Math.min(Number(company.lockedCoins), reserve);
+          const restoreAmount = Math.round((price + unlock) * 100) / 100;
+          const nextBalance = Math.round((Number(company.coinBalance) + restoreAmount) * 100) / 100;
+          const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
+          await tx.deliveryCompany.update({
+            where: { id: company.id },
+            data: { coinBalance: nextBalance, lockedCoins: nextLocked },
+          });
+          await tx.deliveryCompanyTransaction.create({
+            data: {
+              deliveryCompanyId: company.id,
+              orderId: order.id,
+              type: DeliveryCompanyTransactionType.ADMIN_ADJUSTMENT,
+              amount: restoreAmount,
+              balanceAfter: nextBalance,
+              description: `Budget rollback for CANCELLED order ${order.id}`,
+            },
+          });
+          if (order.deliveryCompanyDepartmentId) {
+            const txAny: any = tx as any;
+            if (txAny.deliveryCompanyDepartmentBudgetWallet) {
+              const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
+                where: { departmentId: order.deliveryCompanyDepartmentId },
+              });
+              if (wallet) {
+                await txAny.deliveryCompanyDepartmentBudgetWallet.update({
+                  where: { departmentId: order.deliveryCompanyDepartmentId },
+                  data: { availableCoins: Math.round((Number(wallet.availableCoins) + restoreAmount) * 100) / 100 },
+                });
+              }
+            }
+          }
+        }
+      }
+      await tx.chatRoom.updateMany({
+        where: { orderId: order.id, status: 'ACTIVE' as any },
+        data: { status: 'CLOSED' as any },
+      });
+    });
+
+    if (driverUserId) {
+      const reasonText = String(reason || '').trim();
+      await this.notificationsService.send({
+        userId: driverUserId,
+        userType: 'USER',
+        type: 'ORDER_CANCELLED_BY_CUSTOMER' as any,
+        title: 'Removed from company order',
+        body: reasonText
+          ? `You were rejected from this order. Reason: ${reasonText}`
+          : 'You were rejected from this company delivery order.',
+        relatedEntityType: 'Order',
+        relatedEntityId: order.id,
+        groupKey: `order:${order.id}`,
+        updateExisting: true,
+        ongoing: false,
+        orderStatus: 'FAILED',
+        trackingAudience: 'DRIVER',
+      } as any);
+    }
+
+    await this.logAudit(companyId, 'ORDER_DRIVER_REJECTED', 'COMPANY', null, {
+      orderId: order.id,
+      reason: String(reason || '').trim() || null,
+      departmentId: departmentId ?? null,
+    });
+    return { message: 'Driver rejected. Searching for a new driver.' };
+  }
+
+  async getOrderChat(companyId: string, orderId: string, departmentId?: string) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        deliveryCompanyId: companyId,
+        sourceType: OrderSourceType.DELIVERY_COMPANY,
+        ...(departmentId ? { deliveryCompanyDepartmentId: departmentId } : {}),
+      },
+      include: {
+        chatRooms: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: {
+            driver: { include: { user: { select: { firstName: true, secondName: true } } } },
+            messages: {
+              orderBy: { timestamp: 'asc' },
+              include: { sender: { select: { firstName: true, secondName: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found for this company');
+    const room = (order as any).chatRooms?.[0] || null;
+    if (!room) return null;
+    return {
+      id: room.id,
+      status: room.status,
+      driver: room.driver
+        ? {
+            id: room.driver.id,
+            name: `${room.driver.user?.firstName || ''} ${room.driver.user?.secondName || ''}`.trim() || 'Driver',
+          }
+        : null,
+      messages: (room.messages || []).map((m: any) => ({
+        id: m.id,
+        senderType: m.senderType,
+        senderName: `${m.sender?.firstName || ''} ${m.sender?.secondName || ''}`.trim() || 'User',
+        content: m.content,
+        image: m.image,
+        timestamp: m.timestamp,
+      })),
+    };
+  }
+
+  async sendOrderChatMessage(companyId: string, orderId: string, content: string, departmentId?: string) {
+    const text = String(content || '').trim();
+    if (text.length < 1) throw new BadRequestException('Message content is required');
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        deliveryCompanyId: companyId,
+        sourceType: OrderSourceType.DELIVERY_COMPANY,
+        ...(departmentId ? { deliveryCompanyDepartmentId: departmentId } : {}),
+      },
+      include: {
+        customer: { include: { user: true } },
+        chatRooms: {
+          where: { status: 'ACTIVE' as any },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: { driver: { include: { user: { select: { id: true } } } } },
+        },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found for this company');
+    const room = (order as any).chatRooms?.[0];
+    if (!room) throw new BadRequestException('No active chat room for this order');
+    const senderUserId = (order as any)?.customer?.user?.id;
+    if (!senderUserId) throw new BadRequestException('Company proxy customer is missing');
+
+    const message = await this.prisma.message.create({
+      data: {
+        chatRoomId: room.id,
+        senderId: senderUserId,
+        senderType: 'CUSTOMER' as any,
+        content: text,
+      },
+      include: {
+        sender: { select: { firstName: true, secondName: true } },
+      },
+    });
+    await this.logAudit(companyId, 'ORDER_CHAT_MESSAGE_SENT', 'COMPANY', null, {
+      orderId,
+      chatRoomId: room.id,
+      departmentId: departmentId ?? null,
+    });
+    const driverUserId = room?.driver?.user?.id;
+    if (driverUserId) {
+      await this.notificationsService.send({
+        userId: driverUserId,
+        userType: 'USER',
+        type: 'NEW_MESSAGE_FROM_CUSTOMER' as any,
+        relatedEntityType: 'Order',
+        relatedEntityId: orderId,
+        groupKey: `chat:${orderId}`,
+        templateData: { customerName: 'Company' },
+      } as any);
+    }
+    return {
+      id: message.id,
+      senderType: message.senderType,
+      senderName: `${message.sender?.firstName || ''} ${message.sender?.secondName || ''}`.trim() || 'Company',
+      content: message.content,
+      image: message.image,
+      timestamp: message.timestamp,
     };
   }
 

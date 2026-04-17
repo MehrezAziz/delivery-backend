@@ -217,6 +217,70 @@ export class DeliveryCompanyController {
     return this.service.createOrder(companyId, dto, resolvedDepartmentId, idempotencyKey, requestHash);
   }
 
+  @Post('orders/:id/add-confirmation-delay')
+  async addConfirmationDelay(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { minutesToAdd?: number },
+  ) {
+    const actorRole = this.actorRole(req);
+    this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
+    const companyId = req.deliveryCompany.id;
+    const departmentId = this.departmentId(req);
+    await this.requireDepartmentContext(companyId, actorRole, departmentId);
+    const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : departmentId;
+    return this.service.addOrderConfirmationDelayMinutes(
+      companyId,
+      id,
+      Number(body?.minutesToAdd ?? 0),
+      deptIdForScope,
+    );
+  }
+
+  @Post('orders/:id/approve-driver')
+  async approveDriver(@Req() req: any, @Param('id') id: string) {
+    const actorRole = this.actorRole(req);
+    this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
+    const companyId = req.deliveryCompany.id;
+    const departmentId = this.departmentId(req);
+    await this.requireDepartmentContext(companyId, actorRole, departmentId);
+    const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : departmentId;
+    return this.service.approveOrderDriver(companyId, id, deptIdForScope);
+  }
+
+  @Post('orders/:id/reject-driver')
+  async rejectDriver(@Req() req: any, @Param('id') id: string, @Body() body: { reason?: string }) {
+    const actorRole = this.actorRole(req);
+    this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
+    const companyId = req.deliveryCompany.id;
+    const departmentId = this.departmentId(req);
+    await this.requireDepartmentContext(companyId, actorRole, departmentId);
+    const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : departmentId;
+    return this.service.rejectOrderDriver(companyId, id, body?.reason, deptIdForScope);
+  }
+
+  @Get('orders/:id/chat')
+  async getOrderChat(@Req() req: any, @Param('id') id: string) {
+    const actorRole = this.actorRole(req);
+    this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR', 'DEPT_VIEWER']);
+    const companyId = req.deliveryCompany.id;
+    const departmentId = this.departmentId(req);
+    await this.requireDepartmentContext(companyId, actorRole, departmentId);
+    const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : departmentId;
+    return this.service.getOrderChat(companyId, id, deptIdForScope);
+  }
+
+  @Post('orders/:id/chat/messages')
+  async sendOrderChatMessage(@Req() req: any, @Param('id') id: string, @Body() body: { content?: string }) {
+    const actorRole = this.actorRole(req);
+    this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
+    const companyId = req.deliveryCompany.id;
+    const departmentId = this.departmentId(req);
+    await this.requireDepartmentContext(companyId, actorRole, departmentId);
+    const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : departmentId;
+    return this.service.sendOrderChatMessage(companyId, id, String(body?.content ?? ''), deptIdForScope);
+  }
+
   @Get('wallet')
   async wallet(@Req() req: any) {
     const actorRole = this.actorRole(req);

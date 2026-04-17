@@ -333,13 +333,20 @@ export class OrderNotificationListener {
   }
 
   @OnEvent('order.driver_rejected_notify_driver')
-  async handleDriverRejectedNotifyDriver(payload: { orderId: string; driverUserId: string }) {
+  async handleDriverRejectedNotifyDriver(payload: {
+    orderId: string;
+    driverUserId: string;
+    reason?: string | null;
+  }) {
+    const reasonText = (payload.reason || '').trim();
     await this.notificationsService.send({
       userId: payload.driverUserId,
       userType: 'USER',
       type: NotificationType.ORDER_CANCELLED_BY_CUSTOMER,
-      title: 'Customer chose another driver',
-      body: 'This order is no longer assigned to you.',
+      title: 'Removed from order',
+      body: reasonText
+        ? `You were rejected from this order. Reason: ${reasonText}`
+        : 'You were removed from this order — it is searching for another driver.',
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,

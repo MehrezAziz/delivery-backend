@@ -42,6 +42,6 @@ import { AdminNotificationListener } from './listeners/admin-notification.listen
     DriverOpportunityListener,
     AdminNotificationListener,
   ],
-  exports: [NotificationsService],
+  exports: [NotificationsService, NotificationsGateway],
 })
 export class NotificationsModule {}

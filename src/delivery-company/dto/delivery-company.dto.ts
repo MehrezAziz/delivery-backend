@@ -123,6 +123,13 @@ export class CreateDeliveryCompanyOrderDto {
   @Min(0)
   weight: number;
 
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(180)
+  @IsOptional()
+  maxConfirmationDelayMinutes?: number;
+
   @IsString()
   @IsOptional()
   description?: string;
@@ -147,6 +154,10 @@ export class CreateDeliveryCompanyAddressDto {
   @IsString()
   @IsOptional()
   contactPhone?: string;
+
+  @IsString()
+  @IsOptional()
+  contactEmail?: string;
 
   @IsString()
   @IsOptional()
@@ -204,6 +215,9 @@ export class CompanyOrderPreviewResponseDto {
   billingDistanceKm: number;
   pricePerKm: number;
   nightFee: number;
+  extraWeightFee: number;
+  pricingPolicyId: string;
+  maxConfirmationDelayMinutes: number;
   totalPrice: number;
   reserveAmount: number;
   requiredCapacity: number;

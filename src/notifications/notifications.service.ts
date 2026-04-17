@@ -33,6 +33,8 @@ export interface SendNotificationDto {
   orderStatus?: string;
   /** Mobile app: show driver persistent order tracking UI vs customer */
   trackingAudience?: 'CUSTOMER' | 'DRIVER';
+  /** Also emit the same WebSocket payload to these user rooms (e.g. company root + department inbox). */
+  socketMirrorUserIds?: string[];
 }
 
 @Injectable()
@@ -101,7 +103,7 @@ export class NotificationsService {
 
       // Dispatch to WEB_SOCKET channel
       if (channels.includes(NotificationChannel.WEB_SOCKET)) {
-        this.gateway.sendToUser(dto.userId, {
+        const wsPayload = {
           id: notification.id,
           title,
           body,
@@ -110,7 +112,15 @@ export class NotificationsService {
           relatedEntityType: dto.relatedEntityType,
           relatedEntityId: dto.relatedEntityId,
           sentAt: notification.sentAt,
-        });
+        };
+        this.gateway.sendToUser(dto.userId, wsPayload);
+        const autoMirrors = await this.resolveOrderMirrorUserIds(dto.relatedEntityType, dto.relatedEntityId);
+        const mirrors = [...(dto.socketMirrorUserIds ?? []), ...autoMirrors]
+          .filter((id) => id && id !== dto.userId)
+          .filter((id, index, arr) => arr.indexOf(id) === index);
+        for (const uid of mirrors) {
+          this.gateway.sendToUser(uid, wsPayload);
+        }
       }
 
       return notification;
@@ -118,6 +128,20 @@ export class NotificationsService {
       this.logger.error(`Failed to send notification: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  private async resolveOrderMirrorUserIds(relatedEntityType?: string, relatedEntityId?: string): Promise<string[]> {
+    if (relatedEntityType !== 'Order' || !relatedEntityId) return [];
+    const order = await this.prisma.order.findUnique({
+      where: { id: relatedEntityId },
+      select: {
+        sourceType: true,
+        deliveryCompanyId: true,
+        deliveryCompanyDepartmentId: true,
+      },
+    });
+    if (!order || String(order.sourceType) !== 'DELIVERY_COMPANY') return [];
+    return [order.deliveryCompanyId, order.deliveryCompanyDepartmentId].filter(Boolean) as string[];
   }
 
   private async sendPush(

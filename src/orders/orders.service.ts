@@ -7,6 +7,7 @@ import { CreateOrderDto, PreviewOrderDto, ChangePaymentMethodDto, OrderResponseD
 import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus, DriverStatus, NotificationType, CustomerServiceRole, OrderSourceType, DeliveryCompanyTransactionType } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
 
 @Injectable()
 export class OrdersService {
@@ -15,6 +16,7 @@ export class OrdersService {
     private readonly priceCalculationService: PriceCalculationService,
     private readonly driverAssignmentService: DriverAssignmentService,
     private readonly notificationsService: NotificationsService,
+    private readonly notificationsGateway: NotificationsGateway,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -341,7 +343,10 @@ export class OrdersService {
     if (order.status !== OrderStatus.SEARCHING_DRIVER && order.status !== OrderStatus.DRAFT) {
       throw new BadRequestException('Order cannot be cancelled at this stage');
     }
-    await this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+      await this.restoreCompanyOrderBudgetOnTerminalStatus(tx, order, 'CANCELLED');
+    });
     await this.closeChatRoomForOrder(orderId);
     this.eventEmitter.emit('order.cancelled', {
       orderId,
@@ -886,6 +891,13 @@ export class OrdersService {
         customerUserId: order.customer.userId,
         driverName: `${order.driverAssignment!.driver.user.firstName || ''} ${order.driverAssignment!.driver.user.secondName || ''}`.trim(),
       });
+      if (order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.deliveryCompanyId) {
+        const targetCompanyUserId = order.deliveryCompanyDepartmentId || order.deliveryCompanyId;
+        const refreshTargets = [targetCompanyUserId, order.deliveryCompanyId].filter(
+          (id, i, arr) => id && arr.indexOf(id) === i,
+        ) as string[];
+        this.notificationsGateway.emitOrderChatRefresh(refreshTargets, orderId);
+      }
     }
 
     return message;
@@ -1157,6 +1169,9 @@ export class OrdersService {
                 ...resumedTimer,
               },
       });
+      if (nextStatus === OrderStatus.CANCELLED) {
+        await this.restoreCompanyOrderBudgetOnTerminalStatus(tx, order, 'CANCELLED');
+      }
       await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
     });
 
@@ -1174,6 +1189,7 @@ export class OrdersService {
     this.eventEmitter.emit('order.driver_rejected_notify_driver', {
       orderId,
       driverUserId: rejectedDriverUserId,
+      reason: (reason || '').trim() || null,
     });
 
     if (allowedArrived && order.pickupAddress) {
@@ -1447,6 +1463,7 @@ export class OrdersService {
   private orderInclude() {
     return {
       customer: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true } } } },
+      deliveryCompany: { select: { name: true } },
       pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true, totalOrders: true, cancelledOrders: true, completionRate: true, avgDeliveryTimeMinutes: true } } } } } },
@@ -1466,6 +1483,10 @@ export class OrdersService {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
       sourceType: order.sourceType,
       deliveryCompanyId: order.deliveryCompanyId ?? null,
+      deliveryCompanyName:
+        order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.deliveryCompany?.name
+          ? String(order.deliveryCompany.name)
+          : null,
       description: order.description, weight: Number(order.weight), distanceKm: Number(order.distanceKm),
       price: Number(order.price),
       customerExtraAmount: Number(order.customerExtraAmount ?? 0),
@@ -1571,5 +1592,49 @@ export class OrdersService {
       cancelTimerPausedAt: null,
       cancelTimerLastResumedAt: new Date(),
     };
+  }
+
+  private async restoreCompanyOrderBudgetOnTerminalStatus(
+    tx: any,
+    order: any,
+    status: 'CANCELLED' | 'REFUNDED' | 'FAILED',
+  ) {
+    if (!order?.deliveryCompanyId || order?.sourceType !== OrderSourceType.DELIVERY_COMPANY) return;
+    const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
+    if (!company) return;
+    const price = Math.round(Number(order.price || 0) * 100) / 100;
+    const reserve = Math.round(price * 0.5 * 100) / 100;
+    const unlock = Math.min(Number(company.lockedCoins), reserve);
+    const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
+    const restoreAmount = Math.round((price + unlock) * 100) / 100;
+    const nextBalance = Math.round((Number(company.coinBalance) + restoreAmount) * 100) / 100;
+    await tx.deliveryCompany.update({
+      where: { id: company.id },
+      data: { coinBalance: nextBalance, lockedCoins: nextLocked },
+    });
+    await tx.deliveryCompanyTransaction.create({
+      data: {
+        deliveryCompanyId: company.id,
+        orderId: order.id,
+        type: DeliveryCompanyTransactionType.ADMIN_ADJUSTMENT,
+        amount: restoreAmount,
+        balanceAfter: nextBalance,
+        description: `Budget rollback for ${status} order ${order.id}`,
+      },
+    });
+    if (order.deliveryCompanyDepartmentId) {
+      const txAny: any = tx as any;
+      if (txAny.deliveryCompanyDepartmentBudgetWallet) {
+        const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
+          where: { departmentId: order.deliveryCompanyDepartmentId },
+        });
+        if (wallet) {
+          await txAny.deliveryCompanyDepartmentBudgetWallet.update({
+            where: { departmentId: order.deliveryCompanyDepartmentId },
+            data: { availableCoins: Math.round((Number(wallet.availableCoins) + restoreAmount) * 100) / 100 },
+          });
+        }
+      }
+    }
   }
 }
