@@ -991,7 +991,6 @@ model DeliveryCompanyAddress {
 
   deliveryCompany   DeliveryCompany @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
   departmentAccounts DeliveryCompanyDepartmentAccount[]
-  budgetPolicy      DeliveryCompanyDepartmentBudgetPolicy?
   budgetWallet      DeliveryCompanyDepartmentBudgetWallet?
   budgetRequests    DeliveryCompanyDepartmentBudgetRequest[]
   orders            Order[]
@@ -1094,6 +1093,8 @@ model DeliveryCompanyDepartmentAccount {
 
   deliveryCompany   DeliveryCompany                       @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
   department        DeliveryCompanyAddress                @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  budgetPolicy      DeliveryCompanyDepartmentBudgetPolicy?
+  budgetRequestsAuthored DeliveryCompanyDepartmentBudgetRequest[] @relation("BudgetRequestRequester")
 
   @@unique([deliveryCompanyId, email])
   @@index([departmentId, status])
@@ -1103,7 +1104,7 @@ model DeliveryCompanyDepartmentAccount {
 model DeliveryCompanyDepartmentBudgetPolicy {
   id                    String                          @id @default(uuid())
   deliveryCompanyId     String                          @map("delivery_company_id")
-  departmentId          String                          @unique @map("department_id")
+  departmentAccountId   String                          @unique @map("department_account_id")
   periodType            DeliveryCompanyBudgetPeriodType @map("period_type")
   intervalDays          Int?                            @map("interval_days")
   maxAutoApproveAmount  Decimal                         @default(0) @db.Decimal(12, 2) @map("max_auto_approve_amount")
@@ -1114,7 +1115,7 @@ model DeliveryCompanyDepartmentBudgetPolicy {
   updatedAt             DateTime                        @updatedAt @map("updated_at")
 
   deliveryCompany       DeliveryCompany                 @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
-  department            DeliveryCompanyAddress          @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  departmentAccount     DeliveryCompanyDepartmentAccount @relation(fields: [departmentAccountId], references: [id], onDelete: Cascade)
 
   @@index([deliveryCompanyId, isActive])
   @@map("delivery_company_department_budget_policies")
@@ -1154,6 +1155,7 @@ model DeliveryCompanyDepartmentBudgetRequest {
 
   deliveryCompany       DeliveryCompany                      @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
   department            DeliveryCompanyAddress               @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  requestedByAccount    DeliveryCompanyDepartmentAccount?    @relation("BudgetRequestRequester", fields: [requestedByAccountId], references: [id], onDelete: SetNull)
 
   @@index([deliveryCompanyId, status, createdAt])
   @@index([departmentId, status, createdAt])

@@ -35,6 +35,25 @@ export class DeliveryCompanyService {
     }
   }
 
+  /** Validates `userId` used for in-app notifications: company id, a department address id, or a department account id. */
+  async ensureNotificationRecipientBelongsToCompany(companyId: string, recipientUserId: string) {
+    if (!recipientUserId) {
+      throw new ForbiddenException('Notification recipient is missing');
+    }
+    if (recipientUserId === companyId) return;
+    const dept = await this.prisma.deliveryCompanyAddress.findFirst({
+      where: { id: recipientUserId, deliveryCompanyId: companyId },
+      select: { id: true },
+    });
+    if (dept) return;
+    const acct = await this.prisma.deliveryCompanyDepartmentAccount.findFirst({
+      where: { id: recipientUserId, deliveryCompanyId: companyId },
+      select: { id: true },
+    });
+    if (acct) return;
+    throw new ForbiddenException('Notification recipient is not part of this delivery company');
+  }
+
   /** JSON-safe serialization for storing idempotency response bodies. */
   private safeJson(value: any): any {
     if (value === null || value === undefined) return value;

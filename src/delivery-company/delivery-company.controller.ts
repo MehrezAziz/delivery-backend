@@ -91,6 +91,9 @@ export class DeliveryCompanyController {
     await this.service.ensureDepartmentBelongsToCompany(companyId, departmentId);
     if (!departmentId) throw new BadRequestException('Department context is missing');
 
+    const targetUserId = (body?.targetUserId as string)?.trim() || departmentId;
+    await this.service.ensureNotificationRecipientBelongsToCompany(companyId, targetUserId);
+
     const type = body?.type as string;
     // `NotificationType` is a Prisma enum; cast to string[] so `.has(type)` accepts a plain string.
     const allowedTypes = new Set(Object.values(NotificationType) as string[]);
@@ -99,7 +102,7 @@ export class DeliveryCompanyController {
     }
 
     return this.notificationsService.send({
-      userId: departmentId,
+      userId: targetUserId,
       userType: 'USER',
       type: type as any,
       title: body?.title ?? 'Delivery company update',
