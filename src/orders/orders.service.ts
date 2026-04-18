@@ -1208,6 +1208,7 @@ export class OrdersService {
       orderId,
       driverUserId: rejectedDriverUserId,
       reason: (reason || '').trim() || null,
+      afterArrival: allowedArrived,
     });
 
     if (allowedArrived && order.pickupAddress) {

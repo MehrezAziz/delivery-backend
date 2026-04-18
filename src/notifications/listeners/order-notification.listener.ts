@@ -337,8 +337,11 @@ export class OrderNotificationListener {
     orderId: string;
     driverUserId: string;
     reason?: string | null;
+    /** False when rejected before pickup/arrival — driver must not open order detail (403). */
+    afterArrival?: boolean;
   }) {
     const reasonText = (payload.reason || '').trim();
+    const afterArrival = !!payload.afterArrival;
     await this.notificationsService.send({
       userId: payload.driverUserId,
       userType: 'USER',
@@ -354,6 +357,7 @@ export class OrderNotificationListener {
       updateExisting: true,
       ongoing: false,
       trackingAudience: 'DRIVER',
+      suppressDriverTapNavigation: !afterArrival,
     });
   }
 

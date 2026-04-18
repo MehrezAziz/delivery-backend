@@ -1265,6 +1265,7 @@ export class DeliveryCompanyService {
         ongoing: false,
         orderStatus: 'FAILED',
         trackingAudience: 'DRIVER',
+        suppressDriverTapNavigation: status !== 'DRIVER_ARRIVED',
       } as any);
     }
 

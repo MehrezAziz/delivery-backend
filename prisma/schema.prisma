@@ -1579,6 +1579,8 @@ model Notification {
   readAt              DateTime?                  @map("read_at")
   deliveryStatus      NotificationDeliveryStatus @default(PENDING) @map("delivery_status")
   failureReason       String?                    @map("failure_reason")
+  /// Mobile inbox / preview: e.g. `{ "suppressDriverOrderNavigation": true }` when driver must not open order detail.
+  notificationMetadata Json?                   @map("notification_metadata")
 
   // Relations removed — userId is polymorphic (can be User or SuperUser)
   // Lookups handled in application code based on userType

@@ -5,6 +5,7 @@ import {
   NotificationPriority,
   NotificationChannel,
   NotificationDeliveryStatus,
+  Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FirebaseService } from './services/firebase.service';
@@ -33,6 +34,8 @@ export interface SendNotificationDto {
   orderStatus?: string;
   /** Mobile app: show driver persistent order tracking UI vs customer */
   trackingAudience?: 'CUSTOMER' | 'DRIVER';
+  /** Driver app: when true, notification tap must not navigate (e.g. removed before arrival — no longer has order access). */
+  suppressDriverTapNavigation?: boolean;
   /** Also emit the same WebSocket payload to these user rooms (e.g. company root + department inbox). */
   socketMirrorUserIds?: string[];
 }
@@ -46,6 +49,38 @@ export class NotificationsService {
     private firebaseService: FirebaseService,
     private gateway: NotificationsGateway,
   ) {}
+
+  private async createNotificationRow(
+    notificationId: string,
+    dto: SendNotificationDto,
+    title: string,
+    body: string,
+    priority: NotificationPriority,
+    channels: NotificationChannel[],
+  ) {
+    await this.prisma.notification.create({
+      data: {
+        id: notificationId,
+        userId: dto.userId,
+        userType: dto.userType,
+        title,
+        body,
+        type: dto.type,
+        priority,
+        channels,
+        relatedEntityType: dto.relatedEntityType ?? null,
+        relatedEntityId: dto.relatedEntityId ?? null,
+        actionButtons: dto.actionButtons ? (dto.actionButtons as unknown as Prisma.InputJsonValue) : undefined,
+        expiresAt: dto.expiresAt ?? undefined,
+        groupKey: dto.groupKey ?? null,
+        sentAt: new Date(),
+        deliveryStatus: NotificationDeliveryStatus.SENT,
+        ...(dto.suppressDriverTapNavigation === true
+          ? { notificationMetadata: { suppressDriverOrderNavigation: true } as Prisma.InputJsonValue }
+          : {}),
+      },
+    });
+  }
 
   async send(dto: SendNotificationDto) {
     try {
@@ -75,23 +110,27 @@ export class NotificationsService {
         if (existing) {
           await this.prisma.notification.update({
             where: { id: existing.id },
-            data: { title, body, type: dto.type, priority, readAt: null, sentAt: new Date() },
+            data: {
+              title,
+              body,
+              type: dto.type,
+              priority,
+              readAt: null,
+              sentAt: new Date(),
+              ...(dto.suppressDriverTapNavigation === true
+                ? { notificationMetadata: { suppressDriverOrderNavigation: true } as Prisma.InputJsonValue }
+                : {}),
+            },
           });
           notificationId = existing.id;
         } else {
           notificationId = require('crypto').randomUUID();
-          await this.prisma.$executeRaw`
-            INSERT INTO notifications (id, user_id, user_type, title, body, type, priority, channels, related_entity_type, related_entity_id, action_buttons, expires_at, group_key, sent_at, delivery_status)
-            VALUES (${notificationId}, ${dto.userId}, ${dto.userType}, ${title}, ${body}, ${dto.type}::"NotificationType", ${priority}::"NotificationPriority", ${channels}::"NotificationChannel"[], ${dto.relatedEntityType || null}, ${dto.relatedEntityId || null}, ${dto.actionButtons ? JSON.stringify(dto.actionButtons) : null}::jsonb, ${dto.expiresAt || null}::timestamp, ${dto.groupKey || null}, NOW(), 'SENT'::"NotificationDeliveryStatus")
-          `;
+          await this.createNotificationRow(notificationId, dto, title, body, priority, channels);
         }
       } else {
         // Create a new notification row (with or without groupKey)
         notificationId = require('crypto').randomUUID();
-        await this.prisma.$executeRaw`
-          INSERT INTO notifications (id, user_id, user_type, title, body, type, priority, channels, related_entity_type, related_entity_id, action_buttons, expires_at, group_key, sent_at, delivery_status)
-          VALUES (${notificationId}, ${dto.userId}, ${dto.userType}, ${title}, ${body}, ${dto.type}::"NotificationType", ${priority}::"NotificationPriority", ${channels}::"NotificationChannel"[], ${dto.relatedEntityType || null}, ${dto.relatedEntityId || null}, ${dto.actionButtons ? JSON.stringify(dto.actionButtons) : null}::jsonb, ${dto.expiresAt || null}::timestamp, ${dto.groupKey || null}, NOW(), 'SENT'::"NotificationDeliveryStatus")
-        `;
+        await this.createNotificationRow(notificationId, dto, title, body, priority, channels);
       }
 
       const notification = { id: notificationId, sentAt: new Date() };
@@ -198,6 +237,7 @@ export class NotificationsService {
           // Pass orderStatus so the frontend dedup map stays in sync
           ...(orderStatus ? { orderStatus } : {}),
           ...(dto.trackingAudience ? { trackingAudience: dto.trackingAudience } : {}),
+          ...(dto.suppressDriverTapNavigation ? { suppressDriverTapNavigation: 'true' } : {}),
           // Progress step for the notification progress bar
           progressStep: String(this.getProgressStep(dto.type)),
         },
