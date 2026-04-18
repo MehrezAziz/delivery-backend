@@ -1111,6 +1111,33 @@ export class DeliveryCompanyService {
     return updated;
   }
 
+  /**
+   * Mirrors `OrdersService.computeCancelRemainingSeconds`: while the order is not in SEARCHING_DRIVER,
+   * the stored `cancelTimerRemainingSeconds` stays the budget from the last company approval (frozen).
+   * In SEARCHING_DRIVER, time elapses from `cancelTimerLastResumedAt`.
+   */
+  private computeRemainingSecondsForResumeToSearching(order: {
+    status: OrderStatus | string;
+    cancelTimerRemainingSeconds?: number | null;
+    cancelAfterMinutes?: number | null;
+    cancelTimerLastResumedAt?: Date | null;
+  }): number {
+    const fallback = Math.max(0, Number(order.cancelAfterMinutes ?? 15) * 60);
+    const baseRemaining =
+      typeof order.cancelTimerRemainingSeconds === 'number'
+        ? Number(order.cancelTimerRemainingSeconds)
+        : fallback;
+    if (String(order.status) !== 'SEARCHING_DRIVER') {
+      return Math.max(0, baseRemaining);
+    }
+    const lastResumedAt = order.cancelTimerLastResumedAt
+      ? new Date(order.cancelTimerLastResumedAt).getTime()
+      : null;
+    if (!lastResumedAt) return Math.max(0, baseRemaining);
+    const elapsedSec = Math.floor((Date.now() - lastResumedAt) / 1000);
+    return Math.max(0, baseRemaining - elapsedSec);
+  }
+
   async rejectOrderDriver(companyId: string, orderId: string, reason?: string, departmentId?: string) {
     const order = await this.prisma.order.findFirst({
       where: {
@@ -1134,15 +1161,9 @@ export class DeliveryCompanyService {
       throw new BadRequestException('Please provide a rejection reason (minimum 10 characters)');
     }
 
-    const minutes = Math.max(1, Number((order as any).cancelAfterMinutes ?? 15));
-    const totalSec = minutes * 60;
-    const acceptMs = order.driverAssignment?.acceptedAt
-      ? new Date(order.driverAssignment.acceptedAt).getTime()
-      : null;
-    const elapsedSinceAccept =
-      acceptMs != null ? Math.max(0, Math.floor((Date.now() - acceptMs) / 1000)) : 0;
-    const nextRemaining =
-      acceptMs != null ? Math.max(0, totalSec - elapsedSinceAccept) : totalSec;
+    /** Same semantics as `OrdersService.computeCancelRemainingSeconds` + resume to SEARCHING: countdown is based on the
+     *  frozen budget from when the company last approved a driver (not driver `acceptedAt`). */
+    const nextRemaining = this.computeRemainingSecondsForResumeToSearching(order as any);
     const nextStatus = nextRemaining <= 0 ? OrderStatus.CANCELLED : OrderStatus.SEARCHING_DRIVER;
 
     const driverUserId = order.driverAssignment?.driver?.userId ?? null;

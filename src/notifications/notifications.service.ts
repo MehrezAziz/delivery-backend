@@ -525,4 +525,93 @@ export class NotificationsService {
 
     return this.getGovernorateIdsForUser(userId);
   }
+
+  /**
+   * Company support tickets use a proxy Customer `userId` on `SupportTicket`, but the company portal
+   * inbox lists notifications with `user_id` = `DeliveryCompany.id` (same pattern as order chat).
+   */
+  async resolveSupportTicketInboxUserId(ticketOwnerUserId: string): Promise<string> {
+    const company = await this.prisma.deliveryCompany.findFirst({
+      where: { proxyCustomer: { userId: ticketOwnerUserId } },
+      select: { id: true },
+    });
+    return company?.id ?? ticketOwnerUserId;
+  }
+
+  /** CS / bot replied — notify ticket owner (customer app user id or company portal inbox id). */
+  async notifySupportTicketReply(ticketId: string) {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { userId: true },
+    });
+    if (!ticket) {
+      this.logger.warn(`notifySupportTicketReply: ticket ${ticketId} not found`);
+      return;
+    }
+    const inboxUserId = await this.resolveSupportTicketInboxUserId(ticket.userId);
+    await this.send({
+      userId: inboxUserId,
+      userType: 'USER',
+      type: NotificationType.SUPPORT_TICKET_REPLY,
+      relatedEntityType: 'SupportTicket',
+      relatedEntityId: ticketId,
+      groupKey: `support:${ticketId}`,
+    });
+  }
+
+  /** End user or company wrote on the ticket — notify CS (assigned agent or governorate-scoped pool). */
+  async notifySupportCustomerReplied(ticketId: string) {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      include: { customerService: { select: { superUserId: true } } },
+    });
+    if (!ticket) {
+      this.logger.warn(`notifySupportCustomerReplied: ticket ${ticketId} not found`);
+      return;
+    }
+    const baseOpts = {
+      relatedEntityType: 'SupportTicket' as const,
+      relatedEntityId: ticketId,
+      groupKey: `support:${ticketId}`,
+    };
+    if (ticket.customerService?.superUserId) {
+      await this.send({
+        userId: ticket.customerService.superUserId,
+        userType: 'SUPER_USER',
+        type: NotificationType.CUSTOMER_REPLIED_TICKET,
+        ...baseOpts,
+      });
+      return;
+    }
+    const govIds = await this.getGovernorateIdsForSupportTicket(ticketId, ticket.userId);
+    await this.sendToCsWithPermissionForGovernorates(
+      govIds,
+      'MANAGE_SUPPORT_TICKETS',
+      NotificationType.CUSTOMER_REPLIED_TICKET,
+      baseOpts,
+    );
+  }
+
+  /** New support ticket (e.g. company portal or mobile) — CS + admins. */
+  async notifyNewSupportTicket(ticketId: string) {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { userId: true },
+    });
+    if (!ticket) {
+      this.logger.warn(`notifyNewSupportTicket: ticket ${ticketId} not found`);
+      return;
+    }
+    const govIds = await this.getGovernorateIdsForUser(ticket.userId);
+    await this.sendToCsWithPermissionForGovernorates(
+      govIds,
+      'MANAGE_SUPPORT_TICKETS',
+      NotificationType.NEW_SUPPORT_TICKET,
+      { relatedEntityType: 'SupportTicket', relatedEntityId: ticketId },
+    );
+    await this.sendToAllAdmins(NotificationType.NEW_SUPPORT_TICKET, {
+      relatedEntityType: 'SupportTicket',
+      relatedEntityId: ticketId,
+    });
+  }
 }

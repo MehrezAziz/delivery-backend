@@ -61,19 +61,7 @@ export class SupportNotificationListener {
 
   @OnEvent('support.new_ticket')
   async handleNewTicket(payload: { ticketId: string; userId: string }) {
-    const govIds = await this.notificationsService.getGovernorateIdsForUser(payload.userId);
-    await this.notificationsService.sendToCsWithPermissionForGovernorates(
-      govIds,
-      'MANAGE_SUPPORT_TICKETS',
-      NotificationType.NEW_SUPPORT_TICKET,
-      { relatedEntityType: 'SupportTicket', relatedEntityId: payload.ticketId },
-    );
-
-    // Also notify all admins
-    await this.notificationsService.sendToAllAdmins(
-      NotificationType.NEW_SUPPORT_TICKET,
-      { relatedEntityType: 'SupportTicket', relatedEntityId: payload.ticketId },
-    );
+    await this.notificationsService.notifyNewSupportTicket(payload.ticketId);
   }
 
   @OnEvent('support.ticket_assigned')
@@ -88,27 +76,13 @@ export class SupportNotificationListener {
   }
 
   @OnEvent('support.ticket_reply')
-  async handleTicketReply(payload: { ticketId: string; userId: string }) {
-    await this.notificationsService.send({
-      userId: payload.userId,
-      userType: 'USER',
-      type: NotificationType.SUPPORT_TICKET_REPLY,
-      relatedEntityType: 'SupportTicket',
-      relatedEntityId: payload.ticketId,
-      groupKey: `support:${payload.ticketId}`,
-    });
+  async handleTicketReply(payload: { ticketId: string; userId?: string }) {
+    await this.notificationsService.notifySupportTicketReply(payload.ticketId);
   }
 
   @OnEvent('support.customer_replied')
-  async handleCustomerReplied(payload: { ticketId: string; csAgentSuperUserId: string }) {
-    await this.notificationsService.send({
-      userId: payload.csAgentSuperUserId,
-      userType: 'SUPER_USER',
-      type: NotificationType.CUSTOMER_REPLIED_TICKET,
-      relatedEntityType: 'SupportTicket',
-      relatedEntityId: payload.ticketId,
-      groupKey: `support:${payload.ticketId}`,
-    });
+  async handleCustomerReplied(payload: { ticketId: string; csAgentSuperUserId?: string | null }) {
+    await this.notificationsService.notifySupportCustomerReplied(payload.ticketId);
   }
 
   @OnEvent('dispute.opened')

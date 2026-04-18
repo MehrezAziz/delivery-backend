@@ -83,13 +83,7 @@ export class SupportService {
       },
     });
 
-    // Notify assigned CS agent about customer reply
-    if (ticket.customerService) {
-      this.eventEmitter.emit('support.customer_replied', {
-        ticketId,
-        csAgentSuperUserId: ticket.customerService.superUserId,
-      });
-    }
+    this.eventEmitter.emit('support.customer_replied', { ticketId });
 
     let botMessage: Awaited<ReturnType<AiSupportOrchestratorService['handleUserMessage']>> = null;
     if (!ticket.assignedTo && (await this.aiSupport.canRunAiSupport())) {
@@ -134,12 +128,7 @@ export class SupportService {
       },
     });
 
-    if (ticket.customerService) {
-      this.eventEmitter.emit('support.customer_replied', {
-        ticketId,
-        csAgentSuperUserId: ticket.customerService.superUserId,
-      });
-    }
+    this.eventEmitter.emit('support.customer_replied', { ticketId });
 
     emit('user_message', { message });
 
@@ -320,8 +309,7 @@ export class SupportService {
       },
     });
 
-    // Notify user about CS reply
-    this.eventEmitter.emit('support.ticket_reply', { ticketId, userId: ticket.userId });
+    this.eventEmitter.emit('support.ticket_reply', { ticketId });
 
     return message;
   }
