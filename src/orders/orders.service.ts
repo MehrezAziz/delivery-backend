@@ -673,11 +673,10 @@ export class OrdersService {
       }
       return this.completeOrder(orderId, driverId);
     }
-    if (newStatus === OrderStatus.RETURNED) {
-      if (!order.driverAssignment.image1Proof) {
+    if (newStatus === OrderStatus.RETURNED || newStatus === OrderStatus.RETURN_DEPOSIT) {
+      if (newStatus === OrderStatus.RETURNED && !order.driverAssignment.image1Proof) {
         throw new BadRequestException('You must upload at least the first proof image before marking the order as returned');
       }
-      /** Return surcharge for delivery-company orders is applied at RETURN_DEPOSIT (order price + 50% return fees). */
       const assignData: any = {};
       if (opts?.customerCallCountBeforeReturn !== undefined && opts.customerCallCountBeforeReturn !== null) {
         assignData.customerCallCountBeforeReturn = opts.customerCallCountBeforeReturn;
@@ -794,6 +793,9 @@ export class OrdersService {
       Object.assign(orderUpdateData, this.buildPausedTimerUpdate(order));
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: orderUpdateData, include: this.orderInclude() });
+    if (newStatus === OrderStatus.RETURN_DEPOSIT) {
+      await this.closeChatRoomForOrder(orderId);
+    }
     if (updated.sourceType === OrderSourceType.DELIVERY_COMPANY && updated.deliveryCompanyId) {
       const refreshTargets = [updated.deliveryCompanyDepartmentId, updated.deliveryCompanyId].filter(
         (id, i, arr) => id && arr.indexOf(id) === i,

@@ -101,7 +101,7 @@ export class UpdateOrderStatusDto {
   @IsNotEmpty()
   status: OrderStatus;
 
-  /** When moving to RETURNED: optional call count and evidence URL. */
+  /** When moving to RETURNED or RETURN_DEPOSIT: optional call count and return-evidence image URL. */
   @IsOptional()
   @Type(() => Number)
   @IsInt()

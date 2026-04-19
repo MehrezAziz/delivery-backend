@@ -442,15 +442,23 @@ export class DeliveryCompanyService {
         description: r.decisionNote ?? null,
         createdAt: r.createdAt,
       }));
-      const orderLines = orderRows.map((o) => ({
-        id: `order-${o.id}`,
-        kind: 'ORDER' as const,
-        type: 'ORDER_ACTIVITY',
-        orderStatus: o.status,
-        amount: o.price,
-        description: `Order ${String(o.id).slice(0, 8)}… — ${String(o.status).replace(/_/g, ' ')}`,
-        createdAt: o.createdAt,
-      }));
+      const orderLines = orderRows.map((o) => {
+        const p = Math.round(Number(o.price) * 100) / 100;
+        const reserve = Math.round(p * 0.5 * 100) / 100;
+        const settled = Math.round(p * 1.5 * 100) / 100;
+        const isReturnDeposit = o.status === OrderStatus.RETURN_DEPOSIT;
+        return {
+          id: `order-${o.id}`,
+          kind: 'ORDER' as const,
+          type: 'ORDER_ACTIVITY',
+          orderStatus: o.status,
+          amount: isReturnDeposit ? settled : o.price,
+          description: isReturnDeposit
+            ? `Order ${String(o.id).slice(0, 8)}… — return deposit · ${p.toFixed(2)} + ${reserve.toFixed(2)} = ${settled.toFixed(2)}`
+            : `Order ${String(o.id).slice(0, 8)}… — ${String(o.status).replace(/_/g, ' ')}`,
+          createdAt: o.createdAt,
+        };
+      });
       const recallRows = await this.prisma.deliveryCompanyTransaction.findMany({
         where: {
           deliveryCompanyId: companyId,
@@ -1291,19 +1299,35 @@ export class DeliveryCompanyService {
       if (from) where.createdAt.gte = new Date(from);
       if (to) where.createdAt.lte = new Date(to);
     }
-    const [count, delivered, returned, cancelled, gross] = await Promise.all([
+    const holdStatuses: OrderStatus[] = [
+      OrderStatus.SEARCHING_DRIVER,
+      OrderStatus.PENDING_CUSTOMER_APPROVAL,
+      OrderStatus.DRIVER_ASSIGNED,
+      OrderStatus.DRIVER_ARRIVED,
+      OrderStatus.PICKED_UP,
+      OrderStatus.DELIVERING,
+      OrderStatus.RETURNED,
+    ];
+    const [count, delivered, returned, cancelled, gross, holdAgg] = await Promise.all([
       this.prisma.order.count({ where }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.DELIVERED } }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.RETURNED } }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.CANCELLED } }),
       this.prisma.order.aggregate({ where, _sum: { price: true } }),
+      this.prisma.order.aggregate({
+        where: { ...where, status: { in: holdStatuses } },
+        _sum: { price: true },
+      }),
     ]);
+    const holdPriceSum = Number(holdAgg._sum.price ?? 0);
+    const amountHold = Math.round(holdPriceSum * 1.5 * 100) / 100;
     return {
       orders: count,
       delivered,
       returned,
       cancelled,
       grossAmount: Number(gross._sum.price ?? 0),
+      amountHold,
     };
   }
 
