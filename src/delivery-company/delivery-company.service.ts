@@ -518,6 +518,7 @@ export class DeliveryCompanyService {
     const total = Math.round((discounted + extra) * 100) / 100;
     const reserve = Math.round(total * 0.5 * 100) / 100;
     const required = total + reserve;
+    // Department wallet: availableCoins -= price, lockedCoins += reserve → net liquidity (available−locked) drops by price+reserve.
     return {
       paymentType: PaymentType.WALLET,
       effectiveDiscountPercent: discount,

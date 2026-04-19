@@ -411,6 +411,7 @@ enum CustomerServiceRole {
   MANAGE_SUPPORT_TICKETS
   VIEW_FINANCIAL_REPORTS
   MANAGE_FINANCIAL_REPORTS
+  MANAGE_COMPANY_FINANCE
 }
 
 // ============================================
