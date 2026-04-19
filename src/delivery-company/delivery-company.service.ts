@@ -40,6 +40,7 @@ const LIST_COMPANY_ORDERS_INCLUDE = {
     },
   },
   deliveryCompanyDepartment: { select: { id: true, label: true } },
+  returnDepositFeedback: true,
   createdByDepartmentAccount: {
     select: {
       id: true,
@@ -260,8 +261,8 @@ export class DeliveryCompanyService {
       include: { returnDepositFeedback: true },
     });
     if (!order) throw new NotFoundException('Order not found for this company');
-    if (order.status !== OrderStatus.RETURN_DEPOSIT) {
-      throw new BadRequestException('Feedback is allowed only after return deposit.');
+    if (order.status !== OrderStatus.RETURN_DEPOSIT && order.status !== OrderStatus.RETURNED) {
+      throw new BadRequestException('Feedback is allowed only during return flow (returned or return deposit).');
     }
 
     const dbAny: any = this.prisma as any;

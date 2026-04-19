@@ -4,7 +4,21 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from './services/price-calculation.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { CreateOrderDto, PreviewOrderDto, ChangePaymentMethodDto, OrderResponseDto } from './dto/order.dto';
-import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, TransactionStatus, ReferenceType, ReferralCommissionStatus, DriverStatus, NotificationType, CustomerServiceRole, OrderSourceType, DeliveryCompanyTransactionType } from '@prisma/client';
+import {
+  OrderStatus,
+  PaymentType,
+  CustomerStatus,
+  WalletTransactionType,
+  TransactionStatus,
+  ReferenceType,
+  ReferralCommissionStatus,
+  DriverStatus,
+  NotificationType,
+  CustomerServiceRole,
+  OrderSourceType,
+  DeliveryCompanyTransactionType,
+  DriverTransactionType,
+} from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
@@ -461,14 +475,29 @@ export class OrdersService {
       await tx.driverAccount.updateMany({ where: { driverId: order.driverAssignment.driverId }, data: { completedDeliveries: { increment: 1 } } });
 
       if (order.deliveryCompanyId) {
-        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
-        if (company) {
-          const reserve = Math.round(Number(order.price) * 0.5 * 100) / 100;
-          const nextLocked = Math.max(0, Number(company.lockedCoins) - reserve);
-          await tx.deliveryCompany.update({
-            where: { id: company.id },
-            data: { lockedCoins: nextLocked },
+        const reserve = Math.round(Number(order.price) * 0.5 * 100) / 100;
+        const deptId = order.deliveryCompanyDepartmentId;
+        if (deptId) {
+          const txAny = tx as any;
+          const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
+            where: { departmentId: deptId },
           });
+          if (wallet) {
+            const nextLocked = Math.max(0, Number(wallet.lockedCoins) - reserve);
+            await txAny.deliveryCompanyDepartmentBudgetWallet.update({
+              where: { departmentId: deptId },
+              data: { lockedCoins: nextLocked },
+            });
+          }
+        } else {
+          const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
+          if (company) {
+            const nextLocked = Math.max(0, Number(company.lockedCoins) - reserve);
+            await tx.deliveryCompany.update({
+              where: { id: company.id },
+              data: { lockedCoins: nextLocked },
+            });
+          }
         }
       }
 
@@ -522,7 +551,10 @@ export class OrdersService {
   async updateOrderStatus(orderId: string, driverId: string, newStatus: OrderStatus): Promise<OrderResponseDto> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { driverAssignment: { include: { driver: { select: { userId: true } } } } },
+      include: {
+        driverAssignment: { include: { driver: { select: { userId: true } } } },
+        pricingPolicy: true,
+      },
     });
     if (!order) throw new NotFoundException('Order not found');
     if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) throw new ForbiddenException('Not your order');
@@ -543,29 +575,49 @@ export class OrdersService {
       if (!order.driverAssignment.image1Proof) {
         throw new BadRequestException('You must upload at least the first proof image before marking the order as returned');
       }
-      if (order.deliveryCompanyId) {
+      if (order.deliveryCompanyId && order.sourceType === OrderSourceType.DELIVERY_COMPANY) {
         await this.prisma.$transaction(async (tx) => {
-          const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
-          if (!company) return;
           const surcharge = Math.round(Number(order.price) * 0.5 * 100) / 100;
-          const consumeFromLocked = Math.min(Number(company.lockedCoins), surcharge);
-          const remainingCharge = surcharge - consumeFromLocked;
-          const nextLocked = Number(company.lockedCoins) - consumeFromLocked;
-          const nextBalance = Number(company.coinBalance) - remainingCharge;
-          await tx.deliveryCompany.update({
-            where: { id: company.id },
-            data: { coinBalance: nextBalance, lockedCoins: nextLocked },
-          });
-          await tx.deliveryCompanyTransaction.create({
-            data: {
-              deliveryCompanyId: company.id,
-              orderId: order.id,
-              type: DeliveryCompanyTransactionType.RETURN_SURCHARGE,
-              amount: -surcharge,
-              balanceAfter: nextBalance,
-              description: `Return surcharge (50%) for order ${order.id}`,
-            },
-          });
+          const deptId = order.deliveryCompanyDepartmentId;
+          if (deptId) {
+            const txAny = tx as any;
+            const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
+              where: { departmentId: deptId },
+            });
+            if (!wallet) return;
+            const consumeFromLocked = Math.min(Number(wallet.lockedCoins), surcharge);
+            const remainingCharge = surcharge - consumeFromLocked;
+            const nextLocked = Number(wallet.lockedCoins) - consumeFromLocked;
+            const nextAvailable = Number(wallet.availableCoins) - remainingCharge;
+            await txAny.deliveryCompanyDepartmentBudgetWallet.update({
+              where: { departmentId: deptId },
+              data: {
+                lockedCoins: nextLocked,
+                availableCoins: Math.round(nextAvailable * 100) / 100,
+              },
+            });
+          } else {
+            const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
+            if (!company) return;
+            const consumeFromLocked = Math.min(Number(company.lockedCoins), surcharge);
+            const remainingCharge = surcharge - consumeFromLocked;
+            const nextLocked = Number(company.lockedCoins) - consumeFromLocked;
+            const nextBalance = Number(company.coinBalance) - remainingCharge;
+            await tx.deliveryCompany.update({
+              where: { id: company.id },
+              data: { coinBalance: nextBalance, lockedCoins: nextLocked },
+            });
+            await tx.deliveryCompanyTransaction.create({
+              data: {
+                deliveryCompanyId: company.id,
+                orderId: order.id,
+                type: DeliveryCompanyTransactionType.RETURN_SURCHARGE,
+                amount: -surcharge,
+                balanceAfter: nextBalance,
+                description: `Return surcharge (50%) for order ${order.id}`,
+              },
+            });
+          }
         });
       }
     }
@@ -573,14 +625,66 @@ export class OrdersService {
     else if (newStatus === OrderStatus.PICKED_UP) await this.prisma.driverAssignment.update({ where: { orderId }, data: { pickedUpAt: new Date() } });
     else if (newStatus === OrderStatus.RETURN_DEPOSIT && order.deliveryCompanyId) {
       await this.prisma.$transaction(async (tx) => {
-        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
-        if (!company) return;
         const reserve = Math.round(Number(order.price) * 0.5 * 100) / 100;
-        const nextLocked = Math.max(0, Number(company.lockedCoins) - reserve);
-        await tx.deliveryCompany.update({
-          where: { id: company.id },
-          data: { lockedCoins: nextLocked },
-        });
+        const deptId = order.deliveryCompanyDepartmentId;
+        if (deptId) {
+          const txAny = tx as any;
+          const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
+            where: { departmentId: deptId },
+          });
+          if (wallet) {
+            const nextLocked = Math.max(0, Number(wallet.lockedCoins) - reserve);
+            await txAny.deliveryCompanyDepartmentBudgetWallet.update({
+              where: { departmentId: deptId },
+              data: { lockedCoins: nextLocked },
+            });
+          }
+        } else {
+          const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
+          if (company) {
+            const nextLocked = Math.max(0, Number(company.lockedCoins) - reserve);
+            await tx.deliveryCompany.update({
+              where: { id: company.id },
+              data: { lockedCoins: nextLocked },
+            });
+          }
+        }
+
+        if (
+          order.sourceType === OrderSourceType.DELIVERY_COMPANY &&
+          order.paymentType === PaymentType.WALLET &&
+          order.driverAssignment &&
+          order.pricingPolicy
+        ) {
+          const price = Number(order.price);
+          const pFee = Number(order.pricingPolicy.platformFee);
+          const gross = Math.round(price * 1.5 * 100) / 100;
+          const net = Math.round((gross - pFee) * 100) / 100;
+          const drvId = order.driverAssignment.driverId;
+          const acc = await tx.driverAccount.findUnique({ where: { driverId: drvId } });
+          if (acc && net !== 0) {
+            const oldB = Number(acc.balance);
+            const newB = oldB + net;
+            await tx.driverAccount.update({
+              where: { id: acc.id },
+              data: {
+                balance: newB,
+                ...(newB < 0 && oldB >= 0 ? { negativeBalanceSince: new Date() } : {}),
+              },
+            });
+            await tx.driverTransaction.create({
+              data: {
+                accountId: acc.id,
+                type: DriverTransactionType.ADJUSTMENT,
+                amount: net,
+                referenceId: orderId,
+                referenceType: 'ORDER',
+                description: `Return-deposit payout (price + 50% − platform fee) order #${orderId.slice(0, 8)}`,
+                balanceAfter: newB,
+              },
+            });
+          }
+        }
       });
     }
 
