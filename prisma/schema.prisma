@@ -866,6 +866,8 @@ model Order {
   sourceType        OrderSourceType @default(NORMAL_CUSTOMER) @map("source_type")
   deliveryCompanyId String?     @map("delivery_company_id")
   deliveryCompanyDepartmentId String? @map("delivery_company_department_id")
+  /// Department portal user who placed this company order (null = main admin / API without account context).
+  deliveryCompanyDepartmentAccountId String? @map("delivery_company_department_account_id")
   nightFee          Decimal     @default(0) @db.Decimal(10, 2) @map("night_fee")
   extraWeightFee    Decimal     @default(0) @db.Decimal(10, 2) @map("extra_weight_fee")
   cancelAfterMinutes Int        @default(15) @map("cancel_after_minutes")
@@ -893,6 +895,7 @@ model Order {
   customer            Customer              @relation(fields: [customerId], references: [id])
   deliveryCompany     DeliveryCompany?      @relation(fields: [deliveryCompanyId], references: [id])
   deliveryCompanyDepartment DeliveryCompanyAddress? @relation(fields: [deliveryCompanyDepartmentId], references: [id], onDelete: SetNull)
+  createdByDepartmentAccount DeliveryCompanyDepartmentAccount? @relation(fields: [deliveryCompanyDepartmentAccountId], references: [id], onDelete: SetNull)
   pricingPolicy       CountryPricingPolicy  @relation(fields: [pricingPolicyId], references: [id])
   pickupAddress       Address?              @relation("PickupAddress", fields: [pickupAddressId], references: [id])
   dropoffAddress      Address?              @relation("DropoffAddress", fields: [dropoffAddressId], references: [id])
@@ -913,6 +916,7 @@ model Order {
   @@index([customerId, status])
   @@index([deliveryCompanyId, status])
   @@index([deliveryCompanyDepartmentId, status])
+  @@index([deliveryCompanyDepartmentAccountId])
   @@index([status, createdAt])
   @@map("orders")
 }
@@ -1095,6 +1099,7 @@ model DeliveryCompanyDepartmentAccount {
   budgetPolicy      DeliveryCompanyDepartmentBudgetPolicy?
   scheduledBudgetTransfers DeliveryCompanyScheduledBudgetTransfer[]
   budgetRequestsAuthored DeliveryCompanyDepartmentBudgetRequest[] @relation("BudgetRequestRequester")
+  ordersCreated          Order[]
 
   @@unique([deliveryCompanyId, email])
   @@index([departmentId, status])

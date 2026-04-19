@@ -1,4 +1,17 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+  ForbiddenException,
+} from '@nestjs/common';
 import { createHash } from 'crypto';
 import { JwtSuperUserGuard, StaffGuard } from '../auth/guards/auth.guards';
 import { DeliveryCompanyApiKeyGuard } from './delivery-company-auth.guard';
@@ -64,6 +77,14 @@ export class DeliveryCompanyController {
 
   private departmentId(req: any): string | undefined {
     const v = req?.headers?.['x-company-department-id'];
+    if (!v) return undefined;
+    const s = String(v).trim();
+    return s ? s : undefined;
+  }
+
+  /** Set by company portal when a department account user acts (JWT → proxy header). */
+  private departmentAccountId(req: any): string | undefined {
+    const v = req?.headers?.['x-company-department-account-id'];
     if (!v) return undefined;
     const s = String(v).trim();
     return s ? s : undefined;
@@ -216,8 +237,41 @@ export class DeliveryCompanyController {
       .update(JSON.stringify(dto) + '|' + String(companyId) + '|' + String(resolvedDepartmentId ?? ''))
       .digest('hex');
     const idempotencyKey = idemKeyHeader;
+    const createdByAccount = this.departmentAccountId(req);
 
-    return this.service.createOrder(companyId, dto, resolvedDepartmentId, idempotencyKey, requestHash);
+    return this.service.createOrder(
+      companyId,
+      dto,
+      resolvedDepartmentId,
+      idempotencyKey,
+      requestHash,
+      createdByAccount ?? null,
+    );
+  }
+
+  @Patch('orders/:id')
+  async updateOrderSearching(@Req() req: any, @Param('id') id: string, @Body() dto: CreateDeliveryCompanyOrderDto) {
+    const actorRole = this.actorRole(req);
+    this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
+    const companyId = req.deliveryCompany.id;
+    const departmentIdHeader = this.departmentId(req);
+    const resolvedDepartmentId =
+      actorRole === 'MAIN_ADMIN' ? departmentIdHeader || dto.pickupAddressId : departmentIdHeader;
+    await this.requireDepartmentContext(companyId, actorRole, resolvedDepartmentId);
+    await this.service.ensureDepartmentBelongsToCompany(companyId, resolvedDepartmentId);
+    const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : resolvedDepartmentId;
+    return this.service.updateCompanyOrderSearching(companyId, id, dto, deptIdForScope);
+  }
+
+  @Delete('orders/:id')
+  async deleteOrderSearching(@Req() req: any, @Param('id') id: string) {
+    const actorRole = this.actorRole(req);
+    this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
+    const companyId = req.deliveryCompany.id;
+    const departmentIdHeader = this.departmentId(req);
+    await this.requireDepartmentContext(companyId, actorRole, departmentIdHeader);
+    const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : departmentIdHeader;
+    return this.service.cancelCompanyOrderSearching(companyId, id, deptIdForScope);
   }
 
   @Post('orders/:id/add-confirmation-delay')

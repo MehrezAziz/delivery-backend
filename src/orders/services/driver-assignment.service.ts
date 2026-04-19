@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
-import { DeliveryCompanyTransactionType, OrderSourceType, OrderStatus, DriverStatus, ChatStatus } from '@prisma/client';
+import { OrderSourceType, OrderStatus, DriverStatus, ChatStatus } from '@prisma/client';
+import { rollbackDeliveryCompanyOrderFundsInTx } from '../../delivery-company/company-order-budget.util';
 
 @Injectable()
 export class DriverAssignmentService {
@@ -255,29 +256,7 @@ export class DriverAssignmentService {
               },
       });
       if (nextStatus === OrderStatus.CANCELLED && order.deliveryCompanyId && order.sourceType === OrderSourceType.DELIVERY_COMPANY) {
-        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
-        if (company) {
-          const price = Math.round(Number(order.price || 0) * 100) / 100;
-          const reserve = Math.round(price * 0.5 * 100) / 100;
-          const unlock = Math.min(Number(company.lockedCoins), reserve);
-          const restoreAmount = Math.round((price + unlock) * 100) / 100;
-          const nextBalance = Math.round((Number(company.coinBalance) + restoreAmount) * 100) / 100;
-          const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
-          await tx.deliveryCompany.update({
-            where: { id: company.id },
-            data: { coinBalance: nextBalance, lockedCoins: nextLocked },
-          });
-          await tx.deliveryCompanyTransaction.create({
-            data: {
-              deliveryCompanyId: company.id,
-              orderId: order.id,
-              type: DeliveryCompanyTransactionType.ADMIN_ADJUSTMENT,
-              amount: restoreAmount,
-              balanceAfter: nextBalance,
-              description: `Budget rollback for CANCELLED order ${order.id}`,
-            },
-          });
-        }
+        await rollbackDeliveryCompanyOrderFundsInTx(tx, order, 'CANCELLED');
       }
       // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId }, data: { status: ChatStatus.CLOSED } });

@@ -8,6 +8,7 @@ import { OrderStatus, PaymentType, CustomerStatus, WalletTransactionType, Transa
 import { randomBytes } from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { rollbackDeliveryCompanyOrderFundsInTx } from '../delivery-company/company-order-budget.util';
 
 @Injectable()
 export class OrdersService {
@@ -1618,42 +1619,6 @@ export class OrdersService {
     order: any,
     status: 'CANCELLED' | 'REFUNDED' | 'FAILED',
   ) {
-    if (!order?.deliveryCompanyId || order?.sourceType !== OrderSourceType.DELIVERY_COMPANY) return;
-    const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
-    if (!company) return;
-    const price = Math.round(Number(order.price || 0) * 100) / 100;
-    const reserve = Math.round(price * 0.5 * 100) / 100;
-    const unlock = Math.min(Number(company.lockedCoins), reserve);
-    const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
-    const restoreAmount = Math.round((price + unlock) * 100) / 100;
-    const nextBalance = Math.round((Number(company.coinBalance) + restoreAmount) * 100) / 100;
-    await tx.deliveryCompany.update({
-      where: { id: company.id },
-      data: { coinBalance: nextBalance, lockedCoins: nextLocked },
-    });
-    await tx.deliveryCompanyTransaction.create({
-      data: {
-        deliveryCompanyId: company.id,
-        orderId: order.id,
-        type: DeliveryCompanyTransactionType.ADMIN_ADJUSTMENT,
-        amount: restoreAmount,
-        balanceAfter: nextBalance,
-        description: `Budget rollback for ${status} order ${order.id}`,
-      },
-    });
-    if (order.deliveryCompanyDepartmentId) {
-      const txAny: any = tx as any;
-      if (txAny.deliveryCompanyDepartmentBudgetWallet) {
-        const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
-          where: { departmentId: order.deliveryCompanyDepartmentId },
-        });
-        if (wallet) {
-          await txAny.deliveryCompanyDepartmentBudgetWallet.update({
-            where: { departmentId: order.deliveryCompanyDepartmentId },
-            data: { availableCoins: Math.round((Number(wallet.availableCoins) + restoreAmount) * 100) / 100 },
-          });
-        }
-      }
-    }
+    await rollbackDeliveryCompanyOrderFundsInTx(tx, order, status);
   }
 }

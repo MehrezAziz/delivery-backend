@@ -1,6 +1,15 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
-import { DeliveryCompanyRefundDestinationType, DeliveryCompanyRefundStatus, DeliveryCompanyTransactionType, OrderSourceType, OrderStatus, PaymentType } from '@prisma/client';
+import {
+  DeliveryCompanyDepartmentAccountStatus,
+  DeliveryCompanyRefundDestinationType,
+  DeliveryCompanyRefundStatus,
+  DeliveryCompanyTransactionType,
+  OrderSourceType,
+  OrderStatus,
+  PaymentType,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from '../orders/services/price-calculation.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -13,6 +22,33 @@ import {
   CreateDeliveryCompanyRefundRequestDto,
   UpdateDeliveryCompanyDto,
 } from './dto/delivery-company.dto';
+import { rollbackDeliveryCompanyOrderFundsInTx } from './company-order-budget.util';
+
+/**
+ * Matches `schema.prisma` Order relations. Cast avoids IDE/ts-server mismatches when
+ * `node_modules/.prisma/client` is stale — run `npx prisma generate` after schema changes.
+ */
+const LIST_COMPANY_ORDERS_INCLUDE = {
+  pickupAddress: { include: { delegation: { include: { governorate: true } } } },
+  dropoffAddress: { include: { delegation: { include: { governorate: true } } } },
+  driverAssignment: true,
+  deliveryCompany: { select: { id: true, name: true, legalName: true } },
+  customer: {
+    select: {
+      id: true,
+      deliveryCompanyProxyFor: { select: { id: true, name: true, legalName: true } },
+    },
+  },
+  deliveryCompanyDepartment: { select: { id: true, label: true } },
+  createdByDepartmentAccount: {
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      department: { select: { id: true, label: true } },
+    },
+  },
+} as unknown as Prisma.OrderInclude;
 
 @Injectable()
 export class DeliveryCompanyService {
@@ -32,6 +68,27 @@ export class DeliveryCompanyService {
     });
     if (!dept) {
       throw new ForbiddenException('Department context is invalid for this delivery company');
+    }
+  }
+
+  async ensureDepartmentAccountBelongsToCompany(
+    companyId: string,
+    departmentAccountId: string,
+    departmentId?: string | null,
+  ) {
+    const acct = await this.prisma.deliveryCompanyDepartmentAccount.findFirst({
+      where: {
+        id: departmentAccountId,
+        deliveryCompanyId: companyId,
+        status: DeliveryCompanyDepartmentAccountStatus.ACTIVE,
+      },
+      select: { id: true, departmentId: true },
+    });
+    if (!acct) {
+      throw new ForbiddenException('Department account is invalid for this delivery company');
+    }
+    if (departmentId && acct.departmentId !== departmentId) {
+      throw new ForbiddenException('Department account does not match department context');
     }
   }
 
@@ -175,11 +232,7 @@ export class DeliveryCompanyService {
         sourceType: OrderSourceType.DELIVERY_COMPANY,
         ...(departmentId ? { deliveryCompanyDepartmentId: departmentId } : {}),
       },
-      include: {
-        pickupAddress: { include: { delegation: { include: { governorate: true } } } },
-        dropoffAddress: { include: { delegation: { include: { governorate: true } } } },
-        driverAssignment: true,
-      },
+      include: LIST_COMPANY_ORDERS_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -418,6 +471,7 @@ export class DeliveryCompanyService {
     departmentId?: string,
     idempotencyKey?: string,
     requestHash?: string,
+    createdByDepartmentAccountId?: string | null,
   ) {
     let company = await this.prisma.deliveryCompany.findUnique({
       where: { id: companyId },
@@ -436,14 +490,40 @@ export class DeliveryCompanyService {
     const preview = await this.previewOrder(companyId, dto, departmentId);
     const confirmationDelayMinutes = Math.max(1, Math.min(180, Number(dto.maxConfirmationDelayMinutes ?? 15)));
 
+    if (createdByDepartmentAccountId) {
+      await this.ensureDepartmentAccountBelongsToCompany(companyId, createdByDepartmentAccountId, departmentId ?? null);
+    }
+
     const endpointKey = 'delivery-company/orders:POST';
     const idemKey = idempotencyKey && requestHash ? idempotencyKey : undefined;
     const dbAny: any = this.prisma as any;
     const hasIdempotencyModel = !!dbAny?.deliveryCompanyIdempotencyKey;
-    const availableCapacity =
-      Number(company.coinBalance) + Number(company.maxNegativeBalance) - Number(company.lockedCoins);
-    if (availableCapacity < preview.requiredCapacity) {
-      throw new BadRequestException('Insufficient company balance capacity');
+
+    if (departmentId) {
+      let deptWallet = await dbAny.deliveryCompanyDepartmentBudgetWallet?.findUnique({
+        where: { departmentId },
+      });
+      if (!deptWallet) {
+        deptWallet = await dbAny.deliveryCompanyDepartmentBudgetWallet.create({
+          data: {
+            deliveryCompanyId: companyId,
+            departmentId,
+            availableCoins: 0,
+            lockedCoins: 0,
+          },
+        });
+      }
+      const deptCapacity =
+        Number(deptWallet.availableCoins) - Number(deptWallet.lockedCoins);
+      if (deptCapacity < preview.requiredCapacity) {
+        throw new BadRequestException('Insufficient department budget capacity');
+      }
+    } else {
+      const availableCapacity =
+        Number(company.coinBalance) + Number(company.maxNegativeBalance) - Number(company.lockedCoins);
+      if (availableCapacity < preview.requiredCapacity) {
+        throw new BadRequestException('Insufficient company balance capacity');
+      }
     }
 
     const resolvedPickupAddressId = await this.resolvePickupAddressIdForCompanyOrder(
@@ -507,22 +587,43 @@ export class DeliveryCompanyService {
         }
       }
 
-      const updatedCompany = await tx.deliveryCompany.update({
-        where: { id: companyId },
-        data: {
-          coinBalance: Number(company.coinBalance) - preview.totalPrice,
-          lockedCoins: Number(company.lockedCoins) + preview.reserveAmount,
-        },
-      });
-      await tx.deliveryCompanyTransaction.create({
-        data: {
-          deliveryCompanyId: companyId,
-          type: DeliveryCompanyTransactionType.ORDER_PAYMENT,
-          amount: -preview.totalPrice,
-          balanceAfter: Number(updatedCompany.coinBalance),
-          description: 'Order payment at placement',
-        },
-      });
+      if (departmentId) {
+        const txAny: any = tx as any;
+        const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
+          where: { departmentId },
+        });
+        if (!wallet) {
+          throw new BadRequestException('Department budget wallet not found');
+        }
+        const cap = Number(wallet.availableCoins) - Number(wallet.lockedCoins);
+        if (cap < preview.requiredCapacity) {
+          throw new BadRequestException('Insufficient department budget capacity');
+        }
+        await txAny.deliveryCompanyDepartmentBudgetWallet.update({
+          where: { departmentId },
+          data: {
+            availableCoins: Math.round((Number(wallet.availableCoins) - preview.totalPrice) * 100) / 100,
+            lockedCoins: Math.round((Number(wallet.lockedCoins) + preview.reserveAmount) * 100) / 100,
+          },
+        });
+      } else {
+        const updatedCompany = await tx.deliveryCompany.update({
+          where: { id: companyId },
+          data: {
+            coinBalance: Number(company.coinBalance) - preview.totalPrice,
+            lockedCoins: Number(company.lockedCoins) + preview.reserveAmount,
+          },
+        });
+        await tx.deliveryCompanyTransaction.create({
+          data: {
+            deliveryCompanyId: companyId,
+            type: DeliveryCompanyTransactionType.ORDER_PAYMENT,
+            amount: -preview.totalPrice,
+            balanceAfter: Number(updatedCompany.coinBalance),
+            description: 'Order payment at placement',
+          },
+        });
+      }
 
       const order = await tx.order.create({
         data: {
@@ -530,6 +631,7 @@ export class DeliveryCompanyService {
           deliveryCompanyId: company.id,
           sourceType: OrderSourceType.DELIVERY_COMPANY,
           deliveryCompanyDepartmentId: departmentId ?? null,
+          deliveryCompanyDepartmentAccountId: createdByDepartmentAccountId ?? null,
           pricingPolicyId: preview.pricingPolicyId,
           pickupAddressId: resolvedPickupAddressId,
           dropoffAddressId: localPickup ? null : resolvedDropoffAddressId,
@@ -548,7 +650,7 @@ export class DeliveryCompanyService {
           cancelTimerRemainingSeconds: confirmationDelayMinutes * 60,
           cancelTimerLastResumedAt: new Date(),
           cancelTimerPausedAt: null,
-        },
+        } as unknown as Prisma.OrderUncheckedCreateInput,
       });
       await this.logAudit(companyId, 'ORDER_CREATED', 'COMPANY', null, { orderId: order.id, total: preview.totalPrice });
       if (hasIdempotencyModel && idemKey && requestHash && idemRow?.id) {
@@ -563,6 +665,160 @@ export class DeliveryCompanyService {
       }
       return order;
     });
+  }
+
+  /**
+   * Cancel a company order while it is still `SEARCHING_DRIVER` (delete / withdraw before a driver is assigned).
+   */
+  async cancelCompanyOrderSearching(companyId: string, orderId: string, departmentIdScope?: string | null) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: { id: orderId, deliveryCompanyId: companyId, sourceType: OrderSourceType.DELIVERY_COMPANY },
+      });
+      if (!order) throw new NotFoundException('Order not found');
+      if (order.status !== OrderStatus.SEARCHING_DRIVER) {
+        throw new BadRequestException('Only orders still searching for a driver can be cancelled');
+      }
+      if (departmentIdScope && order.deliveryCompanyDepartmentId !== departmentIdScope) {
+        throw new ForbiddenException('Order is outside your department scope');
+      }
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: OrderStatus.CANCELLED },
+      });
+      await rollbackDeliveryCompanyOrderFundsInTx(tx, order, 'CANCELLED');
+      return { message: 'Order cancelled', orderId };
+    });
+    await this.logAudit(companyId, 'ORDER_CANCELLED_SEARCHING', 'COMPANY', null, { orderId });
+    return result;
+  }
+
+  /**
+   * Edit order fields that affect pricing while status is `SEARCHING_DRIVER`. Budget is released and re-locked for the new preview.
+   */
+  async updateCompanyOrderSearching(
+    companyId: string,
+    orderId: string,
+    dto: CreateDeliveryCompanyOrderDto,
+    departmentIdScope?: string | null,
+  ) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, deliveryCompanyId: companyId, sourceType: OrderSourceType.DELIVERY_COMPANY },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== OrderStatus.SEARCHING_DRIVER) {
+      throw new BadRequestException('Only orders still searching for a driver can be edited');
+    }
+    if (departmentIdScope && order.deliveryCompanyDepartmentId !== departmentIdScope) {
+      throw new ForbiddenException('Order is outside your department scope');
+    }
+
+    const deptForPreview = order.deliveryCompanyDepartmentId ?? undefined;
+    const preview = await this.previewOrder(companyId, dto, deptForPreview);
+    const confirmationDelayMinutes = Math.max(1, Math.min(180, Number(dto.maxConfirmationDelayMinutes ?? 15)));
+
+    const resolvedPickupAddressId = await this.resolvePickupAddressIdForCompanyOrder(
+      companyId,
+      dto.pickupAddressId,
+      deptForPreview,
+    );
+    const pickupAddr = await this.prisma.address.findUnique({ where: { id: resolvedPickupAddressId } });
+    if (!pickupAddr) throw new NotFoundException('Pickup address not found');
+    const localPickup = !!dto.localPickupOnly;
+    let resolvedDropoffAddressId: string | undefined;
+    if (!localPickup) {
+      resolvedDropoffAddressId = await this.resolveDropoffAddressIdForCompanyOrder(dto);
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const o2 = await tx.order.findFirst({
+        where: { id: orderId, deliveryCompanyId: companyId },
+      });
+      if (!o2 || o2.status !== OrderStatus.SEARCHING_DRIVER) {
+        throw new BadRequestException('Order is no longer editable');
+      }
+
+      await rollbackDeliveryCompanyOrderFundsInTx(tx, o2, 'EDIT');
+
+      const company = await tx.deliveryCompany.findUnique({ where: { id: companyId } });
+      if (!company) throw new NotFoundException('Delivery company not found');
+
+      const txAny: any = tx as any;
+      if (deptForPreview) {
+        let wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
+          where: { departmentId: deptForPreview },
+        });
+        if (!wallet) {
+          wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.create({
+            data: {
+              deliveryCompanyId: companyId,
+              departmentId: deptForPreview,
+              availableCoins: 0,
+              lockedCoins: 0,
+            },
+          });
+        }
+        const cap = Number(wallet.availableCoins) - Number(wallet.lockedCoins);
+        if (cap < preview.requiredCapacity) {
+          throw new BadRequestException('Insufficient department budget capacity');
+        }
+        await txAny.deliveryCompanyDepartmentBudgetWallet.update({
+          where: { departmentId: deptForPreview },
+          data: {
+            availableCoins: Math.round((Number(wallet.availableCoins) - preview.totalPrice) * 100) / 100,
+            lockedCoins: Math.round((Number(wallet.lockedCoins) + preview.reserveAmount) * 100) / 100,
+          },
+        });
+      } else {
+        const availableCapacity =
+          Number(company.coinBalance) + Number(company.maxNegativeBalance) - Number(company.lockedCoins);
+        if (availableCapacity < preview.requiredCapacity) {
+          throw new BadRequestException('Insufficient company balance capacity');
+        }
+        const updatedCompany = await tx.deliveryCompany.update({
+          where: { id: companyId },
+          data: {
+            coinBalance: Number(company.coinBalance) - preview.totalPrice,
+            lockedCoins: Number(company.lockedCoins) + preview.reserveAmount,
+          },
+        });
+        await tx.deliveryCompanyTransaction.create({
+          data: {
+            deliveryCompanyId: companyId,
+            type: DeliveryCompanyTransactionType.ORDER_PAYMENT,
+            amount: -preview.totalPrice,
+            balanceAfter: Number(updatedCompany.coinBalance),
+            description: 'Order payment at update (searching)',
+          },
+        });
+      }
+
+      return await tx.order.update({
+        where: { id: orderId },
+        data: {
+          pricingPolicyId: preview.pricingPolicyId,
+          pickupAddressId: resolvedPickupAddressId,
+          dropoffAddressId: localPickup ? null : resolvedDropoffAddressId,
+          localPickupOnly: localPickup,
+          description: dto.description,
+          weight: dto.weight,
+          distanceKm: preview.distanceKm,
+          price: preview.totalPrice,
+          customerExtraAmount: preview.customerExtraAmount,
+          nightFee: preview.nightFee,
+          extraWeightFee: preview.extraWeightFee,
+          cancelAfterMinutes: confirmationDelayMinutes,
+          cancelTimerRemainingSeconds: confirmationDelayMinutes * 60,
+          cancelTimerLastResumedAt: new Date(),
+          cancelTimerPausedAt: null,
+        },
+      });
+    });
+    await this.logAudit(companyId, 'ORDER_UPDATED_SEARCHING', 'COMPANY', null, {
+      orderId,
+      total: preview.totalPrice,
+    });
+    return updated;
   }
 
   private async resolvePickupAddressIdForCompanyOrder(
@@ -1223,43 +1479,7 @@ export class DeliveryCompanyService {
               },
       });
       if (nextStatus === OrderStatus.CANCELLED) {
-        const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
-        if (company) {
-          const price = Math.round(Number(order.price || 0) * 100) / 100;
-          const reserve = Math.round(price * 0.5 * 100) / 100;
-          const unlock = Math.min(Number(company.lockedCoins), reserve);
-          const restoreAmount = Math.round((price + unlock) * 100) / 100;
-          const nextBalance = Math.round((Number(company.coinBalance) + restoreAmount) * 100) / 100;
-          const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
-          await tx.deliveryCompany.update({
-            where: { id: company.id },
-            data: { coinBalance: nextBalance, lockedCoins: nextLocked },
-          });
-          await tx.deliveryCompanyTransaction.create({
-            data: {
-              deliveryCompanyId: company.id,
-              orderId: order.id,
-              type: DeliveryCompanyTransactionType.ADMIN_ADJUSTMENT,
-              amount: restoreAmount,
-              balanceAfter: nextBalance,
-              description: `Budget rollback for CANCELLED order ${order.id}`,
-            },
-          });
-          if (order.deliveryCompanyDepartmentId) {
-            const txAny: any = tx as any;
-            if (txAny.deliveryCompanyDepartmentBudgetWallet) {
-              const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
-                where: { departmentId: order.deliveryCompanyDepartmentId },
-              });
-              if (wallet) {
-                await txAny.deliveryCompanyDepartmentBudgetWallet.update({
-                  where: { departmentId: order.deliveryCompanyDepartmentId },
-                  data: { availableCoins: Math.round((Number(wallet.availableCoins) + restoreAmount) * 100) / 100 },
-                });
-              }
-            }
-          }
-        }
+        await rollbackDeliveryCompanyOrderFundsInTx(tx, order, 'CANCELLED');
       }
       await tx.chatRoom.updateMany({
         where: { orderId: order.id, status: 'ACTIVE' as any },
