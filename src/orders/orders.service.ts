@@ -267,7 +267,7 @@ export class OrdersService {
       userId,
       pickupGovernorateId: pickupAddr.delegation.governorateId,
     });
-    return this.mapToResponseDto(order);
+    return this.mapToResponseDto(order, { viewerIsCustomer: true });
   }
 
   async changePaymentMethod(orderId: string, userId: string, dto: ChangePaymentMethodDto): Promise<OrderResponseDto> {
@@ -284,7 +284,7 @@ export class OrdersService {
       if (Number(order.customer.wallet.balance) < Number(order.price)) throw new BadRequestException('Insufficient wallet balance');
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: { paymentType: dto.paymentType }, include: this.orderInclude() });
-    return this.mapToResponseDto(updated);
+    return this.mapToResponseDto(updated, { viewerIsCustomer: true });
   }
 
   async updateCancelAfterMinutes(orderId: string, userId: string, cancelAfterMinutes: number): Promise<OrderResponseDto> {
@@ -318,7 +318,7 @@ export class OrdersService {
       },
       include: this.orderInclude(),
     });
-    return this.mapToResponseDto(updated);
+    return this.mapToResponseDto(updated, { viewerIsCustomer: true });
   }
 
   async getOrderById(orderId: string, userId: string): Promise<OrderResponseDto> {
@@ -328,7 +328,27 @@ export class OrdersService {
     const isDriver = order.driverAssignment?.driver?.userId === userId;
     const isConflictDriver = order.arrivalConflict?.driver?.userId === userId;
     if (!isCustomer && !isDriver && !isConflictDriver) throw new ForbiddenException('No access to this order');
-    const dto = this.mapToResponseDto(order);
+    const dto = this.mapToResponseDto(order, {
+      viewerUserId: userId,
+      viewerIsCustomer: isCustomer,
+    });
+    const driverIdForRejection =
+      order.driverAssignment?.driverId ?? (isConflictDriver ? order.arrivalConflict?.driverId : null);
+    if (driverIdForRejection && (isDriver || isConflictDriver)) {
+      const rej = await this.prisma.orderDriverRejection.findUnique({
+        where: { orderId_driverId: { orderId, driverId: driverIdForRejection } },
+      });
+      dto.myOrderDriverRejection = rej
+        ? {
+            id: rej.id,
+            reason: rej.reason,
+            driverResponse: rej.driverResponse ?? null,
+            driverRespondedAt: rej.driverRespondedAt ?? null,
+          }
+        : null;
+    } else {
+      dto.myOrderDriverRejection = null;
+    }
     if (isCustomer && order.pickupAddress && order.status === OrderStatus.SEARCHING_DRIVER) {
       dto.driverAvailability = await this.computeDriverAvailabilitySummary(
         order.pickupAddress.delegationId,
@@ -343,12 +363,31 @@ export class OrdersService {
     const customer = await this.prisma.customer.findUnique({ where: { userId } });
     if (!customer) throw new NotFoundException('Customer profile not found');
     const orders = await this.prisma.order.findMany({ where: { customerId: customer.id }, include: this.orderInclude(), orderBy: { createdAt: 'desc' } });
-    return orders.map((o: any) => this.mapToResponseDto(o));
+    return orders.map((o: any) => this.mapToResponseDto(o, { viewerIsCustomer: true }));
   }
 
   async getDriverOrders(driverId: string): Promise<OrderResponseDto[]> {
+    const driver = await this.prisma.driver.findUnique({ where: { id: driverId }, select: { userId: true } });
+    const viewerUserId = driver?.userId;
     const orders = await this.prisma.order.findMany({ where: { driverAssignment: { driverId } }, include: this.orderInclude(), orderBy: { createdAt: 'desc' } });
-    return orders.map((o: any) => this.mapToResponseDto(o));
+    if (orders.length === 0) return [];
+    const rejections = await this.prisma.orderDriverRejection.findMany({
+      where: { driverId, orderId: { in: orders.map((o: any) => o.id) } },
+    });
+    const rejByOrder = new Map(rejections.map((r) => [r.orderId, r]));
+    return orders.map((o: any) => {
+      const dto = this.mapToResponseDto(o, viewerUserId ? { viewerUserId } : undefined);
+      const rej = rejByOrder.get(o.id);
+      dto.myOrderDriverRejection = rej
+        ? {
+            id: rej.id,
+            reason: rej.reason,
+            driverResponse: rej.driverResponse ?? null,
+            driverRespondedAt: rej.driverRespondedAt ?? null,
+          }
+        : null;
+      return dto;
+    });
   }
 
   async cancelOrder(orderId: string, userId: string, reason: string): Promise<void> {
@@ -511,20 +550,50 @@ export class OrdersService {
             where: { departmentId: deptId },
           });
           if (wallet) {
-            const nextLocked = Math.max(0, Number(wallet.lockedCoins) - reserve);
+            const unlock = Math.min(Number(wallet.lockedCoins), reserve);
+            const nextLocked = Math.max(0, Number(wallet.lockedCoins) - unlock);
+            const nextAvail = Math.round((Number(wallet.availableCoins) + unlock) * 100) / 100;
             await txAny.deliveryCompanyDepartmentBudgetWallet.update({
               where: { departmentId: deptId },
-              data: { lockedCoins: nextLocked },
+              data: { lockedCoins: nextLocked, availableCoins: nextAvail },
             });
           }
         } else {
           const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
           if (company) {
-            const nextLocked = Math.max(0, Number(company.lockedCoins) - reserve);
+            const unlock = Math.min(Number(company.lockedCoins), reserve);
+            const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
+            const nextBalance = Math.round((Number(company.coinBalance) + unlock) * 100) / 100;
             await tx.deliveryCompany.update({
               where: { id: company.id },
-              data: { lockedCoins: nextLocked },
+              data: { lockedCoins: nextLocked, coinBalance: nextBalance },
             });
+          }
+        }
+        if (order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.paymentType === PaymentType.WALLET && order.pricingPolicy) {
+          const pFee = Number(order.pricingPolicy.platformFee);
+          const driverNet = Math.round((Number(order.price) - pFee) * 100) / 100;
+          if (driverNet !== 0) {
+            const dAcc = await tx.driverAccount.findUnique({ where: { driverId: order.driverAssignment.driverId } });
+            if (dAcc) {
+              const ob = Number(dAcc.balance);
+              const nb = ob + driverNet;
+              await tx.driverAccount.update({
+                where: { id: dAcc.id },
+                data: { balance: nb, ...(nb < 0 && ob >= 0 ? { negativeBalanceSince: new Date() } : {}) },
+              });
+              await tx.driverTransaction.create({
+                data: {
+                  accountId: dAcc.id,
+                  type: DriverTransactionType.ADJUSTMENT,
+                  amount: driverNet,
+                  referenceId: orderId,
+                  referenceType: 'ORDER',
+                  description: `Company wallet order #${orderId.slice(0, 8)} — delivery payout (price − platform fee)`,
+                  balanceAfter: nb,
+                },
+              });
+            }
           }
         }
       }
@@ -573,10 +642,15 @@ export class OrdersService {
       customerUserId: order.customer.userId,
       driverUserId: order.driverAssignment.driver.userId,
     });
-    return this.mapToResponseDto(result as any);
+    return this.mapToResponseDto(result as any, { viewerUserId: order.driverAssignment.driver.userId });
   }
 
-  async updateOrderStatus(orderId: string, driverId: string, newStatus: OrderStatus): Promise<OrderResponseDto> {
+  async updateOrderStatus(
+    orderId: string,
+    driverId: string,
+    newStatus: OrderStatus,
+    opts?: { customerCallCountBeforeReturn?: number; returnEvidenceImageUrl?: string },
+  ): Promise<OrderResponseDto> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
@@ -603,50 +677,16 @@ export class OrdersService {
       if (!order.driverAssignment.image1Proof) {
         throw new BadRequestException('You must upload at least the first proof image before marking the order as returned');
       }
-      if (order.deliveryCompanyId && order.sourceType === OrderSourceType.DELIVERY_COMPANY) {
-        await this.prisma.$transaction(async (tx) => {
-          const surcharge = Math.round(Number(order.price) * 0.5 * 100) / 100;
-          const deptId = order.deliveryCompanyDepartmentId;
-          if (deptId) {
-            const txAny = tx as any;
-            const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
-              where: { departmentId: deptId },
-            });
-            if (!wallet) return;
-            const consumeFromLocked = Math.min(Number(wallet.lockedCoins), surcharge);
-            const remainingCharge = surcharge - consumeFromLocked;
-            const nextLocked = Number(wallet.lockedCoins) - consumeFromLocked;
-            const nextAvailable = Number(wallet.availableCoins) - remainingCharge;
-            await txAny.deliveryCompanyDepartmentBudgetWallet.update({
-              where: { departmentId: deptId },
-              data: {
-                lockedCoins: nextLocked,
-                availableCoins: Math.round(nextAvailable * 100) / 100,
-              },
-            });
-          } else {
-            const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
-            if (!company) return;
-            const consumeFromLocked = Math.min(Number(company.lockedCoins), surcharge);
-            const remainingCharge = surcharge - consumeFromLocked;
-            const nextLocked = Number(company.lockedCoins) - consumeFromLocked;
-            const nextBalance = Number(company.coinBalance) - remainingCharge;
-            await tx.deliveryCompany.update({
-              where: { id: company.id },
-              data: { coinBalance: nextBalance, lockedCoins: nextLocked },
-            });
-            await tx.deliveryCompanyTransaction.create({
-              data: {
-                deliveryCompanyId: company.id,
-                orderId: order.id,
-                type: DeliveryCompanyTransactionType.RETURN_SURCHARGE,
-                amount: -surcharge,
-                balanceAfter: nextBalance,
-                description: `Return surcharge (50%) for order ${order.id}`,
-              },
-            });
-          }
-        });
+      /** Return surcharge for delivery-company orders is applied at RETURN_DEPOSIT (order price + 50% return fees). */
+      const assignData: any = {};
+      if (opts?.customerCallCountBeforeReturn !== undefined && opts.customerCallCountBeforeReturn !== null) {
+        assignData.customerCallCountBeforeReturn = opts.customerCallCountBeforeReturn;
+      }
+      if (opts?.returnEvidenceImageUrl !== undefined && String(opts.returnEvidenceImageUrl || '').trim()) {
+        assignData.returnEvidenceImageUrl = String(opts.returnEvidenceImageUrl).trim();
+      }
+      if (Object.keys(assignData).length > 0) {
+        await this.prisma.driverAssignment.update({ where: { orderId }, data: assignData });
       }
     }
     if (newStatus === OrderStatus.DRIVER_ARRIVED) await this.prisma.driverAssignment.update({ where: { orderId }, data: { arrivedAt: new Date() } });
@@ -654,47 +694,43 @@ export class OrdersService {
     else if (newStatus === OrderStatus.RETURN_DEPOSIT && order.deliveryCompanyId) {
       await this.prisma.$transaction(async (tx) => {
         const price = Number(order.price);
+        const reserve = Math.round(price * 0.5 * 100) / 100;
         const pFee = order.pricingPolicy ? Number(order.pricingPolicy.platformFee) : 0;
         const gross = Math.round(price * 1.5 * 100) / 100;
         const net = Math.round((gross - pFee) * 100) / 100;
 
         const deptId = order.deliveryCompanyDepartmentId;
-        if (deptId && net > 0) {
+        /**
+         * Order placement already encumbered 1.5× the order price (`available -= price`, `locked += reserve`).
+         * Do not debit `gross` again — only release the placement reserve from locked. The `price` portion
+         * was already taken from available at order creation.
+         */
+        if (deptId && gross > 0) {
           const txAny = tx as any;
           const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
             where: { departmentId: deptId },
           });
           if (wallet) {
-            let need = net;
             let locked = Number(wallet.lockedCoins);
-            let avail = Number(wallet.availableCoins);
-            const fromLocked = Math.min(locked, need);
-            locked -= fromLocked;
-            need -= fromLocked;
-            avail -= need;
+            const takeLocked = Math.min(locked, reserve);
+            locked -= takeLocked;
             await txAny.deliveryCompanyDepartmentBudgetWallet.update({
               where: { departmentId: deptId },
               data: {
                 lockedCoins: Math.max(0, Math.round(locked * 100) / 100),
-                availableCoins: Math.max(0, Math.round(avail * 100) / 100),
               },
             });
           }
-        } else if (net > 0) {
+        } else if (gross > 0) {
           const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
           if (company) {
-            let need = net;
             let locked = Number(company.lockedCoins);
-            let balance = Number(company.coinBalance);
-            const fromLocked = Math.min(locked, need);
-            locked -= fromLocked;
-            need -= fromLocked;
-            balance -= need;
+            const takeLocked = Math.min(locked, reserve);
+            locked -= takeLocked;
             await tx.deliveryCompany.update({
               where: { id: company.id },
               data: {
                 lockedCoins: Math.max(0, Math.round(locked * 100) / 100),
-                coinBalance: Math.max(0, Math.round(balance * 100) / 100),
               },
             });
           }
@@ -710,23 +746,38 @@ export class OrdersService {
           const acc = await tx.driverAccount.findUnique({ where: { driverId: drvId } });
           if (acc && net !== 0) {
             const oldB = Number(acc.balance);
-            const newB = oldB + net;
-            await tx.driverAccount.update({
-              where: { id: acc.id },
-              data: {
-                balance: newB,
-                ...(newB < 0 && oldB >= 0 ? { negativeBalanceSince: new Date() } : {}),
-              },
-            });
+            let bal = oldB;
+            bal = Math.round((bal + gross) * 100) / 100;
             await tx.driverTransaction.create({
               data: {
                 accountId: acc.id,
                 type: DriverTransactionType.ADJUSTMENT,
-                amount: net,
+                amount: gross,
                 referenceId: orderId,
                 referenceType: 'ORDER',
-                description: `Return-deposit payout (price + 50% − platform fee) order #${orderId.slice(0, 8)}`,
-                balanceAfter: newB,
+                description: `Return-deposit payout (price + 50%) order #${orderId.slice(0, 8)}`,
+                balanceAfter: bal,
+              },
+            });
+            if (pFee !== 0) {
+              bal = Math.round((bal - pFee) * 100) / 100;
+              await tx.driverTransaction.create({
+                data: {
+                  accountId: acc.id,
+                  type: DriverTransactionType.PLATFORM_FEE,
+                  amount: -pFee,
+                  referenceId: orderId,
+                  referenceType: 'ORDER',
+                  description: `Platform fee on return-deposit order #${orderId.slice(0, 8)}`,
+                  balanceAfter: bal,
+                },
+              });
+            }
+            await tx.driverAccount.update({
+              where: { id: acc.id },
+              data: {
+                balance: bal,
+                ...(bal < 0 && oldB >= 0 ? { negativeBalanceSince: new Date() } : {}),
               },
             });
           }
@@ -764,7 +815,8 @@ export class OrdersService {
       this.eventEmitter.emit(eventName, { orderId, customerUserId, driverUserId });
     }
 
-    return this.mapToResponseDto(updated as any);
+    const viewerUserId = (updated as any).driverAssignment?.driver?.user?.id as string | undefined;
+    return this.mapToResponseDto(updated as any, viewerUserId ? { viewerUserId } : undefined);
   }
 
   async uploadProofs(orderId: string, driverId: string, image1Proof?: string, image2Proof?: string) {
@@ -830,12 +882,17 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({
       where: { trackingToken: token },
       include: {
+        pickupAddress: { include: { delegation: { include: { governorate: true } } } },
         dropoffAddress: { include: { delegation: { include: { governorate: true } } } },
       },
     });
     if (!order) throw new NotFoundException('Invalid tracking token');
 
-    const trackable: OrderStatus[] = [OrderStatus.PICKED_UP, OrderStatus.DELIVERING];
+    const trackable: OrderStatus[] = [
+      OrderStatus.DRIVER_ARRIVED,
+      OrderStatus.PICKED_UP,
+      OrderStatus.DELIVERING,
+    ];
     const isExpired = order.trackingExpiresAt && order.trackingExpiresAt < new Date();
 
     if (!trackable.includes(order.status) && !isExpired) {
@@ -857,8 +914,19 @@ export class OrdersService {
         longitude: driverLocation.longitude,
         timestamp: driverLocation.timestamp,
       } : null,
+      pickupAddress: order.pickupAddress
+        ? {
+            street: order.pickupAddress.street,
+            latitude: order.pickupAddress.latitude,
+            longitude: order.pickupAddress.longitude,
+            delegation: order.pickupAddress.delegation?.nameDelegation,
+            governorate: order.pickupAddress.delegation?.governorate?.nameGovernorate,
+          }
+        : null,
       dropoffAddress: order.dropoffAddress ? {
         street: order.dropoffAddress.street,
+        latitude: order.dropoffAddress.latitude,
+        longitude: order.dropoffAddress.longitude,
         delegation: order.dropoffAddress.delegation?.nameDelegation,
         governorate: order.dropoffAddress.delegation?.governorate?.nameGovernorate,
       } : null,
@@ -1152,6 +1220,7 @@ export class OrdersService {
       DRIVER_ARRIVED: OrderStatus.DRIVER_ASSIGNED,
       PICKED_UP: OrderStatus.DRIVER_ARRIVED,
       DELIVERING: OrderStatus.PICKED_UP,
+      RETURNED: OrderStatus.DELIVERING,
     };
     const prevStatus = revertMap[order.status];
     if (!prevStatus) throw new BadRequestException(`Cannot revert from ${order.status}`);
@@ -1188,7 +1257,8 @@ export class OrdersService {
       }
     }
 
-    return this.mapToResponseDto(updated as any);
+    const viewerUserId = (updated as any).driverAssignment?.driver?.user?.id as string | undefined;
+    return this.mapToResponseDto(updated as any, viewerUserId ? { viewerUserId } : undefined);
   }
 
   /** Get driver reviews for an order (customer can see before approving) */
@@ -1235,11 +1305,19 @@ export class OrdersService {
     }
     if (!order.driverAssignment) throw new BadRequestException('No driver assigned');
 
+    const expiryMinutes = await this.getTrackingExpiryMinutes();
+    const trackingPatch: Record<string, unknown> = {};
+    if (!order.trackingToken) {
+      trackingPatch.trackingToken = this.generateTrackingToken();
+      trackingPatch.trackingExpiresAt = new Date(Date.now() + Math.max(60, expiryMinutes) * 60 * 1000);
+    }
+
     const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         status: OrderStatus.DRIVER_ASSIGNED,
         ...this.buildPausedTimerUpdate(order),
+        ...trackingPatch,
       },
       include: this.orderInclude(),
     });
@@ -1263,7 +1341,7 @@ export class OrdersService {
       }
     }
 
-    return this.mapToResponseDto(updated as any);
+    return this.mapToResponseDto(updated as any, { viewerIsCustomer: true });
   }
 
   /** Customer rejects the assigned driver — order goes back to SEARCHING_DRIVER */
@@ -1441,6 +1519,31 @@ export class OrdersService {
     return { message: 'Feedback saved' };
   }
 
+  /** Driver responds to a company/customer removal reason (per driver + order). */
+  async respondToOrderDriverRejection(driverId: string, orderId: string, response: string) {
+    const text = response.trim();
+    if (text.length < 5) {
+      throw new BadRequestException('Please write at least 5 characters.');
+    }
+    const rej = await this.prisma.orderDriverRejection.findUnique({
+      where: { orderId_driverId: { orderId, driverId } },
+    });
+    if (!rej) throw new NotFoundException('No rejection record for you on this order');
+    const updated = await this.prisma.orderDriverRejection.update({
+      where: { id: rej.id },
+      data: { driverResponse: text, driverRespondedAt: new Date() },
+    });
+    return {
+      message: 'Response saved',
+      rejection: {
+        id: updated.id,
+        reason: updated.reason,
+        driverResponse: updated.driverResponse,
+        driverRespondedAt: updated.driverRespondedAt,
+      },
+    };
+  }
+
   /**
    * Feedback after driver marks RETURN_DEPOSIT.
    * Currently attached to customer identity; for delivery-company role this should be moved to company auth guard.
@@ -1453,21 +1556,26 @@ export class OrdersService {
 
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: true, returnDepositFeedback: true },
+      include: { customer: true, driverAssignment: { select: { driverId: true } } },
     });
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
     if (order.status !== OrderStatus.RETURN_DEPOSIT) {
       throw new BadRequestException('Feedback is allowed only after return deposit.');
     }
+    const drvId = order.driverAssignment?.driverId;
+    if (!drvId) throw new BadRequestException('No driver assigned; feedback is stored per driver.');
 
-    const saved = order.returnDepositFeedback
+    const existing = await this.prisma.orderReturnDepositFeedback.findFirst({
+      where: { orderId, driverId: drvId },
+    });
+    const saved = existing
       ? await this.prisma.orderReturnDepositFeedback.update({
-          where: { orderId },
+          where: { id: existing.id },
           data: { feedback: text, conditionIssue, reportedByUserId: userId },
         })
       : await this.prisma.orderReturnDepositFeedback.create({
-          data: { orderId, feedback: text, conditionIssue, reportedByUserId: userId },
+          data: { orderId, driverId: drvId, feedback: text, conditionIssue, reportedByUserId: userId },
         });
 
     return { message: 'Return deposit feedback saved', feedback: saved };
@@ -1485,7 +1593,7 @@ export class OrdersService {
     const orders = await this.prisma.order.findMany({
       where: status ? { status } : undefined, include: this.orderInclude(), orderBy: { createdAt: 'desc' },
     });
-    return orders.map((o: any) => this.mapToResponseDto(o));
+    return orders.map((o: any) => this.mapToResponseDto(o, undefined));
   }
 
   async getOrderForAdmin(orderId: string) {
@@ -1513,7 +1621,7 @@ export class OrdersService {
     }) as any;
     if (!order) throw new NotFoundException('Order not found');
 
-    const base = this.mapToResponseDto(order);
+    const base = this.mapToResponseDto(order, undefined);
     return {
       ...base,
       chatRoomsHistory: (order.chatRooms || []).map((room: any) => ({
@@ -1638,7 +1746,7 @@ export class OrdersService {
       dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
       driverAssignment: { include: { driver: { include: { user: { select: { id: true, firstName: true, secondName: true, phone: true, image: true } }, performanceMetrics: { select: { avgRating: true, completedOrders: true, totalOrders: true, cancelledOrders: true, completionRate: true, avgDeliveryTimeMinutes: true } } } } } },
       arrivalConflict: { include: { driver: { include: { user: { select: { id: true } } } } } },
-      returnDepositFeedback: true,
+      returnDepositFeedbacks: true,
       pricingPolicy: true,
       chatRooms: { orderBy: { createdAt: 'desc' } },
       dispute: true,
@@ -1646,7 +1754,48 @@ export class OrdersService {
     } as const;
   }
 
-  mapToResponseDto(order: any): OrderResponseDto {
+  /** Only the customer, the conflict driver, or unrestricted (admin) responses should see arrival conflict details. */
+  private serializeArrivalConflictForViewer(
+    order: any,
+    opts?: { viewerUserId?: string; viewerIsCustomer?: boolean },
+  ): OrderResponseDto['arrivalConflict'] {
+    const c = order.arrivalConflict;
+    if (!c) return null;
+    if (opts?.viewerIsCustomer) {
+      return {
+        id: c.id,
+        status: c.status,
+        customerReason: c.customerReason,
+        driverFeedback: c.driverFeedback ?? null,
+        createdAt: c.createdAt,
+      };
+    }
+    if (opts === undefined) {
+      return {
+        id: c.id,
+        status: c.status,
+        customerReason: c.customerReason,
+        driverFeedback: c.driverFeedback ?? null,
+        createdAt: c.createdAt,
+      };
+    }
+    const conflictDriverUserId = c.driver?.user?.id as string | undefined;
+    if (opts.viewerUserId && conflictDriverUserId && opts.viewerUserId === conflictDriverUserId) {
+      return {
+        id: c.id,
+        status: c.status,
+        customerReason: c.customerReason,
+        driverFeedback: c.driverFeedback ?? null,
+        createdAt: c.createdAt,
+      };
+    }
+    return null;
+  }
+
+  mapToResponseDto(
+    order: any,
+    opts?: { viewerUserId?: string; viewerIsCustomer?: boolean },
+  ): OrderResponseDto {
     const cancelRemainingSeconds = this.computeCancelRemainingSeconds(order);
     const latestChatRoom = (order.chatRooms || [])[0] || null;
     return {
@@ -1691,6 +1840,8 @@ export class OrdersService {
         pickedUpAt: order.driverAssignment.pickedUpAt, deliveredAt: order.driverAssignment.deliveredAt,
         image1Proof: order.driverAssignment.image1Proof, image2Proof: order.driverAssignment.image2Proof,
         cancelledBy: order.driverAssignment.cancelledBy,
+        customerCallCountBeforeReturn: order.driverAssignment.customerCallCountBeforeReturn ?? null,
+        returnEvidenceImageUrl: order.driverAssignment.returnEvidenceImageUrl ?? null,
         driver: order.driverAssignment.driver ? {
           userId: order.driverAssignment.driver.userId,
           user: { firstName: order.driverAssignment.driver.user.firstName, secondName: order.driverAssignment.driver.user.secondName,
@@ -1712,24 +1863,22 @@ export class OrdersService {
       })),
       dispute: order.dispute ? { id: order.dispute.id, status: order.dispute.status, reason: order.dispute.reason, resolution: order.dispute.resolution || null } : null,
       rating: order.rating ? { id: order.rating.id, score: order.rating.score, comment: order.rating.comment, createdAt: order.rating.createdAt } : null,
-      arrivalConflict: order.arrivalConflict
-        ? {
-            id: order.arrivalConflict.id,
-            status: order.arrivalConflict.status,
-            customerReason: order.arrivalConflict.customerReason,
-            driverFeedback: order.arrivalConflict.driverFeedback ?? null,
-            createdAt: order.arrivalConflict.createdAt,
-          }
-        : null,
-      returnDepositFeedback: order.returnDepositFeedback
-        ? {
-            id: order.returnDepositFeedback.id,
-            reportedByUserId: order.returnDepositFeedback.reportedByUserId,
-            conditionIssue: order.returnDepositFeedback.conditionIssue,
-            feedback: order.returnDepositFeedback.feedback,
-            createdAt: order.returnDepositFeedback.createdAt,
-          }
-        : null,
+      arrivalConflict: this.serializeArrivalConflictForViewer(order, opts),
+      returnDepositFeedback: (() => {
+        const drvId = order.driverAssignment?.driverId;
+        const list = order.returnDepositFeedbacks || [];
+        const row = drvId ? list.find((f: any) => f.driverId === drvId) : list[0];
+        return row
+          ? {
+              id: row.id,
+              driverId: row.driverId ?? null,
+              reportedByUserId: row.reportedByUserId,
+              conditionIssue: row.conditionIssue,
+              feedback: row.feedback,
+              createdAt: row.createdAt,
+            }
+          : null;
+      })(),
     };
   }
 

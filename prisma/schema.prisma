@@ -518,6 +518,7 @@ model Driver {
   orderRejections          OrderDriverRejection[]
   urgentNotifyTargets      OrderUrgentNotifyTarget[]
   arrivalConflicts         OrderDriverArrivalConflict[]
+  returnDepositFeedbacks   OrderReturnDepositFeedback[]
 
   @@map("drivers")
 }
@@ -910,7 +911,7 @@ model Order {
   driverRejections    OrderDriverRejection[]
   urgentNotifyTargets OrderUrgentNotifyTarget[]
   arrivalConflict     OrderDriverArrivalConflict?
-  returnDepositFeedback OrderReturnDepositFeedback?
+  returnDepositFeedbacks OrderReturnDepositFeedback[]
   deliveryCompanyTransactions DeliveryCompanyTransaction[]
 
   @@index([customerId, status])
@@ -1209,15 +1210,18 @@ model DeliveryCompanyIdempotencyKey {
 }
 
 model OrderReturnDepositFeedback {
-  id             String   @id @default(uuid())
-  orderId        String   @unique @map("order_id")
-  reportedByUserId String @map("reported_by_user_id")
-  conditionIssue Boolean  @default(false) @map("condition_issue")
-  feedback       String   @map("feedback")
-  createdAt      DateTime @default(now()) @map("created_at")
+  id               String   @id @default(uuid())
+  orderId          String   @map("order_id")
+  driverId         String?  @map("driver_id")
+  reportedByUserId String   @map("reported_by_user_id")
+  conditionIssue   Boolean  @default(false) @map("condition_issue")
+  feedback         String   @map("feedback")
+  createdAt        DateTime @default(now()) @map("created_at")
 
-  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order  Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver Driver? @relation(fields: [driverId], references: [id], onDelete: Cascade)
 
+  @@index([orderId, driverId])
   @@index([reportedByUserId, createdAt])
   @@map("order_return_deposit_feedbacks")
 }
@@ -1285,6 +1289,9 @@ model DriverAssignment {
   cancelledBy       String?   @map("cancelled_by") // userId who cancelled
   cancellationReason String?  @map("cancellation_reason")
   notificationSentAt DateTime? @map("notification_sent_at")
+  /// How many times the driver called the customer before marking returned (optional).
+  customerCallCountBeforeReturn Int?     @map("customer_call_count_before_return")
+  returnEvidenceImageUrl        String?  @map("return_evidence_image_url")
 
   // Relations
   order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -1697,11 +1704,13 @@ model ActionLog {
 // ============================================
 
 model OrderDriverRejection {
-  id        String   @id @default(uuid())
-  orderId   String   @map("order_id")
-  driverId  String   @map("driver_id")
-  reason    String?
-  createdAt DateTime @default(now()) @map("created_at")
+  id                String    @id @default(uuid())
+  orderId           String    @map("order_id")
+  driverId          String    @map("driver_id")
+  reason            String?
+  driverResponse    String?   @map("driver_response")
+  driverRespondedAt DateTime? @map("driver_responded_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   driver Driver @relation(fields: [driverId], references: [id])

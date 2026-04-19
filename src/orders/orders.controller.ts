@@ -239,7 +239,10 @@ export class DriverOrdersController {
   @Patch(':id/status')
   @UseGuards(UserActiveGuard)
   async updateStatus(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: UpdateOrderStatusDto) {
-    return this.ordersService.updateOrderStatus(orderId, user.profileId, dto.status);
+    return this.ordersService.updateOrderStatus(orderId, user.profileId, dto.status, {
+      customerCallCountBeforeReturn: dto.customerCallCountBeforeReturn,
+      returnEvidenceImageUrl: dto.returnEvidenceImageUrl,
+    });
   }
 
   @Post(':id/revert-status')
@@ -251,6 +254,15 @@ export class DriverOrdersController {
   @Post(':id/cancel-assignment')
   async cancelAssignment(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: CancelOrderDto) {
     return this.driverAssignmentService.cancelAssignment(orderId, user.id, dto.reason);
+  }
+
+  @Post(':id/order-driver-rejection-response')
+  async respondToOrderDriverRejection(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body() body: { response?: string },
+  ) {
+    return this.ordersService.respondToOrderDriverRejection(user.profileId, orderId, body?.response ?? '');
   }
 
   @Patch(':id/proofs')

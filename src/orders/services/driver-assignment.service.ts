@@ -530,6 +530,8 @@ export class DriverAssignmentService {
       rejectionId: r.id,
       rejectedAt: r.createdAt,
       reason: r.reason,
+      driverResponse: r.driverResponse ?? null,
+      driverRespondedAt: r.driverRespondedAt ?? null,
       order: this.mapOrderToResponse(r.order),
     }));
   }

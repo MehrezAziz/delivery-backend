@@ -54,7 +54,7 @@ const LIST_COMPANY_ORDERS_INCLUDE = {
     },
   },
   deliveryCompanyDepartment: { select: { id: true, label: true } },
-  returnDepositFeedback: true,
+  returnDepositFeedbacks: true,
   createdByDepartmentAccount: {
     select: {
       id: true,
@@ -272,11 +272,17 @@ export class DeliveryCompanyService {
         sourceType: OrderSourceType.DELIVERY_COMPANY,
         ...(departmentId ? { deliveryCompanyDepartmentId: departmentId } : {}),
       },
-      include: { returnDepositFeedback: true },
+      include: {
+        driverAssignment: { select: { driverId: true } },
+      },
     });
     if (!order) throw new NotFoundException('Order not found for this company');
     if (order.status !== OrderStatus.RETURN_DEPOSIT && order.status !== OrderStatus.RETURNED) {
       throw new BadRequestException('Feedback is allowed only during return flow (returned or return deposit).');
+    }
+    const driverId = order.driverAssignment?.driverId;
+    if (!driverId) {
+      throw new BadRequestException('No driver on this order; feedback is tied to the assigned driver.');
     }
 
     const dbAny: any = this.prisma as any;
@@ -329,13 +335,13 @@ export class DeliveryCompanyService {
           throw e;
         }
 
-        const existingFeedback = await txAny.orderReturnDepositFeedback.findUnique({
-          where: { orderId },
+        const existingFeedback = await txAny.orderReturnDepositFeedback.findFirst({
+          where: { orderId, driverId },
         });
 
         const saved = existingFeedback
           ? await txAny.orderReturnDepositFeedback.update({
-              where: { orderId },
+              where: { id: existingFeedback.id },
               data: {
                 feedback: text,
                 conditionIssue,
@@ -345,6 +351,7 @@ export class DeliveryCompanyService {
           : await txAny.orderReturnDepositFeedback.create({
               data: {
                 orderId,
+                driverId,
                 feedback: text,
                 conditionIssue,
                 reportedByUserId: order.customerId,
@@ -360,10 +367,10 @@ export class DeliveryCompanyService {
       }
 
       // Non-idempotent path (for backwards compatibility)
-      const existingFeedback = await txAny.orderReturnDepositFeedback.findUnique({ where: { orderId } });
+      const existingFeedback = await txAny.orderReturnDepositFeedback.findFirst({ where: { orderId, driverId } });
       const saved = existingFeedback
         ? await txAny.orderReturnDepositFeedback.update({
-            where: { orderId },
+            where: { id: existingFeedback.id },
             data: {
               feedback: text,
               conditionIssue,
@@ -373,6 +380,7 @@ export class DeliveryCompanyService {
         : await txAny.orderReturnDepositFeedback.create({
             data: {
               orderId,
+              driverId,
               feedback: text,
               conditionIssue,
               reportedByUserId: order.customerId,
@@ -408,18 +416,62 @@ export class DeliveryCompanyService {
 
   async getWalletTransactions(companyId: string, departmentId?: string) {
     if (departmentId) {
-      const rows = await (this.prisma as any).deliveryCompanyDepartmentBudgetRequest.findMany({
-        where: { deliveryCompanyId: companyId, departmentId },
-        orderBy: { createdAt: 'desc' },
-        take: 200,
-      });
-      return rows.map((r: any) => ({
+      const [reqRows, orderRows] = await Promise.all([
+        (this.prisma as any).deliveryCompanyDepartmentBudgetRequest.findMany({
+          where: { deliveryCompanyId: companyId, departmentId },
+          orderBy: { createdAt: 'desc' },
+          take: 200,
+        }),
+        this.prisma.order.findMany({
+          where: {
+            deliveryCompanyId: companyId,
+            deliveryCompanyDepartmentId: departmentId,
+            sourceType: OrderSourceType.DELIVERY_COMPANY,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+          select: { id: true, status: true, price: true, createdAt: true },
+        }),
+      ]);
+      const budgetLines = reqRows.map((r: any) => ({
         id: r.id,
+        kind: 'BUDGET' as const,
         type: `BUDGET_REQUEST_${r.status}`,
+        orderStatus: null as string | null,
         amount: r.amountCoins,
         description: r.decisionNote ?? null,
         createdAt: r.createdAt,
       }));
+      const orderLines = orderRows.map((o) => ({
+        id: `order-${o.id}`,
+        kind: 'ORDER' as const,
+        type: 'ORDER_ACTIVITY',
+        orderStatus: o.status,
+        amount: o.price,
+        description: `Order ${String(o.id).slice(0, 8)}… — ${String(o.status).replace(/_/g, ' ')}`,
+        createdAt: o.createdAt,
+      }));
+      const recallRows = await this.prisma.deliveryCompanyTransaction.findMany({
+        where: {
+          deliveryCompanyId: companyId,
+          type: DeliveryCompanyTransactionType.DEPARTMENT_BUDGET_RETURN,
+          OR: [{ description: { contains: `[dept:${departmentId}]` } }, { description: { contains: departmentId } }],
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      });
+      const recallLines = recallRows.map((t) => ({
+        id: t.id,
+        kind: 'BUDGET' as const,
+        type: 'MAIN_COMPANY_BUDGET_WITHDRAWAL',
+        orderStatus: null as string | null,
+        amount: t.amount,
+        description: t.description,
+        createdAt: t.createdAt,
+      }));
+      return [...orderLines, ...budgetLines, ...recallLines].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
     }
     return this.prisma.deliveryCompanyTransaction.findMany({
       where: { deliveryCompanyId: companyId },

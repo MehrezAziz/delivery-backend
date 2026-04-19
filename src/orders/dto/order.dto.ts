@@ -100,6 +100,17 @@ export class UpdateOrderStatusDto {
   @IsEnum(OrderStatus)
   @IsNotEmpty()
   status: OrderStatus;
+
+  /** When moving to RETURNED: optional call count and evidence URL. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  customerCallCountBeforeReturn?: number;
+
+  @IsOptional()
+  @IsString()
+  returnEvidenceImageUrl?: string;
 }
 
 export class UploadProofDto {
@@ -219,6 +230,13 @@ export class OrderResponseDto {
     conditionIssue: boolean;
     feedback: string;
     createdAt: Date;
+  } | null;
+  /** Set for drivers: rejection row for this driver on this order (company/customer removal), with optional response. */
+  myOrderDriverRejection?: {
+    id: string;
+    reason: string | null;
+    driverResponse: string | null;
+    driverRespondedAt: Date | null;
   } | null;
 }
 
