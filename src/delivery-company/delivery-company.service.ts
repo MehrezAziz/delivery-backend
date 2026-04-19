@@ -31,7 +31,21 @@ import { rollbackDeliveryCompanyOrderFundsInTx } from './company-order-budget.ut
 const LIST_COMPANY_ORDERS_INCLUDE = {
   pickupAddress: { include: { delegation: { include: { governorate: true } } } },
   dropoffAddress: { include: { delegation: { include: { governorate: true } } } },
-  driverAssignment: true,
+  driverAssignment: {
+    include: {
+      driver: {
+        include: {
+          user: { select: { id: true, firstName: true, secondName: true, phone: true } },
+          performanceMetrics: true,
+          ratingsReceived: {
+            orderBy: { createdAt: 'desc' },
+            take: 12,
+            select: { score: true, comment: true, createdAt: true },
+          },
+        },
+      },
+    },
+  },
   deliveryCompany: { select: { id: true, name: true, legalName: true } },
   customer: {
     select: {
