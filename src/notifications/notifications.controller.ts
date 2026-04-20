@@ -70,6 +70,16 @@ export class UserNotificationsController {
     return { message: 'Thread marked as read' };
   }
 
+  /** Unread counts for many `groupKey`s (e.g. chat badges on order lists). */
+  @Post('thread/unread-bulk')
+  async bulkThreadUnread(
+    @Request() req,
+    @Body() body: { groupKeys?: string[] },
+  ) {
+    const keys = Array.isArray(body?.groupKeys) ? body.groupKeys : [];
+    return this.notificationsService.getBulkThreadUnreadCounts(req.user.id, 'USER', keys);
+  }
+
   @Patch(':id/read')
   async markAsRead(@Request() req, @Param('id') id: string) {
     await this.notificationsService.markAsRead(id, req.user.id);

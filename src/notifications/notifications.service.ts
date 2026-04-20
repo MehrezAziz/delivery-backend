@@ -428,6 +428,32 @@ export class NotificationsService {
     };
   }
 
+  /** Unread counts per inbox thread (e.g. `chat:<orderId>`) for mobile badges — avoids preview truncation. */
+  async getBulkThreadUnreadCounts(userId: string, userType: string, groupKeys: string[]) {
+    const keys = [...new Set(groupKeys.map((k) => k.trim()).filter(Boolean))];
+    if (keys.length === 0) {
+      return { counts: {} as Record<string, number> };
+    }
+
+    const rows = await this.prisma.notification.groupBy({
+      by: ['groupKey'],
+      where: {
+        userId,
+        userType,
+        readAt: null,
+        groupKey: { in: keys },
+      },
+      _count: { _all: true },
+    });
+
+    const counts: Record<string, number> = {};
+    for (const k of keys) counts[k] = 0;
+    for (const r of rows) {
+      if (r.groupKey) counts[r.groupKey] = r._count._all;
+    }
+    return { counts };
+  }
+
   async getUnreadCount(userId: string, userType: string) {
     return this.prisma.notification.count({
       where: { userId, userType, readAt: null },

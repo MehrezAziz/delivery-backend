@@ -210,7 +210,7 @@ export class DeliveryCompanyController {
     const companyId = req.deliveryCompany.id;
     const departmentIdHeader = this.departmentId(req);
     const resolvedDepartmentId =
-      actorRole === 'MAIN_ADMIN' ? departmentIdHeader || dto.pickupAddressId : departmentIdHeader;
+      actorRole === 'MAIN_ADMIN' ? dto.pickupAddressId : departmentIdHeader;
     await this.requireDepartmentContext(companyId, actorRole, resolvedDepartmentId);
     await this.service.ensureDepartmentBelongsToCompany(companyId, resolvedDepartmentId);
     return this.service.previewOrder(companyId, dto, resolvedDepartmentId);
@@ -223,7 +223,7 @@ export class DeliveryCompanyController {
     const companyId = req.deliveryCompany.id;
     const departmentIdHeader = this.departmentId(req);
     const resolvedDepartmentId =
-      actorRole === 'MAIN_ADMIN' ? departmentIdHeader || dto.pickupAddressId : departmentIdHeader;
+      actorRole === 'MAIN_ADMIN' ? dto.pickupAddressId : departmentIdHeader;
     await this.requireDepartmentContext(companyId, actorRole, resolvedDepartmentId);
     await this.service.ensureDepartmentBelongsToCompany(companyId, resolvedDepartmentId);
 
@@ -256,7 +256,7 @@ export class DeliveryCompanyController {
     const companyId = req.deliveryCompany.id;
     const departmentIdHeader = this.departmentId(req);
     const resolvedDepartmentId =
-      actorRole === 'MAIN_ADMIN' ? departmentIdHeader || dto.pickupAddressId : departmentIdHeader;
+      actorRole === 'MAIN_ADMIN' ? dto.pickupAddressId : departmentIdHeader;
     await this.requireDepartmentContext(companyId, actorRole, resolvedDepartmentId);
     await this.service.ensureDepartmentBelongsToCompany(companyId, resolvedDepartmentId);
     const deptIdForScope = actorRole === 'MAIN_ADMIN' ? undefined : resolvedDepartmentId;

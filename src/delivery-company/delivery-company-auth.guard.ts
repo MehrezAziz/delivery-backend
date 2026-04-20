@@ -32,7 +32,11 @@ export class DeliveryCompanyApiKeyGuard implements CanActivate {
       },
       include: { deliveryCompany: true },
     });
-    if (!apiKey || apiKey.deliveryCompany.status !== 'ACTIVE') {
+    if (!apiKey) {
+      throw new UnauthorizedException('API key rejected');
+    }
+    const st = apiKey.deliveryCompany.status;
+    if (st === 'SUSPENDED') {
       throw new UnauthorizedException('API key rejected');
     }
 

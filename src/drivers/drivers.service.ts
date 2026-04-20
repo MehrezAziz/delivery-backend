@@ -655,6 +655,8 @@ export class DriversService {
         description: t.description,
         balanceAfter: Number(t.balanceAfter),
         createdAt: t.createdAt,
+        referenceId: t.referenceId ?? null,
+        referenceType: t.referenceType ?? null,
       })),
       total,
       page,

@@ -1,4 +1,5 @@
 import { DeliveryCompanyTransactionType, OrderSourceType } from '@prisma/client';
+import { ceilCoins3 } from './money.util';
 
 /**
  * Restores funds locked for a delivery-company order (cancel / terminal failure).
@@ -18,9 +19,9 @@ export async function rollbackDeliveryCompanyOrderFundsInTx(
 ): Promise<void> {
   if (!order.deliveryCompanyId || order.sourceType !== OrderSourceType.DELIVERY_COMPANY) return;
 
-  const price = Math.round(Number(order.price || 0) * 100) / 100;
-  const reserve = Math.round(price * 0.5 * 100) / 100;
-  const encumber = Math.round((price + reserve) * 100) / 100;
+  const price = ceilCoins3(Number(order.price || 0));
+  const reserve = ceilCoins3(price * 0.5);
+  const encumber = ceilCoins3(price + reserve);
   const deptId = order.deliveryCompanyDepartmentId;
 
   if (deptId) {
@@ -31,7 +32,7 @@ export async function rollbackDeliveryCompanyOrderFundsInTx(
       await tx.deliveryCompanyDepartmentBudgetWallet.update({
         where: { departmentId: deptId },
         data: {
-          availableCoins: Math.round((Number(wallet.availableCoins) + encumber) * 100) / 100,
+          availableCoins: ceilCoins3(Number(wallet.availableCoins) + encumber),
         },
       });
     }
@@ -41,8 +42,8 @@ export async function rollbackDeliveryCompanyOrderFundsInTx(
   const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
   if (!company) return;
   const unlock = Math.min(Number(company.lockedCoins), reserve);
-  const nextBalance = Math.round((Number(company.coinBalance) + price) * 100) / 100;
-  const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
+  const nextBalance = ceilCoins3(Number(company.coinBalance) + price);
+  const nextLocked = ceilCoins3(Math.max(0, Number(company.lockedCoins) - unlock));
   await tx.deliveryCompany.update({
     where: { id: company.id },
     data: { coinBalance: nextBalance, lockedCoins: nextLocked },

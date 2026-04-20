@@ -23,6 +23,7 @@ import {
   UpdateDeliveryCompanyDto,
 } from './dto/delivery-company.dto';
 import { rollbackDeliveryCompanyOrderFundsInTx } from './company-order-budget.util';
+import { ceilCoins3 } from './money.util';
 
 /**
  * Matches `schema.prisma` Order relations. Cast avoids IDE/ts-server mismatches when
@@ -458,9 +459,9 @@ export class DeliveryCompanyService {
         createdAt: r.createdAt,
       }));
       const orderLines = orderRows.map((o) => {
-        const p = Math.round(Number(o.price) * 100) / 100;
-        const reserve = Math.round(p * 0.5 * 100) / 100;
-        const settled = Math.round(p * 1.5 * 100) / 100;
+        const p = ceilCoins3(Number(o.price));
+        const reserve = ceilCoins3(p * 0.5);
+        const settled = ceilCoins3(p * 1.5);
         const isReturnDeposit = o.status === OrderStatus.RETURN_DEPOSIT;
         return {
           id: `order-${o.id}`,
@@ -529,10 +530,10 @@ export class DeliveryCompanyService {
       : await this.calculateCompanyDropoffPrice(resolvedPickupAddressId, dto, isNight);
 
     const discount = await this.getEffectiveDiscountPercent(company);
-    const discounted = Math.round(priceCalc.totalPrice * (1 + discount / 100) * 100) / 100;
-    const total = Math.round((discounted + extra) * 100) / 100;
-    const reserve = Math.round(total * 0.5 * 100) / 100;
-    const required = total + reserve;
+    const discounted = ceilCoins3(priceCalc.totalPrice * (1 + discount / 100));
+    const total = ceilCoins3(discounted + extra);
+    const reserve = ceilCoins3(total * 0.5);
+    const required = ceilCoins3(total + reserve);
     return {
       paymentType: PaymentType.WALLET,
       effectiveDiscountPercent: discount,
@@ -578,10 +579,15 @@ export class DeliveryCompanyService {
     }
 
     const preview = await this.previewOrder(companyId, dto, departmentId);
+    const billingDepartmentId = await this.normalizeCompanyOrderBillingDepartmentId(companyId, departmentId);
     const confirmationDelayMinutes = Math.max(1, Math.min(180, Number(dto.maxConfirmationDelayMinutes ?? 15)));
 
     if (createdByDepartmentAccountId) {
-      await this.ensureDepartmentAccountBelongsToCompany(companyId, createdByDepartmentAccountId, departmentId ?? null);
+      await this.ensureDepartmentAccountBelongsToCompany(
+        companyId,
+        createdByDepartmentAccountId,
+        billingDepartmentId ?? null,
+      );
     }
 
     const endpointKey = 'delivery-company/orders:POST';
@@ -589,15 +595,15 @@ export class DeliveryCompanyService {
     const dbAny: any = this.prisma as any;
     const hasIdempotencyModel = !!dbAny?.deliveryCompanyIdempotencyKey;
 
-    if (departmentId) {
+    if (billingDepartmentId) {
       let deptWallet = await dbAny.deliveryCompanyDepartmentBudgetWallet?.findUnique({
-        where: { departmentId },
+        where: { departmentId: billingDepartmentId },
       });
       if (!deptWallet) {
         deptWallet = await dbAny.deliveryCompanyDepartmentBudgetWallet.create({
           data: {
             deliveryCompanyId: companyId,
-            departmentId,
+            departmentId: billingDepartmentId,
             availableCoins: 0,
             lockedCoins: 0,
           },
@@ -677,31 +683,31 @@ export class DeliveryCompanyService {
         }
       }
 
-      if (departmentId) {
+      if (billingDepartmentId) {
         const txAny: any = tx as any;
         const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
-          where: { departmentId },
+          where: { departmentId: billingDepartmentId },
         });
         if (!wallet) {
           throw new BadRequestException('Department budget wallet not found');
         }
         const cap = Number(wallet.availableCoins) - Number(wallet.lockedCoins);
-        const encumber = Math.round((preview.totalPrice + preview.reserveAmount) * 100) / 100;
+        const encumber = ceilCoins3(preview.totalPrice + preview.reserveAmount);
         if (cap < preview.requiredCapacity) {
           throw new BadRequestException('Insufficient department budget capacity');
         }
         await txAny.deliveryCompanyDepartmentBudgetWallet.update({
-          where: { departmentId },
+          where: { departmentId: billingDepartmentId },
           data: {
-            availableCoins: Math.round((Number(wallet.availableCoins) - encumber) * 100) / 100,
+            availableCoins: ceilCoins3(Number(wallet.availableCoins) - encumber),
           },
         });
       } else {
         const updatedCompany = await tx.deliveryCompany.update({
           where: { id: companyId },
           data: {
-            coinBalance: Number(company.coinBalance) - preview.totalPrice,
-            lockedCoins: Number(company.lockedCoins) + preview.reserveAmount,
+            coinBalance: ceilCoins3(Number(company.coinBalance) - preview.totalPrice),
+            lockedCoins: ceilCoins3(Number(company.lockedCoins) + preview.reserveAmount),
           },
         });
         await tx.deliveryCompanyTransaction.create({
@@ -720,7 +726,7 @@ export class DeliveryCompanyService {
           customerId: company.proxyCustomerId!,
           deliveryCompanyId: company.id,
           sourceType: OrderSourceType.DELIVERY_COMPANY,
-          deliveryCompanyDepartmentId: departmentId ?? null,
+          deliveryCompanyDepartmentId: billingDepartmentId ?? null,
           deliveryCompanyDepartmentAccountId: createdByDepartmentAccountId ?? null,
           pricingPolicyId: preview.pricingPolicyId,
           pickupAddressId: resolvedPickupAddressId,
@@ -755,6 +761,24 @@ export class DeliveryCompanyService {
       }
       return order;
     });
+  }
+
+  /**
+   * Main-company orders that select the main department must bill the company wallet (not a department wallet).
+   * Child departments keep department-wallet billing.
+   */
+  private async normalizeCompanyOrderBillingDepartmentId(
+    companyId: string,
+    departmentId?: string,
+  ): Promise<string | undefined> {
+    if (!departmentId) return undefined;
+    const dept = await (this.prisma as any).deliveryCompanyAddress.findFirst({
+      where: { id: departmentId, deliveryCompanyId: companyId },
+      select: { id: true, isMainDepartment: true },
+    });
+    if (!dept) throw new BadRequestException('Department context is invalid');
+    if (dept.isMainDepartment) return undefined;
+    return dept.id;
   }
 
   /**
@@ -849,14 +873,14 @@ export class DeliveryCompanyService {
           });
         }
         const cap = Number(wallet.availableCoins) - Number(wallet.lockedCoins);
-        const encumber = Math.round((preview.totalPrice + preview.reserveAmount) * 100) / 100;
+        const encumber = ceilCoins3(preview.totalPrice + preview.reserveAmount);
         if (cap < preview.requiredCapacity) {
           throw new BadRequestException('Insufficient department budget capacity');
         }
         await txAny.deliveryCompanyDepartmentBudgetWallet.update({
           where: { departmentId: deptForPreview },
           data: {
-            availableCoins: Math.round((Number(wallet.availableCoins) - encumber) * 100) / 100,
+            availableCoins: ceilCoins3(Number(wallet.availableCoins) - encumber),
           },
         });
       } else {
@@ -868,8 +892,8 @@ export class DeliveryCompanyService {
         const updatedCompany = await tx.deliveryCompany.update({
           where: { id: companyId },
           data: {
-            coinBalance: Number(company.coinBalance) - preview.totalPrice,
-            lockedCoins: Number(company.lockedCoins) + preview.reserveAmount,
+            coinBalance: ceilCoins3(Number(company.coinBalance) - preview.totalPrice),
+            lockedCoins: ceilCoins3(Number(company.lockedCoins) + preview.reserveAmount),
           },
         });
         await tx.deliveryCompanyTransaction.create({
@@ -1105,7 +1129,7 @@ export class DeliveryCompanyService {
       distanceKm,
       billingDistanceKm,
       pricePerKm,
-      totalPrice: Math.round(totalPrice * 100) / 100,
+      totalPrice: ceilCoins3(totalPrice),
       pricingPolicyId: pricingPolicy.id,
       deliveryZoneType: deliveryZoneType as any,
     };
@@ -1316,7 +1340,17 @@ export class DeliveryCompanyService {
       if (from) where.createdAt.gte = new Date(from);
       if (to) where.createdAt.lte = new Date(to);
     }
-    const [count, delivered, returned, cancelled, gross, lockedRow] = await Promise.all([
+    const holdStatuses: OrderStatus[] = [
+      OrderStatus.SEARCHING_DRIVER,
+      OrderStatus.PENDING_CUSTOMER_APPROVAL,
+      OrderStatus.DRIVER_ASSIGNED,
+      OrderStatus.DRIVER_ARRIVED,
+      OrderStatus.PICKED_UP,
+      OrderStatus.DELIVERING,
+      OrderStatus.RETURNED,
+      OrderStatus.RETURN_DEPOSIT,
+    ];
+    const [count, delivered, returned, cancelled, gross, lockedRow, holdPriceRows] = await Promise.all([
       this.prisma.order.count({ where }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.DELIVERED } }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.RETURNED } }),
@@ -1331,8 +1365,17 @@ export class DeliveryCompanyService {
             where: { id: companyId },
             select: { lockedCoins: true },
           }),
+      this.prisma.order.findMany({
+        where: { ...where, status: { in: holdStatuses } },
+        select: { price: true },
+      }),
     ]);
-    const amountHold = Number((lockedRow as any)?.lockedCoins ?? 0);
+    const locked = Number((lockedRow as any)?.lockedCoins ?? 0);
+    let encumberSum = 0;
+    for (const row of holdPriceRows) {
+      encumberSum += ceilCoins3(Number(row.price || 0) * 1.5);
+    }
+    const amountHold = Math.max(locked, encumberSum);
     return {
       orders: count,
       delivered,
@@ -1746,7 +1789,7 @@ export class DeliveryCompanyService {
     if (v > DeliveryCompanyService.MAX_CUSTOMER_EXTRA) {
       throw new BadRequestException(`Extra amount cannot exceed ${DeliveryCompanyService.MAX_CUSTOMER_EXTRA}`);
     }
-    return Math.round(v * 100) / 100;
+    return ceilCoins3(v);
   }
 
   private async logAudit(

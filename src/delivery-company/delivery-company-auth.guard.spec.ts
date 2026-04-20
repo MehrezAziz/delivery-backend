@@ -63,4 +63,16 @@ describe('DeliveryCompanyApiKeyGuard', () => {
     expect(allowed).toBe(true);
     expect(mockPrisma.deliveryCompanyApiKey.update).toHaveBeenCalled();
   });
+
+  it('accepts PENDING company (only SUSPENDED is blocked)', async () => {
+    mockPrisma.deliveryCompanyApiKey.findFirst.mockResolvedValue({
+      id: 'k1',
+      scopes: ['orders:write'],
+      deliveryCompany: { id: 'c1', status: 'PENDING' },
+    });
+    const allowed = await guard.canActivate(
+      makeCtx('Bearer abcdefghijklmnopqrstuvwxyz', 'POST', 'orders'),
+    );
+    expect(allowed).toBe(true);
+  });
 });
