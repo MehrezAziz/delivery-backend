@@ -262,27 +262,12 @@ export class OrderNotificationListener {
   }
 
   @OnEvent('order.return_deposit')
-  async handleOrderReturnDeposit(payload: {
+  async handleOrderReturnDeposit(_payload: {
     orderId: string;
     customerUserId: string;
     driverUserId?: string;
   }) {
-    if (payload.driverUserId) {
-      await this.notificationsService.send({
-        userId: payload.driverUserId,
-        userType: 'USER',
-        type: NotificationType.ORDER_DELIVERED,
-        title: '✅ Return deposit recorded',
-        body: driverTrackLine(6),
-        relatedEntityType: 'Order',
-        relatedEntityId: payload.orderId,
-        groupKey: `order:${payload.orderId}`,
-        orderStatus: 'RETURN_DEPOSIT',
-        updateExisting: true,
-        ongoing: false,
-        trackingAudience: 'DRIVER',
-      });
-    }
+    /** No driver in-app / push row for terminal return-deposit — persistent tracking clears in the app via `restoreOrderTrackingForDriver`. */
   }
 
   @OnEvent('order.delivered')
@@ -303,20 +288,7 @@ export class OrderNotificationListener {
       ongoing: false, // Customer can now dismiss this notification
     });
 
-    await this.notificationsService.send({
-      userId: payload.driverUserId,
-      userType: 'USER',
-      type: NotificationType.ORDER_DELIVERED,
-      title: '✅ Order delivered',
-      body: driverTrackLine(6),
-      relatedEntityType: 'Order',
-      relatedEntityId: payload.orderId,
-      groupKey: `order:${payload.orderId}`,
-      orderStatus: 'DELIVERED',
-      updateExisting: true,
-      ongoing: false,
-      trackingAudience: 'DRIVER',
-    });
+    /** No driver in-app / FCM row for terminal delivered — ongoing notification is cleared in the app via `restoreOrderTrackingForDriver`. */
   }
 
   @OnEvent('order.cancelled')
