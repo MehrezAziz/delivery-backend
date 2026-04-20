@@ -215,24 +215,38 @@ export class DriverAssignmentService {
       where: { id: orderId },
       select: { deliveryCompanyDepartmentAccountId: true, sourceType: true },
     });
-    if (
-      deptScope?.deliveryCompanyDepartmentAccountId &&
-      String(deptScope.sourceType) === OrderSourceType.DELIVERY_COMPANY
-    ) {
+    const deptAcctId = deptScope?.deliveryCompanyDepartmentAccountId;
+    if (deptAcctId && String(deptScope?.sourceType) === OrderSourceType.DELIVERY_COMPANY) {
+      let suppress = false;
       try {
-        await this.notificationsService.send({
-          userId: deptScope.deliveryCompanyDepartmentAccountId,
-          userType: 'USER',
-          type: NotificationType.DRIVER_ASSIGNED,
-          title: 'Driver accepted your order',
-          body: `A driver accepted order #${orderId.slice(0, 8)}. Open Orders to review and approve.`,
-          relatedEntityType: 'Order',
-          relatedEntityId: orderId,
-          groupKey: `order:${orderId}:dept_pending`,
-          orderStatus: 'PENDING_CUSTOMER_APPROVAL',
+        const acct = await this.prisma.deliveryCompanyDepartmentAccount.findUnique({
+          where: { id: deptAcctId },
+          select: { portalPresenceAt: true, portalPresencePath: true },
         });
+        const at = acct?.portalPresenceAt ? new Date(acct.portalPresenceAt).getTime() : 0;
+        const fresh = at > 0 && Date.now() - at < 35_000;
+        const p = (acct?.portalPresencePath || '').trim();
+        const onOrdersPage = p === '/company/orders' || p.startsWith('/company/orders/');
+        suppress = fresh && onOrdersPage;
       } catch {
-        /* non-blocking */
+        suppress = false;
+      }
+      if (!suppress) {
+        try {
+          await this.notificationsService.send({
+            userId: deptAcctId,
+            userType: 'USER',
+            type: NotificationType.DRIVER_ASSIGNED,
+            title: 'Driver accepted your order',
+            body: `A driver accepted order #${orderId.slice(0, 8)}. Open Orders to review and approve.`,
+            relatedEntityType: 'Order',
+            relatedEntityId: orderId,
+            groupKey: `order:${orderId}:dept_pending`,
+            orderStatus: 'PENDING_CUSTOMER_APPROVAL',
+          });
+        } catch {
+          /* non-blocking */
+        }
       }
     }
 

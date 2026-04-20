@@ -211,9 +211,9 @@ export class PriceCalculationService {
     const baseWeight = Number(pricingPolicy.baseWeight);
     if (weight > baseWeight) {
       const extraWeight = weight - baseWeight;
-      const extraWeightSteps = Math.ceil(
-        extraWeight / Number(pricingPolicy.extraWeightStep),
-      );
+      const rawStep = Number(pricingPolicy.extraWeightStep);
+      const step = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : 1;
+      const extraWeightSteps = Math.ceil(extraWeight / step);
       extraWeightFee =
         extraWeightSteps * Number(pricingPolicy.extraWeightPrice);
     }
@@ -295,9 +295,9 @@ export class PriceCalculationService {
     const baseWeight = Number(pricingPolicy.baseWeight);
     if (weight > baseWeight) {
       const extraWeight = weight - baseWeight;
-      const extraWeightSteps = Math.ceil(
-        extraWeight / Number(pricingPolicy.extraWeightStep),
-      );
+      const rawStep = Number(pricingPolicy.extraWeightStep);
+      const step = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : 1;
+      const extraWeightSteps = Math.ceil(extraWeight / step);
       extraWeightFee =
         extraWeightSteps * Number(pricingPolicy.extraWeightPrice);
     }

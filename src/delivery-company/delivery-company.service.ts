@@ -227,14 +227,29 @@ export class DeliveryCompanyService {
   }
 
   async createCompanyAddress(companyId: string, dto: CreateDeliveryCompanyAddressDto) {
-    if (dto.isDefault) {
+    const existingCount = await this.prisma.deliveryCompanyAddress.count({ where: { deliveryCompanyId: companyId } });
+    const isFirstDepartment = existingCount === 0;
+    const effectiveDefault = isFirstDepartment || !!dto.isDefault;
+    const effectiveMain = isFirstDepartment || !!(dto as any).isMainDepartment;
+    if (effectiveDefault) {
       await this.prisma.deliveryCompanyAddress.updateMany({
         where: { deliveryCompanyId: companyId, isDefault: true },
         data: { isDefault: false },
       });
     }
+    if (effectiveMain) {
+      await this.prisma.deliveryCompanyAddress.updateMany({
+        where: { deliveryCompanyId: companyId, isMainDepartment: true },
+        data: { isMainDepartment: false },
+      });
+    }
     const created = await this.prisma.deliveryCompanyAddress.create({
-      data: { deliveryCompanyId: companyId, ...dto },
+      data: {
+        deliveryCompanyId: companyId,
+        ...dto,
+        isDefault: effectiveDefault,
+        isMainDepartment: effectiveMain,
+      } as any,
     });
     await this.logAudit(companyId, 'DEPARTMENT_CREATED', 'COMPANY');
     return created;
@@ -1075,7 +1090,9 @@ export class DeliveryCompanyService {
     const baseWeight = Number(pricingPolicy.baseWeight);
     if (dto.weight > baseWeight) {
       const extraWeight = dto.weight - baseWeight;
-      const extraWeightSteps = Math.ceil(extraWeight / Number(pricingPolicy.extraWeightStep));
+      const rawStep = Number(pricingPolicy.extraWeightStep);
+      const step = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : 1;
+      const extraWeightSteps = Math.ceil(extraWeight / step);
       extraWeightFee = extraWeightSteps * Number(pricingPolicy.extraWeightPrice);
     }
     const nightFee = isNight ? Number(pricingPolicy.nightFee) : 0;
@@ -1299,28 +1316,23 @@ export class DeliveryCompanyService {
       if (from) where.createdAt.gte = new Date(from);
       if (to) where.createdAt.lte = new Date(to);
     }
-    const holdStatuses: OrderStatus[] = [
-      OrderStatus.SEARCHING_DRIVER,
-      OrderStatus.PENDING_CUSTOMER_APPROVAL,
-      OrderStatus.DRIVER_ASSIGNED,
-      OrderStatus.DRIVER_ARRIVED,
-      OrderStatus.PICKED_UP,
-      OrderStatus.DELIVERING,
-      OrderStatus.RETURNED,
-    ];
-    const [count, delivered, returned, cancelled, gross, holdAgg] = await Promise.all([
+    const [count, delivered, returned, cancelled, gross, lockedRow] = await Promise.all([
       this.prisma.order.count({ where }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.DELIVERED } }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.RETURNED } }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.CANCELLED } }),
       this.prisma.order.aggregate({ where, _sum: { price: true } }),
-      this.prisma.order.aggregate({
-        where: { ...where, status: { in: holdStatuses } },
-        _sum: { price: true },
-      }),
+      departmentId
+        ? (this.prisma as any).deliveryCompanyDepartmentBudgetWallet.findUnique({
+            where: { departmentId },
+            select: { lockedCoins: true },
+          })
+        : this.prisma.deliveryCompany.findUnique({
+            where: { id: companyId },
+            select: { lockedCoins: true },
+          }),
     ]);
-    const holdPriceSum = Number(holdAgg._sum.price ?? 0);
-    const amountHold = Math.round(holdPriceSum * 1.5 * 100) / 100;
+    const amountHold = Number((lockedRow as any)?.lockedCoins ?? 0);
     return {
       orders: count,
       delivered,
