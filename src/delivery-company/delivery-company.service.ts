@@ -518,7 +518,6 @@ export class DeliveryCompanyService {
     const total = Math.round((discounted + extra) * 100) / 100;
     const reserve = Math.round(total * 0.5 * 100) / 100;
     const required = total + reserve;
-    // Department wallet: availableCoins -= price, lockedCoins += reserve → net liquidity (available−locked) drops by price+reserve.
     return {
       paymentType: PaymentType.WALLET,
       effectiveDiscountPercent: discount,
@@ -672,14 +671,14 @@ export class DeliveryCompanyService {
           throw new BadRequestException('Department budget wallet not found');
         }
         const cap = Number(wallet.availableCoins) - Number(wallet.lockedCoins);
+        const encumber = Math.round((preview.totalPrice + preview.reserveAmount) * 100) / 100;
         if (cap < preview.requiredCapacity) {
           throw new BadRequestException('Insufficient department budget capacity');
         }
         await txAny.deliveryCompanyDepartmentBudgetWallet.update({
           where: { departmentId },
           data: {
-            availableCoins: Math.round((Number(wallet.availableCoins) - preview.totalPrice) * 100) / 100,
-            lockedCoins: Math.round((Number(wallet.lockedCoins) + preview.reserveAmount) * 100) / 100,
+            availableCoins: Math.round((Number(wallet.availableCoins) - encumber) * 100) / 100,
           },
         });
       } else {
@@ -835,14 +834,14 @@ export class DeliveryCompanyService {
           });
         }
         const cap = Number(wallet.availableCoins) - Number(wallet.lockedCoins);
+        const encumber = Math.round((preview.totalPrice + preview.reserveAmount) * 100) / 100;
         if (cap < preview.requiredCapacity) {
           throw new BadRequestException('Insufficient department budget capacity');
         }
         await txAny.deliveryCompanyDepartmentBudgetWallet.update({
           where: { departmentId: deptForPreview },
           data: {
-            availableCoins: Math.round((Number(wallet.availableCoins) - preview.totalPrice) * 100) / 100,
-            lockedCoins: Math.round((Number(wallet.lockedCoins) + preview.reserveAmount) * 100) / 100,
+            availableCoins: Math.round((Number(wallet.availableCoins) - encumber) * 100) / 100,
           },
         });
       } else {

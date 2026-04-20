@@ -798,8 +798,9 @@ model Delegation {
   governorateId               String @map("governorate_id")
 
   // Relations
-  governorate Governorate @relation(fields: [governorateId], references: [id], onDelete: Cascade)
-  addresses   Address[]
+  governorate                 Governorate                 @relation(fields: [governorateId], references: [id], onDelete: Cascade)
+  addresses                   Address[]
+  deliveryCompanyAddresses    DeliveryCompanyAddress[]
 
   @@map("delegations")
 }
@@ -991,16 +992,20 @@ model DeliveryCompanyAddress {
   longitude         Float?
   isMainDepartment  Boolean  @default(false) @map("is_main_department")
   isDefault         Boolean  @default(false) @map("is_default")
+  /// Company's geographic scope (main department delegation) — used for CS finance scoping.
+  delegationId      String?  @map("delegation_id")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   deliveryCompany   DeliveryCompany @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+  delegation        Delegation?     @relation(fields: [delegationId], references: [id], onDelete: SetNull)
   departmentAccounts DeliveryCompanyDepartmentAccount[]
   budgetWallet      DeliveryCompanyDepartmentBudgetWallet?
   budgetRequests    DeliveryCompanyDepartmentBudgetRequest[]
   orders            Order[]
 
   @@index([deliveryCompanyId, isDefault])
+  @@index([delegationId])
   @@unique([deliveryCompanyId, label])
   @@map("delivery_company_addresses")
 }

@@ -1,14 +1,16 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
-import { OrderSourceType, OrderStatus, DriverStatus, ChatStatus } from '@prisma/client';
+import { OrderSourceType, OrderStatus, DriverStatus, ChatStatus, NotificationType } from '@prisma/client';
 import { rollbackDeliveryCompanyOrderFundsInTx } from '../../delivery-company/company-order-budget.util';
+import { NotificationsService } from '../../notifications/notifications.service';
 
 @Injectable()
 export class DriverAssignmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -208,6 +210,31 @@ export class DriverAssignmentService {
       driverUserId: driver!.user.id,
       driverName: `${driver!.user.firstName || ''} ${driver!.user.secondName || ''}`.trim(),
     });
+
+    const deptScope = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { deliveryCompanyDepartmentAccountId: true, sourceType: true },
+    });
+    if (
+      deptScope?.deliveryCompanyDepartmentAccountId &&
+      String(deptScope.sourceType) === OrderSourceType.DELIVERY_COMPANY
+    ) {
+      try {
+        await this.notificationsService.send({
+          userId: deptScope.deliveryCompanyDepartmentAccountId,
+          userType: 'USER',
+          type: NotificationType.DRIVER_ASSIGNED,
+          title: 'Driver accepted your order',
+          body: `A driver accepted order #${orderId.slice(0, 8)}. Open Orders to review and approve.`,
+          relatedEntityType: 'Order',
+          relatedEntityId: orderId,
+          groupKey: `order:${orderId}:dept_pending`,
+          orderStatus: 'PENDING_CUSTOMER_APPROVAL',
+        });
+      } catch {
+        /* non-blocking */
+      }
+    }
 
     return result;
   }

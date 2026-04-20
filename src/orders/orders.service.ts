@@ -550,12 +550,11 @@ export class OrdersService {
             where: { departmentId: deptId },
           });
           if (wallet) {
-            const unlock = Math.min(Number(wallet.lockedCoins), reserve);
-            const nextLocked = Math.max(0, Number(wallet.lockedCoins) - unlock);
-            const nextAvail = Math.round((Number(wallet.availableCoins) + unlock) * 100) / 100;
+            /** Delivered: department pays only `order_price`; release `order_return_price` (½ price) back to available. */
+            const nextAvail = Math.round((Number(wallet.availableCoins) + reserve) * 100) / 100;
             await txAny.deliveryCompanyDepartmentBudgetWallet.update({
               where: { departmentId: deptId },
-              data: { lockedCoins: nextLocked, availableCoins: nextAvail },
+              data: { availableCoins: nextAvail },
             });
           }
         } else {
@@ -698,29 +697,11 @@ export class OrdersService {
         const gross = Math.round(price * 1.5 * 100) / 100;
         const net = Math.round((gross - pFee) * 100) / 100;
 
-        const deptId = order.deliveryCompanyDepartmentId;
         /**
-         * Order placement already encumbered 1.5× the order price (`available -= price`, `locked += reserve`).
-         * Do not debit `gross` again — only release the placement reserve from locked. The `price` portion
-         * was already taken from available at order creation.
+         * Department wallet: order creation already debited `price + returnReserve` (1.5×) from `availableCoins`.
+         * Return-deposit charges the full 1.5× — no extra department wallet mutation here.
          */
-        if (deptId && gross > 0) {
-          const txAny = tx as any;
-          const wallet = await txAny.deliveryCompanyDepartmentBudgetWallet.findUnique({
-            where: { departmentId: deptId },
-          });
-          if (wallet) {
-            let locked = Number(wallet.lockedCoins);
-            const takeLocked = Math.min(locked, reserve);
-            locked -= takeLocked;
-            await txAny.deliveryCompanyDepartmentBudgetWallet.update({
-              where: { departmentId: deptId },
-              data: {
-                lockedCoins: Math.max(0, Math.round(locked * 100) / 100),
-              },
-            });
-          }
-        } else if (gross > 0) {
+        if (!order.deliveryCompanyDepartmentId && gross > 0) {
           const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId! } });
           if (company) {
             let locked = Number(company.lockedCoins);

@@ -2,8 +2,8 @@ import { DeliveryCompanyTransactionType, OrderSourceType } from '@prisma/client'
 
 /**
  * Restores funds locked for a delivery-company order (cancel / terminal failure).
- * Department-scoped orders are funded only from `DeliveryCompanyDepartmentBudgetWallet`;
- * main-company orders use `DeliveryCompany` coin balance + lockedCoins.
+ * Department-scoped orders: placement debited `price + returnReserve` from `availableCoins` only.
+ * Main-company orders use `DeliveryCompany` coin balance + lockedCoins.
  */
 export async function rollbackDeliveryCompanyOrderFundsInTx(
   tx: any,
@@ -20,6 +20,7 @@ export async function rollbackDeliveryCompanyOrderFundsInTx(
 
   const price = Math.round(Number(order.price || 0) * 100) / 100;
   const reserve = Math.round(price * 0.5 * 100) / 100;
+  const encumber = Math.round((price + reserve) * 100) / 100;
   const deptId = order.deliveryCompanyDepartmentId;
 
   if (deptId) {
@@ -27,13 +28,10 @@ export async function rollbackDeliveryCompanyOrderFundsInTx(
       where: { departmentId: deptId },
     });
     if (wallet) {
-      /** Mirrors placement: `available -= price`, `locked += reserve` → reverse with `+price` and `-unlock`, not `+(price+unlock)` on available. */
-      const unlock = Math.min(Number(wallet.lockedCoins), reserve);
       await tx.deliveryCompanyDepartmentBudgetWallet.update({
         where: { departmentId: deptId },
         data: {
-          availableCoins: Math.round((Number(wallet.availableCoins) + price) * 100) / 100,
-          lockedCoins: Math.max(0, Math.round((Number(wallet.lockedCoins) - unlock) * 100) / 100),
+          availableCoins: Math.round((Number(wallet.availableCoins) + encumber) * 100) / 100,
         },
       });
     }
