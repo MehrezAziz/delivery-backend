@@ -12,6 +12,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceCalculationService } from '../orders/services/price-calculation.service';
+import { OrdersService } from '../orders/orders.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   CompanyOrderPreviewResponseDto,
@@ -74,6 +75,7 @@ export class DeliveryCompanyService {
     private readonly prisma: PrismaService,
     private readonly priceCalculationService: PriceCalculationService,
     private readonly notificationsService: NotificationsService,
+    private readonly ordersService: OrdersService,
   ) {}
 
   async ensureDepartmentBelongsToCompany(companyId: string, departmentId?: string | null) {
@@ -306,7 +308,7 @@ export class DeliveryCompanyService {
 
     const endpointKey = `delivery-company/orders/${orderId}/return-deposit-feedback:POST`;
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const txAny: any = tx as any;
 
       let responseBody: any;
@@ -405,6 +407,10 @@ export class DeliveryCompanyService {
       responseBody = { message: 'Return deposit feedback saved', feedback: saved };
       return responseBody;
     });
+    if (conditionIssue) {
+      void this.ordersService.openReturnDepositConditionDisputeIfNeeded(orderId, text).catch(() => undefined);
+    }
+    return result;
   }
 
   async getWallet(companyId: string, departmentId?: string) {
@@ -1353,7 +1359,9 @@ export class DeliveryCompanyService {
     const [count, delivered, returned, cancelled, gross, lockedRow, holdPriceRows] = await Promise.all([
       this.prisma.order.count({ where }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.DELIVERED } }),
-      this.prisma.order.count({ where: { ...where, status: OrderStatus.RETURNED } }),
+      this.prisma.order.count({
+        where: { ...where, status: { in: [OrderStatus.RETURNED, OrderStatus.RETURN_DEPOSIT] } },
+      }),
       this.prisma.order.count({ where: { ...where, status: OrderStatus.CANCELLED } }),
       this.prisma.order.aggregate({ where, _sum: { price: true } }),
       departmentId

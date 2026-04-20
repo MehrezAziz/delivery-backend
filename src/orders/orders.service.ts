@@ -14,6 +14,7 @@ import {
   ReferralCommissionStatus,
   DriverStatus,
   NotificationType,
+  NotificationPriority,
   CustomerServiceRole,
   OrderSourceType,
   DeliveryCompanyTransactionType,
@@ -1581,7 +1582,87 @@ export class OrdersService {
           data: { orderId, driverId: drvId, feedback: text, conditionIssue, reportedByUserId: userId },
         });
 
+    if (conditionIssue) {
+      void this.openReturnDepositConditionDisputeIfNeeded(orderId, text).catch(() => undefined);
+    }
+
     return { message: 'Return deposit feedback saved', feedback: saved };
+  }
+
+  /**
+   * When return-deposit feedback flags a package condition issue, open a dispute for CS
+   * (order stays RETURN_DEPOSIT — no status regression).
+   */
+  async openReturnDepositConditionDisputeIfNeeded(orderId: string, feedback: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        dispute: true,
+        customer: { include: { user: { select: { id: true } } } },
+        pickupAddress: { include: { delegation: { select: { governorateId: true } } } },
+        deliveryCompany: { select: { id: true, name: true } },
+      },
+    });
+    if (!order || order.dispute) return;
+    if (order.status !== OrderStatus.RETURN_DEPOSIT && order.status !== OrderStatus.RETURNED) return;
+
+    const companyBit = order.deliveryCompany?.name
+      ? ` — company: ${order.deliveryCompany.name}`
+      : order.deliveryCompanyId
+        ? ` — company id: ${order.deliveryCompanyId}`
+        : '';
+    const reason = `Package condition issue (return-deposit feedback)${companyBit}:\n\n${feedback.slice(0, 4000)}`;
+
+    const d = await this.prisma.dispute.create({
+      data: {
+        orderId,
+        reportedBy: order.customerId,
+        reason,
+        assignedTo: null,
+      },
+    });
+
+    const ticketUserId = order.customer.userId;
+    const ticket = await this.prisma.supportTicket.create({
+      data: {
+        userId: ticketUserId,
+        category: 'ORDER_ISSUE',
+        priority: 'HIGH',
+        description: `Return-deposit condition dispute for order #${orderId}\n\n${reason}`,
+        status: 'OPEN',
+      },
+    });
+    await this.prisma.supportMessage.create({
+      data: {
+        ticketId: ticket.id,
+        senderId: ticketUserId,
+        senderType: 'USER',
+        content: `⚠️ Return-deposit package condition report for order #${orderId.slice(0, 8)}\n\n${feedback.slice(0, 2000)}`,
+      },
+    });
+
+    this.eventEmitter.emit('dispute.opened', {
+      disputeId: d.id,
+      customerUserId: ticketUserId,
+      orderId,
+    });
+    this.eventEmitter.emit('support.new_ticket', { ticketId: ticket.id, userId: ticketUserId });
+
+    const govId = order.pickupAddress?.delegation?.governorateId;
+    const govIds = govId ? [govId] : [];
+    await this.notificationsService.sendToCsWithPermissionForGovernorates(
+      govIds,
+      CustomerServiceRole.MANAGE_DELIVERY_COMPANY,
+      NotificationType.NEW_DISPUTE_CREATED,
+      {
+        title: 'Company: package condition after return deposit',
+        body: `Order #${orderId.slice(0, 8)} — review Disputes and the linked support ticket.`,
+        priority: NotificationPriority.HIGH,
+        relatedEntityType: 'Dispute',
+        relatedEntityId: d.id,
+        groupKey: `dispute:${d.id}`,
+      },
+    );
   }
 
   /** Close the chat room for an order (used on CANCELLED, DELIVERED, REFUNDED) */
