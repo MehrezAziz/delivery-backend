@@ -560,12 +560,16 @@ export class OrdersService {
         } else {
           const company = await tx.deliveryCompany.findUnique({ where: { id: order.deliveryCompanyId } });
           if (company) {
+            /**
+             * Main-company wallet: placement debited `price` from coinBalance and added `reserve` (½ price) to lockedCoins
+             * for capacity. Delivered final settlement is net **1× price** — release the reserve from locked only
+             * (do not credit coinBalance: the reserve was never deducted from coinBalance at placement).
+             */
             const unlock = Math.min(Number(company.lockedCoins), reserve);
             const nextLocked = Math.max(0, Number(company.lockedCoins) - unlock);
-            const nextBalance = Math.round((Number(company.coinBalance) + unlock) * 100) / 100;
             await tx.deliveryCompany.update({
               where: { id: company.id },
-              data: { lockedCoins: nextLocked, coinBalance: nextBalance },
+              data: { lockedCoins: nextLocked },
             });
           }
         }
@@ -707,12 +711,28 @@ export class OrdersService {
             let locked = Number(company.lockedCoins);
             const takeLocked = Math.min(locked, reserve);
             locked -= takeLocked;
+            /** Placement already debited 1× price; return-deposit path owes **1.5×** total — debit the extra ½× here. */
+            const returnSurcharge = Math.round((gross - price) * 100) / 100;
+            const nextBal = Math.round((Number(company.coinBalance) - returnSurcharge) * 100) / 100;
             await tx.deliveryCompany.update({
               where: { id: company.id },
               data: {
                 lockedCoins: Math.max(0, Math.round(locked * 100) / 100),
+                coinBalance: nextBal,
               },
             });
+            if (returnSurcharge > 0) {
+              await tx.deliveryCompanyTransaction.create({
+                data: {
+                  deliveryCompanyId: company.id,
+                  orderId,
+                  type: DeliveryCompanyTransactionType.RETURN_SURCHARGE,
+                  amount: -returnSurcharge,
+                  balanceAfter: nextBal,
+                  description: `Return-deposit settlement (additional 50% of order price) order #${orderId.slice(0, 8)}`,
+                },
+              });
+            }
           }
         }
 

@@ -234,6 +234,57 @@ export class OrderNotificationListener {
     }
   }
 
+  @OnEvent('order.returned')
+  async handleOrderReturned(payload: {
+    orderId: string;
+    customerUserId: string;
+    driverUserId?: string;
+  }) {
+    if (payload.driverUserId) {
+      await this.notificationsService.send({
+        userId: payload.driverUserId,
+        userType: 'USER',
+        type: NotificationType.DELIVERY_IN_PROGRESS,
+        title: '📦 Package returned — Return deposit',
+        body: driverTrackLine(5),
+        relatedEntityType: 'Order',
+        relatedEntityId: payload.orderId,
+        groupKey: `order:${payload.orderId}`,
+        orderStatus: 'RETURNED',
+        updateExisting: true,
+        ongoing: true,
+        trackingAudience: 'DRIVER',
+        actionButtons: [
+          { id: 'driver_open_return_deposit', title: 'Return deposited', action: 'open_return_deposit' },
+        ],
+      });
+    }
+  }
+
+  @OnEvent('order.return_deposit')
+  async handleOrderReturnDeposit(payload: {
+    orderId: string;
+    customerUserId: string;
+    driverUserId?: string;
+  }) {
+    if (payload.driverUserId) {
+      await this.notificationsService.send({
+        userId: payload.driverUserId,
+        userType: 'USER',
+        type: NotificationType.ORDER_DELIVERED,
+        title: '✅ Return deposit recorded',
+        body: driverTrackLine(6),
+        relatedEntityType: 'Order',
+        relatedEntityId: payload.orderId,
+        groupKey: `order:${payload.orderId}`,
+        orderStatus: 'RETURN_DEPOSIT',
+        updateExisting: true,
+        ongoing: false,
+        trackingAudience: 'DRIVER',
+      });
+    }
+  }
+
   @OnEvent('order.delivered')
   async handleOrderDelivered(payload: {
     orderId: string;

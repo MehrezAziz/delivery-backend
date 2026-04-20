@@ -109,10 +109,16 @@ export class DeliveryCompanyController {
     const companyId = req.deliveryCompany.id;
     const departmentId = this.departmentId(req);
 
-    await this.service.ensureDepartmentBelongsToCompany(companyId, departmentId);
-    if (!departmentId) throw new BadRequestException('Department context is missing');
-
     const targetUserId = (body?.targetUserId as string)?.trim() || departmentId;
+    if (!targetUserId) {
+      throw new BadRequestException('targetUserId is required when department context is missing');
+    }
+    if (departmentId) {
+      await this.service.ensureDepartmentBelongsToCompany(companyId, departmentId);
+    } else if (actorRole !== 'MAIN_ADMIN' || targetUserId !== companyId) {
+      throw new BadRequestException('Department context is missing');
+    }
+
     await this.service.ensureNotificationRecipientBelongsToCompany(companyId, targetUserId);
 
     const type = body?.type as string;
@@ -169,9 +175,16 @@ export class DeliveryCompanyController {
     this.requireActorRole(actorRole, ['MAIN_ADMIN', 'DEPT_ADMIN', 'DEPT_OPERATOR']);
     const companyId = req.deliveryCompany.id;
     const departmentId = this.departmentId(req);
-    if (!departmentId) throw new BadRequestException('Department context is missing');
-    await this.requireDepartmentContext(companyId, actorRole, departmentId);
-    await this.service.ensureDepartmentBelongsToCompany(companyId, departmentId);
+    if (!departmentId && actorRole !== 'MAIN_ADMIN') {
+      throw new BadRequestException('Department context is missing');
+    }
+    if (departmentId) {
+      await this.requireDepartmentContext(companyId, actorRole, departmentId);
+      await this.service.ensureDepartmentBelongsToCompany(companyId, departmentId);
+    }
+
+    /** Main-wallet company orders store `deliveryCompanyDepartmentId: null`; do not scope by header dept id. */
+    const departmentScopeForOrder = actorRole === 'MAIN_ADMIN' ? undefined : departmentId;
 
     const idemKeyHeader =
       (req?.headers?.['idempotency-key'] as string | undefined) ||
@@ -188,7 +201,9 @@ export class DeliveryCompanyController {
           '|' +
           String(id) +
           '|' +
-          String(departmentId ?? ''),
+          String(departmentScopeForOrder ?? '') +
+          '|' +
+          actorRole,
       )
       .digest('hex');
 
@@ -197,7 +212,7 @@ export class DeliveryCompanyController {
       id,
       dto.feedback,
       !!dto.conditionIssue,
-      departmentId,
+      departmentScopeForOrder,
       idemKeyHeader,
       requestHash,
     );
