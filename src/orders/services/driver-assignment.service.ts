@@ -213,10 +213,16 @@ export class DriverAssignmentService {
 
     const deptScope = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { deliveryCompanyDepartmentAccountId: true, sourceType: true },
+      select: {
+        deliveryCompanyDepartmentAccountId: true,
+        sourceType: true,
+        deliveryCompanyId: true,
+      },
     });
     const deptAcctId = deptScope?.deliveryCompanyDepartmentAccountId;
-    if (deptAcctId && String(deptScope?.sourceType) === OrderSourceType.DELIVERY_COMPANY) {
+    const isCompanyOrder = String(deptScope?.sourceType) === OrderSourceType.DELIVERY_COMPANY;
+
+    if (deptAcctId && isCompanyOrder) {
       let suppress = false;
       try {
         const acct = await this.prisma.deliveryCompanyDepartmentAccount.findUnique({
@@ -242,6 +248,39 @@ export class DriverAssignmentService {
             relatedEntityType: 'Order',
             relatedEntityId: orderId,
             groupKey: `order:${orderId}:dept_pending`,
+            orderStatus: 'PENDING_CUSTOMER_APPROVAL',
+          });
+        } catch {
+          /* non-blocking */
+        }
+      }
+    } else if (!deptAcctId && deptScope?.deliveryCompanyId && isCompanyOrder) {
+      /** Main company wallet orders have no department account — inbox is keyed by `deliveryCompanyId` (same as COMPANY_ORDER_CREATED_MAIN). */
+      let suppress = false;
+      try {
+        const company = await this.prisma.deliveryCompany.findUnique({
+          where: { id: deptScope.deliveryCompanyId },
+          select: { companyPortalPresenceAt: true, companyPortalPresencePath: true },
+        });
+        const at = company?.companyPortalPresenceAt ? new Date(company.companyPortalPresenceAt).getTime() : 0;
+        const fresh = at > 0 && Date.now() - at < 35_000;
+        const p = (company?.companyPortalPresencePath || '').trim();
+        const onOrdersPage = p === '/company/orders' || p.startsWith('/company/orders/');
+        suppress = fresh && onOrdersPage;
+      } catch {
+        suppress = false;
+      }
+      if (!suppress) {
+        try {
+          await this.notificationsService.send({
+            userId: deptScope.deliveryCompanyId,
+            userType: 'USER',
+            type: NotificationType.DRIVER_ASSIGNED,
+            title: 'Driver accepted your order',
+            body: `A driver accepted order #${orderId.slice(0, 8)}. Open Orders to review and approve.`,
+            relatedEntityType: 'Order',
+            relatedEntityId: orderId,
+            groupKey: `order:${orderId}:main_pending`,
             orderStatus: 'PENDING_CUSTOMER_APPROVAL',
           });
         } catch {
