@@ -233,6 +233,21 @@ export class OrdersService {
     const calculatedPrice = priceCalc.totalPrice;
     const finalPrice = Math.round((calculatedPrice + extra) * 100) / 100;
 
+    const defaultCancelAfterMinutes = localPickup ? 5 : 15;
+    const maxCancelAfterMinutes = localPickup ? 240 : 1440;
+    const requestedCancelAfterMinutes = dto.cancelAfterMinutes ?? defaultCancelAfterMinutes;
+    if (!Number.isFinite(requestedCancelAfterMinutes) || !Number.isInteger(requestedCancelAfterMinutes)) {
+      throw new BadRequestException('Auto-cancel time must be an integer number of minutes');
+    }
+    if (requestedCancelAfterMinutes > maxCancelAfterMinutes) {
+      throw new BadRequestException(
+        localPickup
+          ? 'Local pickup auto-cancel time must be 240 minutes or less'
+          : 'Auto-cancel time must be 1440 minutes or less',
+      );
+    }
+    const shouldAutoCancelImmediately = requestedCancelAfterMinutes <= 0;
+
     if (dto.paymentType === PaymentType.WALLET && Number(customer.wallet!.balance) < finalPrice) {
       throw new BadRequestException('Insufficient wallet balance');
     }
@@ -244,7 +259,7 @@ export class OrdersService {
         pickupAddressId: dto.pickupAddressId,
         dropoffAddressId: localPickup ? null : dto.dropoffAddressId,
         localPickupOnly: localPickup,
-        status: OrderStatus.SEARCHING_DRIVER,
+        status: shouldAutoCancelImmediately ? OrderStatus.CANCELLED : OrderStatus.SEARCHING_DRIVER,
         paymentType: dto.paymentType,
         description: dto.description,
         weight: dto.weight,
@@ -255,19 +270,26 @@ export class OrdersService {
         nightFee: priceCalc.nightFee,
         extraWeightFee: priceCalc.extraWeightFee,
         isNightDelivery: isNight,
-        ...(dto.cancelAfterMinutes !== undefined && { cancelAfterMinutes: dto.cancelAfterMinutes }),
-        cancelTimerRemainingSeconds: (dto.cancelAfterMinutes ?? 15) * 60,
-        cancelTimerLastResumedAt: new Date(),
-        cancelTimerPausedAt: null,
+        cancelAfterMinutes: requestedCancelAfterMinutes,
+        cancelTimerRemainingSeconds: shouldAutoCancelImmediately ? 0 : requestedCancelAfterMinutes * 60,
+        cancelTimerLastResumedAt: shouldAutoCancelImmediately ? null : new Date(),
+        cancelTimerPausedAt: shouldAutoCancelImmediately ? new Date() : null,
       },
       include: this.orderInclude(),
     });
-    this.eventEmitter.emit('order.created', {
-      orderId: order.id,
-      customerId: customer.id,
-      userId,
-      pickupGovernorateId: pickupAddr.delegation.governorateId,
-    });
+    if (shouldAutoCancelImmediately) {
+      this.eventEmitter.emit('order.no_driver_found', {
+        orderId: order.id,
+        customerUserId: userId,
+      });
+    } else {
+      this.eventEmitter.emit('order.created', {
+        orderId: order.id,
+        customerId: customer.id,
+        userId,
+        pickupGovernorateId: pickupAddr.delegation.governorateId,
+      });
+    }
     return this.mapToResponseDto(order, { viewerIsCustomer: true });
   }
 

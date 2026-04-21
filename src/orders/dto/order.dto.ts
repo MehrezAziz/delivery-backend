@@ -36,10 +36,8 @@ export class CreateOrderDto {
   @Type(() => Number)
   @IsInt()
   @ValidateIf((o) => !!o.localPickupOnly)
-  @Min(5)
   @Max(240)
   @ValidateIf((o) => !o.localPickupOnly)
-  @Min(15)
   @Max(1440)
   cancelAfterMinutes?: number;
 
