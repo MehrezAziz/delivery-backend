@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { OrderUrgentNotifyService } from './services/order-urgent-notify.service';
@@ -44,7 +45,9 @@ export class OrdersController {
     return this.orderUrgentNotifyService.customerRequestNotify(orderId, user.id);
   }
 
+  /** Polled by customer/driver apps for live order state; exempt from global throttle (60/min) to avoid ThrottlerException during SEARCHING_DRIVER. */
   @Get(':id')
+  @SkipThrottle()
   async getOrderById(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
     return this.ordersService.getOrderById(orderId, user.id);
   }
@@ -72,6 +75,12 @@ export class OrdersController {
   async cancelOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: CancelOrderDto) {
     await this.ordersService.cancelOrder(orderId, user.id, dto.reason);
     return { message: 'Order cancelled successfully' };
+  }
+
+  @Post(':id/reactivate')
+  @UseGuards(CustomerGuard)
+  async reactivateOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
+    return this.ordersService.reactivateOrder(orderId, user.id);
   }
 
   @Get(':id/driver-location')

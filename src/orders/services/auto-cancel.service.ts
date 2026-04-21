@@ -14,7 +14,7 @@ export class AutoCancelService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  @Cron(CronExpression.EVERY_10_SECONDS)
+  @Cron(CronExpression.EVERY_SECOND)
   async cancelExpiredOrders(): Promise<number> {
     const orders = await this.prisma.order.findMany({
       where: { status: OrderStatus.SEARCHING_DRIVER },
@@ -29,11 +29,16 @@ export class AutoCancelService {
         const cancelledOrder = await this.prisma.$transaction(async (tx) => {
           const updated = await tx.order.update({
             where: { id: order.id },
-            data: { status: OrderStatus.CANCELLED },
+            data: {
+              status: 'AUTO_CANCELLED' as OrderStatus,
+              cancelTimerRemainingSeconds: 0,
+              cancelTimerLastResumedAt: null,
+              cancelTimerPausedAt: new Date(),
+            },
             include: { customer: true },
           });
           if (updated.deliveryCompanyId && updated.sourceType === OrderSourceType.DELIVERY_COMPANY) {
-            await rollbackDeliveryCompanyOrderFundsInTx(tx, updated, 'CANCELLED');
+            await rollbackDeliveryCompanyOrderFundsInTx(tx, updated, 'AUTO_CANCELLED');
           }
           return updated;
         });

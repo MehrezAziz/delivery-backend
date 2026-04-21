@@ -1362,7 +1362,7 @@ export class DeliveryCompanyService {
       this.prisma.order.count({
         where: { ...where, status: { in: [OrderStatus.RETURNED, OrderStatus.RETURN_DEPOSIT] } },
       }),
-      this.prisma.order.count({ where: { ...where, status: OrderStatus.CANCELLED } }),
+      this.prisma.order.count({ where: { ...where, status: { in: [OrderStatus.CANCELLED, 'AUTO_CANCELLED' as OrderStatus] } } }),
       this.prisma.order.aggregate({ where, _sum: { price: true } }),
       departmentId
         ? (this.prisma as any).deliveryCompanyDepartmentBudgetWallet.findUnique({
@@ -1593,7 +1593,7 @@ export class DeliveryCompanyService {
     /** Same semantics as `OrdersService.computeCancelRemainingSeconds` + resume to SEARCHING: countdown is based on the
      *  frozen budget from when the company last approved a driver (not driver `acceptedAt`). */
     const nextRemaining = this.computeRemainingSecondsForResumeToSearching(order as any);
-    const nextStatus = nextRemaining <= 0 ? OrderStatus.CANCELLED : OrderStatus.SEARCHING_DRIVER;
+    const nextStatus = nextRemaining <= 0 ? ('AUTO_CANCELLED' as OrderStatus) : OrderStatus.SEARCHING_DRIVER;
 
     const driverUserId = order.driverAssignment?.driver?.userId ?? null;
     await this.prisma.$transaction(async (tx) => {
@@ -1618,9 +1618,9 @@ export class DeliveryCompanyService {
       await tx.order.update({
         where: { id: order.id },
         data:
-          nextStatus === OrderStatus.CANCELLED
+          nextStatus === ('AUTO_CANCELLED' as OrderStatus)
             ? {
-                status: OrderStatus.CANCELLED,
+                status: 'AUTO_CANCELLED' as OrderStatus,
                 cancelTimerRemainingSeconds: 0,
                 cancelTimerPausedAt: new Date(),
                 cancelTimerLastResumedAt: null,
@@ -1632,8 +1632,8 @@ export class DeliveryCompanyService {
                 cancelTimerLastResumedAt: new Date(),
               },
       });
-      if (nextStatus === OrderStatus.CANCELLED) {
-        await rollbackDeliveryCompanyOrderFundsInTx(tx, order, 'CANCELLED');
+      if (nextStatus === ('AUTO_CANCELLED' as OrderStatus)) {
+        await rollbackDeliveryCompanyOrderFundsInTx(tx, order, 'AUTO_CANCELLED');
       }
       await tx.chatRoom.updateMany({
         where: { orderId: order.id, status: 'ACTIVE' as any },

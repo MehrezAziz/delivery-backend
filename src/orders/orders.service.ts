@@ -259,7 +259,7 @@ export class OrdersService {
         pickupAddressId: dto.pickupAddressId,
         dropoffAddressId: localPickup ? null : dto.dropoffAddressId,
         localPickupOnly: localPickup,
-        status: shouldAutoCancelImmediately ? OrderStatus.CANCELLED : OrderStatus.SEARCHING_DRIVER,
+        status: shouldAutoCancelImmediately ? ('AUTO_CANCELLED' as OrderStatus) : OrderStatus.SEARCHING_DRIVER,
         paymentType: dto.paymentType,
         description: dto.description,
         weight: dto.weight,
@@ -321,32 +321,71 @@ export class OrdersService {
       throw new BadRequestException('Cancel timer can only be changed before pickup');
     }
     if (order.localPickupOnly) {
-      if (cancelAfterMinutes < 5 || cancelAfterMinutes > 240) {
-        throw new BadRequestException('Local pickup auto-cancel time must be between 5 and 240 minutes');
+      if (cancelAfterMinutes > 240) {
+        throw new BadRequestException('Local pickup auto-cancel time must be 240 minutes or less');
       }
-    } else if (cancelAfterMinutes < 15 || cancelAfterMinutes > 1440) {
-      throw new BadRequestException('Auto-cancel time must be between 15 and 1440 minutes');
+    } else if (cancelAfterMinutes > 1440) {
+      throw new BadRequestException('Auto-cancel time must be 1440 minutes or less');
     }
     const currentRemaining = this.computeCancelRemainingSeconds(order);
     const currentCancelMinutes = order.cancelAfterMinutes ?? 15;
     const nextRemaining = Math.max(0, currentRemaining + ((cancelAfterMinutes - currentCancelMinutes) * 60));
     const now = new Date();
-    const updated = await this.prisma.order.update({
-      where: { id: orderId },
-      data: {
-        cancelAfterMinutes,
-        cancelTimerRemainingSeconds: nextRemaining,
-        cancelTimerLastResumedAt: order.status === OrderStatus.SEARCHING_DRIVER ? now : null,
-        cancelTimerPausedAt: order.status === OrderStatus.SEARCHING_DRIVER ? null : (order.cancelTimerPausedAt ?? now),
-      },
-      include: this.orderInclude(),
+    const shouldAutoCancelNow = order.status === OrderStatus.SEARCHING_DRIVER && nextRemaining <= 0;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.order.update({
+        where: { id: orderId },
+        data: shouldAutoCancelNow
+          ? {
+              status: 'AUTO_CANCELLED' as OrderStatus,
+              cancelAfterMinutes,
+              cancelTimerRemainingSeconds: 0,
+              cancelTimerLastResumedAt: null,
+              cancelTimerPausedAt: now,
+            }
+          : {
+              cancelAfterMinutes,
+              cancelTimerRemainingSeconds: nextRemaining,
+              cancelTimerLastResumedAt: order.status === OrderStatus.SEARCHING_DRIVER ? now : null,
+              cancelTimerPausedAt: order.status === OrderStatus.SEARCHING_DRIVER ? null : (order.cancelTimerPausedAt ?? now),
+            },
+        include: this.orderInclude(),
+      });
+      if (shouldAutoCancelNow) {
+        await this.restoreCompanyOrderBudgetOnTerminalStatus(tx, order, 'AUTO_CANCELLED');
+      }
+      return row;
     });
+    if (shouldAutoCancelNow) {
+      this.eventEmitter.emit('order.no_driver_found', {
+        orderId,
+        customerUserId: userId,
+      });
+    }
     return this.mapToResponseDto(updated, { viewerIsCustomer: true });
   }
 
   async getOrderById(orderId: string, userId: string): Promise<OrderResponseDto> {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.orderInclude() }) as any;
     if (!order) throw new NotFoundException('Order not found');
+    if (order.status === OrderStatus.SEARCHING_DRIVER && this.computeCancelRemainingSeconds(order) <= 0) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.order.update({
+          where: { id: orderId },
+          data: {
+            status: 'AUTO_CANCELLED' as OrderStatus,
+            cancelTimerRemainingSeconds: 0,
+            cancelTimerLastResumedAt: null,
+            cancelTimerPausedAt: new Date(),
+          },
+        });
+        await this.restoreCompanyOrderBudgetOnTerminalStatus(tx, order, 'AUTO_CANCELLED');
+      });
+      this.eventEmitter.emit('order.no_driver_found', { orderId, customerUserId: order.customer.userId });
+      const refreshed = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.orderInclude() }) as any;
+      if (!refreshed) throw new NotFoundException('Order not found');
+      return this.mapToResponseDto(refreshed, { viewerUserId: userId, viewerIsCustomer: refreshed.customer?.userId === userId });
+    }
     const isCustomer = order.customer?.userId === userId;
     const isDriver = order.driverAssignment?.driver?.userId === userId;
     const isConflictDriver = order.arrivalConflict?.driver?.userId === userId;
@@ -386,7 +425,28 @@ export class OrdersService {
     const customer = await this.prisma.customer.findUnique({ where: { userId } });
     if (!customer) throw new NotFoundException('Customer profile not found');
     const orders = await this.prisma.order.findMany({ where: { customerId: customer.id }, include: this.orderInclude(), orderBy: { createdAt: 'desc' } });
-    return orders.map((o: any) => this.mapToResponseDto(o, { viewerIsCustomer: true }));
+    const expired = orders.filter((o: any) => o.status === OrderStatus.SEARCHING_DRIVER && this.computeCancelRemainingSeconds(o) <= 0);
+    if (expired.length > 0) {
+      for (const order of expired) {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.order.update({
+            where: { id: order.id },
+            data: {
+              status: 'AUTO_CANCELLED' as OrderStatus,
+              cancelTimerRemainingSeconds: 0,
+              cancelTimerLastResumedAt: null,
+              cancelTimerPausedAt: new Date(),
+            },
+          });
+          await this.restoreCompanyOrderBudgetOnTerminalStatus(tx, order, 'AUTO_CANCELLED');
+        });
+        this.eventEmitter.emit('order.no_driver_found', { orderId: order.id, customerUserId: userId });
+      }
+    }
+    const refreshedOrders = expired.length > 0
+      ? await this.prisma.order.findMany({ where: { customerId: customer.id }, include: this.orderInclude(), orderBy: { createdAt: 'desc' } })
+      : orders;
+    return refreshedOrders.map((o: any) => this.mapToResponseDto(o, { viewerIsCustomer: true }));
   }
 
   async getDriverOrders(driverId: string): Promise<OrderResponseDto[]> {
@@ -439,6 +499,38 @@ export class OrdersService {
       },
       data: { status: 'CLOSED', resolvedAt: new Date() },
     });
+  }
+
+  async reactivateOrder(orderId: string, userId: string): Promise<OrderResponseDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { customer: true },
+    }) as any;
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (!['CANCELLED', 'AUTO_CANCELLED'].includes(order.status)) {
+      throw new BadRequestException('Only cancelled orders can be reactivated');
+    }
+    const defaultCancelAfterMinutes = order.localPickupOnly ? 5 : 15;
+    const restartMinutes = Math.max(1, Number(order.cancelAfterMinutes ?? defaultCancelAfterMinutes));
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        status: OrderStatus.SEARCHING_DRIVER,
+        cancelAfterMinutes: restartMinutes,
+        cancelTimerRemainingSeconds: restartMinutes * 60,
+        cancelTimerLastResumedAt: new Date(),
+        cancelTimerPausedAt: null,
+      },
+      include: this.orderInclude(),
+    });
+    this.eventEmitter.emit('order.created', {
+      orderId: updated.id,
+      customerId: updated.customerId,
+      userId,
+      pickupGovernorateId: updated.pickupAddress?.delegation?.governorateId,
+    });
+    return this.mapToResponseDto(updated, { viewerIsCustomer: true });
   }
 
   async completeOrder(orderId: string, driverId: string): Promise<OrderResponseDto> {
@@ -1425,14 +1517,14 @@ export class OrdersService {
       const resumedTimer = this.buildResumedTimerUpdate(order);
       const nextStatus =
         resumedTimer.cancelTimerRemainingSeconds <= 0
-          ? OrderStatus.CANCELLED
+          ? ('AUTO_CANCELLED' as OrderStatus)
           : OrderStatus.SEARCHING_DRIVER;
       await tx.order.update({
         where: { id: orderId },
         data:
-          nextStatus === OrderStatus.CANCELLED
+          nextStatus === ('AUTO_CANCELLED' as OrderStatus)
             ? {
-                status: OrderStatus.CANCELLED,
+                status: 'AUTO_CANCELLED' as OrderStatus,
                 cancelTimerRemainingSeconds: 0,
                 cancelTimerPausedAt: new Date(),
                 cancelTimerLastResumedAt: null,
@@ -1442,8 +1534,8 @@ export class OrdersService {
                 ...resumedTimer,
               },
       });
-      if (nextStatus === OrderStatus.CANCELLED) {
-        await this.restoreCompanyOrderBudgetOnTerminalStatus(tx, order, 'CANCELLED');
+      if (nextStatus === ('AUTO_CANCELLED' as OrderStatus)) {
+        await this.restoreCompanyOrderBudgetOnTerminalStatus(tx, order, 'AUTO_CANCELLED');
       }
       await tx.chatRoom.updateMany({ where: { orderId, status: 'ACTIVE' }, data: { status: 'CLOSED' } });
     });
@@ -1453,7 +1545,7 @@ export class OrdersService {
       customerUserId: userId,
     });
     const refreshed = await this.prisma.order.findUnique({ where: { id: orderId }, select: { status: true, customer: { select: { userId: true } } } });
-    if (refreshed?.status === OrderStatus.CANCELLED) {
+    if (refreshed?.status === ('AUTO_CANCELLED' as OrderStatus)) {
       this.eventEmitter.emit('order.no_driver_found', {
         orderId,
         customerUserId: refreshed.customer.userId,
@@ -1920,6 +2012,8 @@ export class OrdersService {
       localPickupOnly: !!order.localPickupOnly,
       cancelAfterMinutes: order.cancelAfterMinutes ?? 15,
       cancelRemainingSeconds,
+      cancelTimerRemainingSeconds:
+        typeof order.cancelTimerRemainingSeconds === 'number' ? order.cancelTimerRemainingSeconds : null,
       cancelTimerRunning: order.status === OrderStatus.SEARCHING_DRIVER,
       cancelTimerLastResumedAt: order.cancelTimerLastResumedAt ?? null,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null,
@@ -2022,7 +2116,7 @@ export class OrdersService {
   private async restoreCompanyOrderBudgetOnTerminalStatus(
     tx: any,
     order: any,
-    status: 'CANCELLED' | 'REFUNDED' | 'FAILED',
+    status: 'CANCELLED' | 'AUTO_CANCELLED' | 'REFUNDED' | 'FAILED',
   ) {
     await rollbackDeliveryCompanyOrderFundsInTx(tx, order, status);
   }

@@ -323,14 +323,14 @@ export class DriverAssignmentService {
       const resumedTimer = this.buildResumedTimerUpdate(order);
       const nextStatus =
         resumedTimer.cancelTimerRemainingSeconds <= 0
-          ? OrderStatus.CANCELLED
+          ? ('AUTO_CANCELLED' as OrderStatus)
           : OrderStatus.SEARCHING_DRIVER;
       await tx.order.update({
         where: { id: orderId },
         data:
-          nextStatus === OrderStatus.CANCELLED
+          nextStatus === ('AUTO_CANCELLED' as OrderStatus)
             ? {
-                status: OrderStatus.CANCELLED,
+                status: 'AUTO_CANCELLED' as OrderStatus,
                 cancelTimerRemainingSeconds: 0,
                 cancelTimerPausedAt: new Date(),
                 cancelTimerLastResumedAt: null,
@@ -340,8 +340,8 @@ export class DriverAssignmentService {
                 ...resumedTimer,
               },
       });
-      if (nextStatus === OrderStatus.CANCELLED && order.deliveryCompanyId && order.sourceType === OrderSourceType.DELIVERY_COMPANY) {
-        await rollbackDeliveryCompanyOrderFundsInTx(tx, order, 'CANCELLED');
+      if (nextStatus === ('AUTO_CANCELLED' as OrderStatus) && order.deliveryCompanyId && order.sourceType === OrderSourceType.DELIVERY_COMPANY) {
+        await rollbackDeliveryCompanyOrderFundsInTx(tx, order, 'AUTO_CANCELLED');
       }
       // Close chat room
       await tx.chatRoom.updateMany({ where: { orderId }, data: { status: ChatStatus.CLOSED } });
@@ -380,6 +380,8 @@ export class DriverAssignmentService {
       localPickupOnly: !!order.localPickupOnly,
       cancelAfterMinutes: order.cancelAfterMinutes ?? 15,
       cancelRemainingSeconds: this.computeCancelRemainingSeconds(order),
+      cancelTimerRemainingSeconds:
+        typeof order.cancelTimerRemainingSeconds === 'number' ? order.cancelTimerRemainingSeconds : null,
       cancelTimerRunning: order.status === OrderStatus.SEARCHING_DRIVER,
       cancelTimerLastResumedAt: order.cancelTimerLastResumedAt ?? null,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null, createdAt: order.createdAt,

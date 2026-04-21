@@ -188,7 +188,13 @@ export class OrderResponseDto {
   isNightDelivery: boolean;
   localPickupOnly: boolean;
   cancelAfterMinutes: number;
+  /** Snapshot of remaining seconds at response time (for display). */
   cancelRemainingSeconds: number;
+  /**
+   * Frozen timer budget (seconds) when the cancel timer last resumed; use with
+   * `cancelTimerLastResumedAt` to compute live remaining (matches server logic).
+   */
+  cancelTimerRemainingSeconds: number | null;
   cancelTimerRunning: boolean;
   cancelTimerLastResumedAt: Date | null;
   deliveryZoneType: DeliveryZoneType | null;
