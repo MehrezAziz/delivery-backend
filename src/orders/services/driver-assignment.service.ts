@@ -66,6 +66,11 @@ export class DriverAssignmentService {
           driverRejections: { none: { driverId } },
         },
         include: {
+          customer: {
+            include: {
+              user: { select: { firstName: true, secondName: true, image: true } },
+            },
+          },
           pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
           dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
           pricingPolicy: true,
@@ -373,7 +378,16 @@ export class DriverAssignmentService {
       price: Number(order.price), nightFee: Number(order.nightFee),
       extraWeightFee: Number(order.extraWeightFee), isNightDelivery: order.isNightDelivery,
       localPickupOnly: !!order.localPickupOnly,
+      cancelAfterMinutes: order.cancelAfterMinutes ?? 15,
+      cancelRemainingSeconds: this.computeCancelRemainingSeconds(order),
+      cancelTimerRunning: order.status === OrderStatus.SEARCHING_DRIVER,
+      cancelTimerLastResumedAt: order.cancelTimerLastResumedAt ?? null,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null, createdAt: order.createdAt,
+      customer: order.customer?.user ? {
+        firstName: order.customer.user.firstName ?? null,
+        secondName: order.customer.user.secondName ?? null,
+        image: order.customer.user.image ?? null,
+      } : null,
       pickupAddress: order.pickupAddress ? {
         id: order.pickupAddress.id, street: order.pickupAddress.street,
         latitude: order.pickupAddress.latitude, longitude: order.pickupAddress.longitude,
@@ -478,6 +492,11 @@ export class DriverAssignmentService {
         ...(addressFilter.length > 0 ? { OR: addressFilter } : {}),
       },
       include: {
+        customer: {
+          include: {
+            user: { select: { firstName: true, secondName: true, image: true } },
+          },
+        },
         pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         pricingPolicy: true,
@@ -529,6 +548,11 @@ export class DriverAssignmentService {
         ...(addressFilter.length > 0 ? { OR: addressFilter } : {}),
       },
       include: {
+        customer: {
+          include: {
+            user: { select: { firstName: true, secondName: true, image: true } },
+          },
+        },
         pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
         pricingPolicy: true,
@@ -597,6 +621,11 @@ export class DriverAssignmentService {
       include: {
         order: {
           include: {
+            customer: {
+              include: {
+                user: { select: { firstName: true, secondName: true, image: true } },
+              },
+            },
             pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
             dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
             pricingPolicy: true,
