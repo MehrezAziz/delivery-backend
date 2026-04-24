@@ -70,8 +70,17 @@ export class ScheduledOrderNotificationsService {
       where: {
         pickupAt: { not: null },
         driverAssignment: { isNot: null },
-        /** Pickup nudges only once the driver is confirmed on the order (not while waiting on customer). */
-        status: { in: [OrderStatus.DRIVER_ASSIGNED, OrderStatus.DRIVER_ARRIVED] },
+        /**
+         * Native T−N reminder can fire while waiting on customer (driver already accepted).
+         * Sticky pickup activation still waits until customer approved — see persistent branch below.
+         */
+        status: {
+          in: [
+            OrderStatus.PENDING_CUSTOMER_APPROVAL,
+            OrderStatus.DRIVER_ASSIGNED,
+            OrderStatus.DRIVER_ARRIVED,
+          ],
+        },
       },
       select: {
         id: true,
@@ -127,8 +136,15 @@ export class ScheduledOrderNotificationsService {
         }
       }
 
-      /** Sticky driver tracking update only from pickupOriginalAt onward; single send (atomic claim). */
-      if (row.pickupOriginalAt && row.pickupOriginalAt <= now) {
+      /**
+       * Sticky driver tracking update only from pickupOriginalAt onward; single send (atomic claim).
+       * Not while PENDING_CUSTOMER_APPROVAL — no pickup push until the customer has approved the driver.
+       */
+      if (
+        row.pickupOriginalAt &&
+        row.pickupOriginalAt <= now &&
+        row.status !== OrderStatus.PENDING_CUSTOMER_APPROVAL
+      ) {
         const persistentClaim = await this.prisma.order.updateMany({
           where: {
             id: row.id,

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 /** Progress line for driver persistent notification (same visual language as customer). */
 function driverTrackLine(currentStep: number): string {
@@ -18,7 +19,23 @@ function driverTrackLine(currentStep: number): string {
 
 @Injectable()
 export class OrderNotificationListener {
-  constructor(private notificationsService: NotificationsService) {}
+  constructor(
+    private notificationsService: NotificationsService,
+    private prisma: PrismaService,
+  ) {}
+
+  /**
+   * Sticky driver order tracking (FCM `order:` + ongoing) should only start at pickupOriginalAt
+   * (e.g. T−20 min same delegation), not while waiting on the customer or hours before pickup.
+   */
+  private async shouldDeferDriverStickyOrderPush(orderId: string): Promise<boolean> {
+    const o = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { pickupAt: true, pickupOriginalAt: true },
+    });
+    if (!o?.pickupAt || !o.pickupOriginalAt) return false;
+    return new Date(o.pickupOriginalAt).getTime() > Date.now();
+  }
 
   @OnEvent('order.created')
   async handleOrderCreated(payload: {
@@ -73,21 +90,24 @@ export class OrderNotificationListener {
       ongoing: true,
     });
 
-    await this.notificationsService.send({
-      userId: payload.driverUserId,
-      userType: 'USER',
-      type: NotificationType.DRIVER_ASSIGNED,
-      title: '✅ Customer approved — Head to pickup',
-      body: driverTrackLine(2),
-      relatedEntityType: 'Order',
-      relatedEntityId: payload.orderId,
-      groupKey: `order:${payload.orderId}`,
-      orderStatus: 'DRIVER_ASSIGNED',
-      updateExisting: true,
-      ongoing: true,
-      trackingAudience: 'DRIVER',
-      actionButtons: [{ id: 'driver_mark_arrived', title: "📍 I've arrived", action: 'mark_arrived' }],
-    });
+    const deferDriverSticky = await this.shouldDeferDriverStickyOrderPush(payload.orderId);
+    if (!deferDriverSticky) {
+      await this.notificationsService.send({
+        userId: payload.driverUserId,
+        userType: 'USER',
+        type: NotificationType.DRIVER_ASSIGNED,
+        title: '✅ Customer approved — Head to pickup',
+        body: driverTrackLine(2),
+        relatedEntityType: 'Order',
+        relatedEntityId: payload.orderId,
+        groupKey: `order:${payload.orderId}`,
+        orderStatus: 'DRIVER_ASSIGNED',
+        updateExisting: true,
+        ongoing: true,
+        trackingAudience: 'DRIVER',
+        actionButtons: [{ id: 'driver_mark_arrived', title: "📍 I've arrived", action: 'mark_arrived' }],
+      });
+    }
   }
 
   @OnEvent('order.pending_customer_approval')
@@ -118,21 +138,24 @@ export class OrderNotificationListener {
       ],
     });
 
-    await this.notificationsService.send({
-      userId: payload.driverUserId,
-      userType: 'USER',
-      type: NotificationType.DRIVER_ASSIGNED,
-      title: '⏳ Waiting for customer approval',
-      body: driverTrackLine(1),
-      relatedEntityType: 'Order',
-      relatedEntityId: payload.orderId,
-      groupKey: `order:${payload.orderId}`,
-      orderStatus: 'PENDING_CUSTOMER_APPROVAL',
-      updateExisting: true,
-      ongoing: true,
-      trackingAudience: 'DRIVER',
-      actionButtons: [{ id: 'driver_contact_customer', title: '💬 Contact customer', action: 'contact_customer' }],
-    });
+    const deferDriverSticky = await this.shouldDeferDriverStickyOrderPush(payload.orderId);
+    if (!deferDriverSticky) {
+      await this.notificationsService.send({
+        userId: payload.driverUserId,
+        userType: 'USER',
+        type: NotificationType.DRIVER_ASSIGNED,
+        title: '⏳ Waiting for customer approval',
+        body: driverTrackLine(1),
+        relatedEntityType: 'Order',
+        relatedEntityId: payload.orderId,
+        groupKey: `order:${payload.orderId}`,
+        orderStatus: 'PENDING_CUSTOMER_APPROVAL',
+        updateExisting: true,
+        ongoing: true,
+        trackingAudience: 'DRIVER',
+        actionButtons: [{ id: 'driver_contact_customer', title: '💬 Contact customer', action: 'contact_customer' }],
+      });
+    }
   }
 
   @OnEvent('order.driver_arrived')
