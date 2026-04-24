@@ -393,6 +393,8 @@ export class DriverAssignmentService {
       pickupReminderAt: order.pickupReminderAt ?? null,
       pickupRemainingSeconds: order.pickupAt ? Math.max(0, Math.floor((new Date(order.pickupAt).getTime() - Date.now()) / 1000)) : null,
       canDriverControlPickupPersistent: order.pickupOriginalAt ? new Date(order.pickupOriginalAt).getTime() > Date.now() : null,
+      driverPickupPersistentSentAt: order.driverPickupPersistentSentAt ?? null,
+      driverPickupPersistentIgnoredAt: order.driverPickupPersistentIgnoredAt ?? null,
       driverArrivedOnce: !!order.driverArrivedOnce,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null, createdAt: order.createdAt,
       customer: order.customer?.user ? {

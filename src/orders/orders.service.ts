@@ -1834,6 +1834,13 @@ export class OrdersService {
       });
       return { message: 'Persistent pickup notification ignored until original time.' };
     }
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        driverPickupPersistentSentAt: new Date(),
+        driverPickupPersistentIgnoredAt: null,
+      },
+    });
     await this.notificationsService.send({
       userId: order.driverAssignment.driver.userId,
       userType: 'USER',
@@ -1845,15 +1852,8 @@ export class OrdersService {
       groupKey: `order:${orderId}`,
       updateExisting: true,
       ongoing: true,
-      orderStatus: 'DRIVER_ASSIGNED',
+      orderStatus: order.status,
       trackingAudience: 'DRIVER',
-    });
-    await this.prisma.order.update({
-      where: { id: orderId },
-      data: {
-        driverPickupPersistentSentAt: new Date(),
-        driverPickupPersistentIgnoredAt: null,
-      },
     });
     return { message: 'Persistent pickup notification shown.' };
   }
@@ -2188,6 +2188,8 @@ export class OrdersService {
       pickupReminderAt: order.pickupReminderAt ?? null,
       pickupRemainingSeconds: viewerIsAssignedDriver ? null : pickupRemainingSeconds,
       canDriverControlPickupPersistent,
+      driverPickupPersistentSentAt: order.driverPickupPersistentSentAt ?? null,
+      driverPickupPersistentIgnoredAt: order.driverPickupPersistentIgnoredAt ?? null,
       driverArrivedOnce: !!order.driverArrivedOnce,
       pickupAddress: order.pickupAddress ? {
         id: order.pickupAddress.id, street: order.pickupAddress.street,

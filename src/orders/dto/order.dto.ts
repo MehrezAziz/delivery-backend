@@ -257,6 +257,9 @@ export class OrderResponseDto {
   pickupReminderAt?: Date | null;
   pickupRemainingSeconds?: number | null;
   canDriverControlPickupPersistent?: boolean | null;
+  /** Set when the driver taps "Show persistent now" or when the scheduled pickup window activates. */
+  driverPickupPersistentSentAt?: Date | null;
+  driverPickupPersistentIgnoredAt?: Date | null;
   driverArrivedOnce?: boolean;
 }
 
