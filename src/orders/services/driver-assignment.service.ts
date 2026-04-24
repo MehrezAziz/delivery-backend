@@ -311,6 +311,9 @@ export class DriverAssignmentService {
     if (order.status !== OrderStatus.DRIVER_ASSIGNED && (order.status as string) !== 'PENDING_CUSTOMER_APPROVAL') {
       throw new BadRequestException('Order is not in assigned state');
     }
+    if (order.driverArrivedOnce) {
+      throw new BadRequestException('Assignment cancellation is locked after arrival for security reasons');
+    }
 
     const isCustomer = order.customer.userId === userId;
     const isDriver = order.driverAssignment?.driver.userId === userId;
@@ -384,6 +387,13 @@ export class DriverAssignmentService {
         typeof order.cancelTimerRemainingSeconds === 'number' ? order.cancelTimerRemainingSeconds : null,
       cancelTimerRunning: order.status === OrderStatus.SEARCHING_DRIVER,
       cancelTimerLastResumedAt: order.cancelTimerLastResumedAt ?? null,
+      publishAt: order.publishAt ?? order.createdAt,
+      pickupAt: order.pickupAt ?? null,
+      pickupOriginalAt: order.pickupOriginalAt ?? null,
+      pickupReminderAt: order.pickupReminderAt ?? null,
+      pickupRemainingSeconds: order.pickupAt ? Math.max(0, Math.floor((new Date(order.pickupAt).getTime() - Date.now()) / 1000)) : null,
+      canDriverControlPickupPersistent: order.pickupOriginalAt ? new Date(order.pickupOriginalAt).getTime() > Date.now() : null,
+      driverArrivedOnce: !!order.driverArrivedOnce,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null, createdAt: order.createdAt,
       customer: order.customer?.user ? {
         firstName: order.customer.user.firstName ?? null,

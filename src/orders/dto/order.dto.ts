@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max, ValidateIf } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max, ValidateIf, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaymentType, OrderStatus, DeliveryZoneType, OrderSourceType } from '@prisma/client';
 
@@ -48,6 +48,14 @@ export class CreateOrderDto {
   @Min(0)
   @Max(10000)
   customerExtraAmount?: number;
+
+  @IsOptional()
+  @IsDateString()
+  publishAt?: string;
+
+  @IsOptional()
+  @IsDateString()
+  pickupAt?: string;
 }
 
 export class UpdateCancelAfterDto {
@@ -193,6 +201,7 @@ export class OrderResponseDto {
   /**
    * Frozen timer budget (seconds) when the cancel timer last resumed; use with
    * `cancelTimerLastResumedAt` to compute live remaining (matches server logic).
+   * For scheduled drafts, the timer stays paused until publish; then the window starts at `publishAt`.
    */
   cancelTimerRemainingSeconds: number | null;
   cancelTimerRunning: boolean;
@@ -242,6 +251,13 @@ export class OrderResponseDto {
     driverResponse: string | null;
     driverRespondedAt: Date | null;
   } | null;
+  publishAt?: Date;
+  pickupAt?: Date | null;
+  pickupOriginalAt?: Date | null;
+  pickupReminderAt?: Date | null;
+  pickupRemainingSeconds?: number | null;
+  canDriverControlPickupPersistent?: boolean | null;
+  driverArrivedOnce?: boolean;
 }
 
 export class AvailableOrdersResponseDto {

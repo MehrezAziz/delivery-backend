@@ -70,6 +70,16 @@ export class OrdersController {
     return this.ordersService.updateCancelAfterMinutes(orderId, user.id, dto.cancelAfterMinutes);
   }
 
+  @Patch(':id/schedule')
+  @UseGuards(CustomerGuard)
+  async updateSchedule(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body() body: { publishAt?: string; pickupAt?: string | null },
+  ) {
+    return this.ordersService.updateOrderSchedule(orderId, user.id, body);
+  }
+
   @Delete(':id')
   @UseGuards(CustomerGuard)
   async cancelOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: CancelOrderDto) {
@@ -263,6 +273,15 @@ export class DriverOrdersController {
   @Post(':id/cancel-assignment')
   async cancelAssignment(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string, @Body() dto: CancelOrderDto) {
     return this.driverAssignmentService.cancelAssignment(orderId, user.id, dto.reason);
+  }
+
+  @Post(':id/pickup-persistent')
+  async controlPickupPersistent(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body() body: { action: 'show' | 'ignore' },
+  ) {
+    return this.ordersService.driverControlPickupPersistentNotification(orderId, user.profileId, body.action);
   }
 
   @Post(':id/order-driver-rejection-response')

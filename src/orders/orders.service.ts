@@ -72,6 +72,47 @@ export class OrdersService {
     return Math.round(n * 100) / 100;
   }
 
+  private resolvePublishAt(raw?: string): Date {
+    if (!raw) return new Date();
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) throw new BadRequestException('Invalid publish date/time');
+    return dt;
+  }
+
+  private resolvePickupAt(raw?: string): Date | null {
+    if (!raw) return null;
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) throw new BadRequestException('Invalid pickup date/time');
+    return dt;
+  }
+
+  private getPickupWindows(zoneType?: string | null): { persistentMinutesBefore: number; reminderMinutesBefore: number } {
+    if (zoneType === 'SAME_DELEGATION') {
+      return { persistentMinutesBefore: 20, reminderMinutesBefore: 60 };
+    }
+    if (zoneType === 'SAME_GOVERNORATE') {
+      return { persistentMinutesBefore: 30, reminderMinutesBefore: 120 };
+    }
+    if (zoneType === 'DIFFERENT_GOVERNORATE') {
+      return { persistentMinutesBefore: 30, reminderMinutesBefore: 120 };
+    }
+    if (zoneType === 'DIFFERENT_COUNTRY') {
+      return { persistentMinutesBefore: 60, reminderMinutesBefore: 300 };
+    }
+    return { persistentMinutesBefore: 30, reminderMinutesBefore: 120 };
+  }
+
+  private buildPickupSchedule(pickupAt: Date | null, zoneType?: string | null) {
+    if (!pickupAt) {
+      return { pickupOriginalAt: null, pickupReminderAt: null };
+    }
+    const w = this.getPickupWindows(zoneType);
+    return {
+      pickupOriginalAt: new Date(pickupAt.getTime() - w.persistentMinutesBefore * 60_000),
+      pickupReminderAt: new Date(pickupAt.getTime() - w.reminderMinutesBefore * 60_000),
+    };
+  }
+
   /**
    * Determine if it's night time (20:00-06:00) in the given country
    */
@@ -232,6 +273,12 @@ export class OrdersService {
     const extra = this.normalizeCustomerExtraAmount(dto.customerExtraAmount);
     const calculatedPrice = priceCalc.totalPrice;
     const finalPrice = Math.round((calculatedPrice + extra) * 100) / 100;
+    const publishAt = this.resolvePublishAt(dto.publishAt);
+    const pickupAt = this.resolvePickupAt(dto.pickupAt);
+    if (pickupAt && pickupAt.getTime() <= Date.now()) {
+      throw new BadRequestException('Pickup time must be in the future');
+    }
+    const pickupSchedule = this.buildPickupSchedule(pickupAt, priceCalc.deliveryZoneType);
 
     const defaultCancelAfterMinutes = localPickup ? 5 : 15;
     const maxCancelAfterMinutes = localPickup ? 240 : 1440;
@@ -252,6 +299,10 @@ export class OrdersService {
       throw new BadRequestException('Insufficient wallet balance');
     }
 
+    const isScheduledPublish = publishAt.getTime() > Date.now();
+    /** DRAFT: timer paused until publish — cancel countdown starts at `publishAt`, not at order creation. */
+    const cancelTimerPausedForDraft = isScheduledPublish && !shouldAutoCancelImmediately;
+    const cancelSecs = requestedCancelAfterMinutes * 60;
     const order = await this.prisma.order.create({
       data: {
         customerId: customer.id,
@@ -259,7 +310,9 @@ export class OrdersService {
         pickupAddressId: dto.pickupAddressId,
         dropoffAddressId: localPickup ? null : dto.dropoffAddressId,
         localPickupOnly: localPickup,
-        status: shouldAutoCancelImmediately ? ('AUTO_CANCELLED' as OrderStatus) : OrderStatus.SEARCHING_DRIVER,
+        status: shouldAutoCancelImmediately
+          ? ('AUTO_CANCELLED' as OrderStatus)
+          : (isScheduledPublish ? OrderStatus.DRAFT : OrderStatus.SEARCHING_DRIVER),
         paymentType: dto.paymentType,
         description: dto.description,
         weight: dto.weight,
@@ -267,13 +320,17 @@ export class OrdersService {
         price: finalPrice,
         sourceType: OrderSourceType.NORMAL_CUSTOMER,
         customerExtraAmount: extra,
+        publishAt,
+        pickupAt,
+        pickupOriginalAt: pickupSchedule.pickupOriginalAt,
+        pickupReminderAt: pickupSchedule.pickupReminderAt,
         nightFee: priceCalc.nightFee,
         extraWeightFee: priceCalc.extraWeightFee,
         isNightDelivery: isNight,
         cancelAfterMinutes: requestedCancelAfterMinutes,
-        cancelTimerRemainingSeconds: shouldAutoCancelImmediately ? 0 : requestedCancelAfterMinutes * 60,
-        cancelTimerLastResumedAt: shouldAutoCancelImmediately ? null : new Date(),
-        cancelTimerPausedAt: shouldAutoCancelImmediately ? new Date() : null,
+        cancelTimerRemainingSeconds: shouldAutoCancelImmediately ? 0 : cancelSecs,
+        cancelTimerLastResumedAt: shouldAutoCancelImmediately ? null : cancelTimerPausedForDraft ? null : new Date(),
+        cancelTimerPausedAt: shouldAutoCancelImmediately ? new Date() : cancelTimerPausedForDraft ? new Date() : null,
       },
       include: this.orderInclude(),
     });
@@ -282,7 +339,7 @@ export class OrdersService {
         orderId: order.id,
         customerUserId: userId,
       });
-    } else {
+    } else if (!isScheduledPublish) {
       this.eventEmitter.emit('order.created', {
         orderId: order.id,
         customerId: customer.id,
@@ -907,6 +964,7 @@ export class OrdersService {
     }
     if (newStatus === OrderStatus.DRIVER_ARRIVED) {
       Object.assign(orderUpdateData, this.buildPausedTimerUpdate(order));
+      orderUpdateData.driverArrivedOnce = true;
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: orderUpdateData, include: this.orderInclude() });
     if (newStatus === OrderStatus.RETURN_DEPOSIT) {
@@ -1703,6 +1761,103 @@ export class OrdersService {
     return { message: 'Return deposit feedback saved', feedback: saved };
   }
 
+  async updateOrderSchedule(orderId: string, userId: string, payload: { publishAt?: string; pickupAt?: string | null }) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: true,
+        pickupAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+        dropoffAddress: { include: { delegation: { include: { governorate: { include: { country: true } } } } } },
+        pricingPolicy: true,
+      },
+    }) as any;
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (order.status !== OrderStatus.DRAFT) {
+      throw new BadRequestException('Schedule can only be edited while the order is in draft (before it is published to drivers).');
+    }
+    const publishAt = payload.publishAt ? this.resolvePublishAt(payload.publishAt) : (order.publishAt ?? order.createdAt);
+    const pickupAt = payload.pickupAt === null ? null : (payload.pickupAt ? this.resolvePickupAt(payload.pickupAt) : order.pickupAt);
+    if (pickupAt && pickupAt.getTime() <= Date.now()) {
+      throw new BadRequestException('Pickup time must be in the future');
+    }
+    const zoneType = order.pricingPolicy?.deliveryZoneType ?? null;
+    const pickupSchedule = this.buildPickupSchedule(pickupAt, zoneType);
+    const cancelMins = Math.max(1, Number(order.cancelAfterMinutes ?? 15));
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        publishAt,
+        pickupAt,
+        pickupOriginalAt: pickupSchedule.pickupOriginalAt,
+        pickupReminderAt: pickupSchedule.pickupReminderAt,
+        driverPickupReminderSentAt: null,
+        driverPickupPersistentSentAt: null,
+        driverPickupPersistentIgnoredAt: null,
+        /** Still draft: keep full cancel budget; countdown only starts after publish. */
+        cancelTimerRemainingSeconds: cancelMins * 60,
+        cancelTimerLastResumedAt: null,
+        cancelTimerPausedAt: new Date(),
+      },
+      include: this.orderInclude(),
+    });
+    return this.mapToResponseDto(updated, { viewerIsCustomer: true });
+  }
+
+  async driverControlPickupPersistentNotification(
+    orderId: string,
+    driverId: string,
+    action: 'show' | 'ignore',
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { driverAssignment: { include: { driver: true } } },
+    }) as any;
+    if (!order) throw new NotFoundException('Order not found');
+    if (!order.driverAssignment || order.driverAssignment.driverId !== driverId) {
+      throw new ForbiddenException('Not your assigned order');
+    }
+    if (!order.pickupOriginalAt) throw new BadRequestException('No pickup schedule for this order');
+    if (new Date(order.pickupOriginalAt).getTime() <= Date.now()) {
+      throw new BadRequestException('You can control persistent pickup notification only before original time');
+    }
+    if (action === 'ignore') {
+      const orig = order.pickupOriginalAt ? new Date(order.pickupOriginalAt) : null;
+      const beforeScheduledPersistentWindow = orig && orig.getTime() > Date.now();
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: {
+          driverPickupPersistentIgnoredAt: new Date(),
+          /** Undo early "Show persistent now" so the scheduled window can still fire once. */
+          ...(beforeScheduledPersistentWindow ? { driverPickupPersistentSentAt: null } : {}),
+        },
+      });
+      return { message: 'Persistent pickup notification ignored until original time.' };
+    }
+    await this.notificationsService.send({
+      userId: order.driverAssignment.driver.userId,
+      userType: 'USER',
+      type: NotificationType.PICKUP_REMINDER,
+      title: 'Pickup reminder',
+      body: 'Persistent pickup notification enabled for this order.',
+      relatedEntityType: 'Order',
+      relatedEntityId: orderId,
+      groupKey: `order:${orderId}`,
+      updateExisting: true,
+      ongoing: true,
+      orderStatus: 'DRIVER_ASSIGNED',
+      trackingAudience: 'DRIVER',
+    });
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        driverPickupPersistentSentAt: new Date(),
+        driverPickupPersistentIgnoredAt: null,
+      },
+    });
+    return { message: 'Persistent pickup notification shown.' };
+  }
+
   /**
    * When return-deposit feedback flags a package condition issue, open a dispute for CS
    * (order stays RETURN_DEPOSIT — no status regression).
@@ -1996,6 +2151,15 @@ export class OrdersService {
   ): OrderResponseDto {
     const cancelRemainingSeconds = this.computeCancelRemainingSeconds(order);
     const latestChatRoom = (order.chatRooms || [])[0] || null;
+    const pickupRemainingSeconds =
+      order.pickupAt && new Date(order.pickupAt).getTime() > Date.now()
+        ? Math.floor((new Date(order.pickupAt).getTime() - Date.now()) / 1000)
+        : null;
+    const viewerIsAssignedDriver =
+      !!opts?.viewerUserId && order.driverAssignment?.driver?.userId === opts.viewerUserId;
+    const canDriverControlPickupPersistent =
+      !!order.pickupOriginalAt &&
+      new Date(order.pickupOriginalAt).getTime() > Date.now();
     return {
       id: order.id, customerId: order.customerId, status: order.status, paymentType: order.paymentType,
       sourceType: order.sourceType,
@@ -2018,6 +2182,13 @@ export class OrdersService {
       cancelTimerLastResumedAt: order.cancelTimerLastResumedAt ?? null,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null,
       createdAt: order.createdAt,
+      publishAt: order.publishAt ?? order.createdAt,
+      pickupAt: order.pickupAt ?? null,
+      pickupOriginalAt: order.pickupOriginalAt ?? null,
+      pickupReminderAt: order.pickupReminderAt ?? null,
+      pickupRemainingSeconds: viewerIsAssignedDriver ? null : pickupRemainingSeconds,
+      canDriverControlPickupPersistent,
+      driverArrivedOnce: !!order.driverArrivedOnce,
       pickupAddress: order.pickupAddress ? {
         id: order.pickupAddress.id, street: order.pickupAddress.street,
         nickname: order.pickupAddress.nickname ?? null,

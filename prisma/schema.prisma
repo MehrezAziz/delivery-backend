@@ -886,6 +886,22 @@ model Order {
   localPickupOnly   Boolean     @default(false) @map("local_pickup_only")
   /// Optional extra amount chosen by customer (e.g. long errand / service time). Charged price = calculated + this.
   customerExtraAmount Decimal   @default(0) @db.Decimal(10, 2) @map("customer_extra_amount")
+  /// When the order should become visible/searchable (default now at creation).
+  publishAt         DateTime    @default(now()) @map("publish_at")
+  /// Optional pickup appointment chosen by customer.
+  pickupAt          DateTime?   @map("pickup_at")
+  /// Computed original time when driver persistent pickup notification must start.
+  pickupOriginalAt  DateTime?   @map("pickup_original_at")
+  /// Computed native reminder time for driver before pickup.
+  pickupReminderAt  DateTime?   @map("pickup_reminder_at")
+  /// One-shot marker: native reminder was sent to driver.
+  driverPickupReminderSentAt DateTime? @map("driver_pickup_reminder_sent_at")
+  /// One-shot marker: persistent pickup notification was sent to driver.
+  driverPickupPersistentSentAt DateTime? @map("driver_pickup_persistent_sent_at")
+  /// Driver ignored persistent pickup notification before original time.
+  driverPickupPersistentIgnoredAt DateTime? @map("driver_pickup_persistent_ignored_at")
+  /// Security lock: true once driver reached ARRIVED at least once.
+  driverArrivedOnce Boolean @default(false) @map("driver_arrived_once")
   guestCheckout     Boolean     @default(false) @map("guest_checkout")
   trackingToken     String?     @unique @map("tracking_token")
   trackingExpiresAt DateTime?   @map("tracking_expires_at")
@@ -922,6 +938,8 @@ model Order {
   @@index([deliveryCompanyDepartmentId, status])
   @@index([deliveryCompanyDepartmentAccountId])
   @@index([status, createdAt])
+  @@index([publishAt, status])
+  @@index([pickupAt, status])
   @@map("orders")
 }
 
