@@ -98,6 +98,9 @@ export class FirebaseService implements OnModuleInit {
           },
         };
       } else {
+        const isChatMessageNotification =
+          dataPayload.type === 'NEW_MESSAGE_FROM_DRIVER' ||
+          dataPayload.type === 'NEW_MESSAGE_FROM_CUSTOMER';
         const threadId =
           payload.threadId ||
           payload.groupKey ||
@@ -120,11 +123,11 @@ export class FirebaseService implements OnModuleInit {
           },
           android: {
             priority: 'high',
-            ...(threadId ? { collapseKey: threadId.slice(0, 128) } : {}),
+            ...(!isChatMessageNotification && threadId ? { collapseKey: threadId.slice(0, 128) } : {}),
             notification: {
-              channelId: 'default',
+              channelId: isChatMessageNotification ? 'chat-messages' : 'default',
               sound: 'default',
-              ...(androidTag ? { tag: androidTag } : {}),
+              ...(!isChatMessageNotification && androidTag ? { tag: androidTag } : {}),
             },
           },
           apns: {
