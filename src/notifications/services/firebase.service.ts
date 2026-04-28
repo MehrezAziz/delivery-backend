@@ -56,7 +56,10 @@ export class FirebaseService implements OnModuleInit {
 
     try {
       const isOrderNotification = payload.groupKey?.startsWith('order:');
-      const orderId = isOrderNotification && payload.groupKey ? payload.groupKey.replace('order:', '') : undefined;
+      const orderId =
+        isOrderNotification && payload.groupKey
+          ? payload.groupKey.replace(/^order:/, '').split(':')[0]
+          : undefined;
 
       const dataPayload: Record<string, string> = {
         ...payload.data,
@@ -125,7 +128,8 @@ export class FirebaseService implements OnModuleInit {
             priority: 'high',
             ...(!isChatMessageNotification && threadId ? { collapseKey: threadId.slice(0, 128) } : {}),
             notification: {
-              channelId: isChatMessageNotification ? 'chat-messages' : 'default',
+              // Route chat to the high-importance stable channel for better closed-app delivery consistency.
+              channelId: isChatMessageNotification ? 'order-updates' : 'default',
               sound: 'default',
               ...(!isChatMessageNotification && androidTag ? { tag: androidTag } : {}),
             },
