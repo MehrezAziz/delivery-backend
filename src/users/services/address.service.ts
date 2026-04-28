@@ -5,6 +5,7 @@ import { CreateAddressDto, UpdateAddressDto, AddressResponseDto } from '../dto/a
 @Injectable()
 export class AddressService {
   constructor(private readonly prisma: PrismaService) {}
+  private static readonly MAIN_NICKNAME = 'MAIN';
 
   async createAddress(userId: string | null, dto: CreateAddressDto): Promise<AddressResponseDto> {
     // Validate delegation exists
@@ -16,24 +17,44 @@ export class AddressService {
       throw new BadRequestException('Invalid delegation ID');
     }
 
-    const address = await this.prisma.address.create({
-      data: {
-        ...(userId ? { userId } : {}),
-        latitude: dto.latitude,
-        longitude: dto.longitude,
-        street: dto.street,
-        nickname: dto.nickname?.trim() || null,
-        delegationId: dto.delegationId,
-      },
-      include: {
-        delegation: {
-          include: {
-            governorate: {
-              include: { country: true },
+    const nickname = dto.nickname?.trim() || null;
+    const wantsMain = nickname?.toUpperCase() === AddressService.MAIN_NICKNAME;
+    const userAddressCount = userId ? await this.prisma.address.count({ where: { userId } }) : 0;
+    const hasMainAddress = userId
+      ? !!(await this.prisma.address.findFirst({
+          where: { userId, nickname: AddressService.MAIN_NICKNAME },
+          select: { id: true },
+        }))
+      : false;
+    const shouldBeMain = !!userId && (wantsMain || userAddressCount === 0 || !hasMainAddress);
+
+    const address = await this.prisma.$transaction(async (tx) => {
+      if (shouldBeMain && userId) {
+        await tx.address.updateMany({
+          where: { userId, nickname: AddressService.MAIN_NICKNAME },
+          data: { nickname: null },
+        });
+      }
+
+      return tx.address.create({
+        data: {
+          ...(userId ? { userId } : {}),
+          latitude: dto.latitude,
+          longitude: dto.longitude,
+          street: dto.street,
+          nickname: shouldBeMain ? AddressService.MAIN_NICKNAME : nickname,
+          delegationId: dto.delegationId,
+        },
+        include: {
+          delegation: {
+            include: {
+              governorate: {
+                include: { country: true },
+              },
             },
           },
         },
-      },
+      });
     });
 
     return this.mapToResponseDto(address);
@@ -81,18 +102,39 @@ export class AddressService {
       }
     }
 
-    const updatedAddress = await this.prisma.address.update({
-      where: { id: addressId },
-      data: dto,
-      include: {
-        delegation: {
-          include: {
-            governorate: {
-              include: { country: true },
+    const normalizedNickname = dto.nickname?.trim();
+    const wantsMain = normalizedNickname?.toUpperCase() === AddressService.MAIN_NICKNAME;
+    const isDemotingCurrentMain =
+      address.nickname === AddressService.MAIN_NICKNAME &&
+      normalizedNickname !== undefined &&
+      normalizedNickname.toUpperCase() !== AddressService.MAIN_NICKNAME;
+    if (isDemotingCurrentMain) {
+      throw new BadRequestException('MAIN address cannot be unset directly. Set another address as MAIN first.');
+    }
+    const updatedAddress = await this.prisma.$transaction(async (tx) => {
+      if (wantsMain) {
+        await tx.address.updateMany({
+          where: { userId, id: { not: addressId }, nickname: AddressService.MAIN_NICKNAME },
+          data: { nickname: null },
+        });
+      }
+
+      return tx.address.update({
+        where: { id: addressId },
+        data: {
+          ...dto,
+          ...(wantsMain ? { nickname: AddressService.MAIN_NICKNAME } : {}),
+        },
+        include: {
+          delegation: {
+            include: {
+              governorate: {
+                include: { country: true },
+              },
             },
           },
         },
-      },
+      });
     });
 
     return this.mapToResponseDto(updatedAddress);
@@ -110,6 +152,11 @@ export class AddressService {
 
     if (address.userId && address.userId !== userId) {
       throw new ForbiddenException('You do not own this address');
+    }
+
+    // Prevent deleting the MAIN address unless user promotes another address first.
+    if (address.nickname === AddressService.MAIN_NICKNAME) {
+      throw new BadRequestException('MAIN address cannot be deleted. Set another address as MAIN first.');
     }
 
     // Prevent deleting the last address

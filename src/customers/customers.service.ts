@@ -359,6 +359,7 @@ export class CustomersService {
           longitude: null,
           street: dto.address!.street ?? null,
           delegationId: dto.address!.delegationId,
+          nickname: 'MAIN',
           userId,
         },
       });

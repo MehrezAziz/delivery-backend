@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { NotificationType } from '@prisma/client';
+import { CustomerServiceRole, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications.service';
 
 @Injectable()
@@ -55,6 +55,13 @@ export class AccountNotificationListener {
     await this.notificationsService.sendToAllAdmins(NotificationType.DRIVER_DOCUMENTS_SUBMITTED, {
       templateData: { driverName: payload.driverName },
     });
+    await this.notificationsService.sendToCSWithPermission(
+      CustomerServiceRole.VERIFY_ACCOUNTS,
+      NotificationType.DRIVER_DOCUMENTS_SUBMITTED,
+      {
+        templateData: { driverName: payload.driverName },
+      },
+    );
   }
 
   @OnEvent('driver.verification_approved')

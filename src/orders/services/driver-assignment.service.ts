@@ -206,8 +206,8 @@ export class DriverAssignmentService {
       return assignment;
     });
 
-    // Emit pending_customer_approval event for notifications (customer needs to approve)
-    this.eventEmitter.emit('order.pending_customer_approval', {
+    // Emit and await pending_customer_approval notifications so customer gets the update in real time.
+    await this.eventEmitter.emitAsync('order.pending_customer_approval', {
       orderId,
       customerId: order.customerId,
       customerUserId: order.customer.userId,
