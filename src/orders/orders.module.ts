@@ -5,6 +5,7 @@ import { PriceCalculationService } from './services/price-calculation.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { AutoCancelService } from './services/auto-cancel.service';
 import { OrderUrgentNotifyService } from './services/order-urgent-notify.service';
+import { ScheduledOrderPublishService } from './services/scheduled-order-publish.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
@@ -17,6 +18,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     DriverAssignmentService,
     AutoCancelService,
     OrderUrgentNotifyService,
+    ScheduledOrderPublishService,
   ],
   exports: [OrdersService, PriceCalculationService, DriverAssignmentService],
 })

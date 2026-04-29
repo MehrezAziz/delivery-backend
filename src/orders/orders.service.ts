@@ -248,6 +248,25 @@ export class OrdersService {
     }
     const shouldAutoCancelImmediately = requestedCancelAfterMinutes <= 0;
 
+    const minLeadMs = 60 * 1000;
+    const maxLeadMs = 30 * 24 * 60 * 60 * 1000;
+    let scheduledAt: Date | null = null;
+    let isScheduled = false;
+    if (dto.scheduledPublishAt && !shouldAutoCancelImmediately) {
+      scheduledAt = new Date(dto.scheduledPublishAt);
+      if (Number.isNaN(scheduledAt.getTime())) {
+        throw new BadRequestException('Invalid scheduled publish time');
+      }
+      const t = scheduledAt.getTime();
+      if (t < Date.now() + minLeadMs) {
+        throw new BadRequestException('Publish time must be at least one minute from now');
+      }
+      if (t > Date.now() + maxLeadMs) {
+        throw new BadRequestException('Publish time cannot be more than 30 days ahead');
+      }
+      isScheduled = true;
+    }
+
     if (dto.paymentType === PaymentType.WALLET && Number(customer.wallet!.balance) < finalPrice) {
       throw new BadRequestException('Insufficient wallet balance');
     }
@@ -259,7 +278,12 @@ export class OrdersService {
         pickupAddressId: dto.pickupAddressId,
         dropoffAddressId: localPickup ? null : dto.dropoffAddressId,
         localPickupOnly: localPickup,
-        status: shouldAutoCancelImmediately ? ('AUTO_CANCELLED' as OrderStatus) : OrderStatus.SEARCHING_DRIVER,
+        status: shouldAutoCancelImmediately
+          ? ('AUTO_CANCELLED' as OrderStatus)
+          : isScheduled
+            ? OrderStatus.PENDING_PUBLISH
+            : OrderStatus.SEARCHING_DRIVER,
+        scheduledPublishAt: isScheduled && scheduledAt ? scheduledAt : null,
         paymentType: dto.paymentType,
         description: dto.description,
         weight: dto.weight,
@@ -272,8 +296,8 @@ export class OrdersService {
         isNightDelivery: isNight,
         cancelAfterMinutes: requestedCancelAfterMinutes,
         cancelTimerRemainingSeconds: shouldAutoCancelImmediately ? 0 : requestedCancelAfterMinutes * 60,
-        cancelTimerLastResumedAt: shouldAutoCancelImmediately ? null : new Date(),
-        cancelTimerPausedAt: shouldAutoCancelImmediately ? new Date() : null,
+        cancelTimerLastResumedAt: shouldAutoCancelImmediately ? null : isScheduled ? null : new Date(),
+        cancelTimerPausedAt: shouldAutoCancelImmediately ? new Date() : isScheduled ? new Date() : null,
       },
       include: this.orderInclude(),
     });
@@ -281,6 +305,13 @@ export class OrdersService {
       this.eventEmitter.emit('order.no_driver_found', {
         orderId: order.id,
         customerUserId: userId,
+      });
+    } else if (isScheduled) {
+      this.eventEmitter.emit('order.scheduled_publish', {
+        orderId: order.id,
+        userId,
+        pickupGovernorateId: pickupAddr.delegation.governorateId,
+        scheduledPublishAt: scheduledAt!.toISOString(),
       });
     } else {
       this.eventEmitter.emit('order.created', {
@@ -300,13 +331,68 @@ export class OrdersService {
     }) as any;
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
-    const allowed: OrderStatus[] = [OrderStatus.SEARCHING_DRIVER, 'PENDING_CUSTOMER_APPROVAL' as any, OrderStatus.DRIVER_ASSIGNED, OrderStatus.DRIVER_ARRIVED];
+    const allowed: OrderStatus[] = [
+      OrderStatus.SEARCHING_DRIVER,
+      OrderStatus.PENDING_PUBLISH,
+      'PENDING_CUSTOMER_APPROVAL' as any,
+      OrderStatus.DRIVER_ASSIGNED,
+      OrderStatus.DRIVER_ARRIVED,
+    ];
     if (!allowed.includes(order.status)) throw new BadRequestException('Cannot change payment method after pickup');
     if (dto.paymentType === PaymentType.WALLET) {
       if (!order.customer.wallet) throw new BadRequestException('No digital wallet');
       if (Number(order.customer.wallet.balance) < Number(order.price)) throw new BadRequestException('Insufficient wallet balance');
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: { paymentType: dto.paymentType }, include: this.orderInclude() });
+    return this.mapToResponseDto(updated, { viewerIsCustomer: true });
+  }
+
+  async updateScheduledPublishAt(orderId: string, userId: string, scheduledPublishAtIso: string): Promise<OrderResponseDto> {
+    const order = (await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: true,
+        pickupAddress: { include: { delegation: true } },
+      },
+    })) as any;
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
+    if (order.status !== OrderStatus.PENDING_PUBLISH) {
+      throw new BadRequestException('Schedule can only be changed while the order is waiting to go live');
+    }
+
+    const scheduledAt = new Date(scheduledPublishAtIso);
+    if (Number.isNaN(scheduledAt.getTime())) {
+      throw new BadRequestException('Invalid scheduled publish time');
+    }
+    const minLeadMs = 60 * 1000;
+    const maxLeadMs = 30 * 24 * 60 * 60 * 1000;
+    const t = scheduledAt.getTime();
+    if (t < Date.now() + minLeadMs) {
+      throw new BadRequestException('Publish time must be at least one minute from now');
+    }
+    if (t > Date.now() + maxLeadMs) {
+      throw new BadRequestException('Publish time cannot be more than 30 days ahead');
+    }
+
+    const pickupGovernorateId = order.pickupAddress?.delegation?.governorateId;
+    if (!pickupGovernorateId) {
+      throw new BadRequestException('Order is missing pickup location');
+    }
+
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { scheduledPublishAt: scheduledAt },
+      include: this.orderInclude(),
+    });
+
+    this.eventEmitter.emit('order.scheduled_publish', {
+      orderId: order.id,
+      userId,
+      pickupGovernorateId,
+      scheduledPublishAt: scheduledAt.toISOString(),
+    });
+
     return this.mapToResponseDto(updated, { viewerIsCustomer: true });
   }
 
@@ -317,7 +403,14 @@ export class OrdersService {
     }) as any;
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
-    if (![OrderStatus.SEARCHING_DRIVER, 'PENDING_CUSTOMER_APPROVAL' as any, OrderStatus.DRIVER_ASSIGNED].includes(order.status)) {
+    if (
+      ![
+        OrderStatus.SEARCHING_DRIVER,
+        OrderStatus.PENDING_PUBLISH,
+        'PENDING_CUSTOMER_APPROVAL' as any,
+        OrderStatus.DRIVER_ASSIGNED,
+      ].includes(order.status)
+    ) {
       throw new BadRequestException('Cancel timer can only be changed before pickup');
     }
     if (order.localPickupOnly) {
@@ -331,7 +424,9 @@ export class OrdersService {
     const currentCancelMinutes = order.cancelAfterMinutes ?? 15;
     const nextRemaining = Math.max(0, currentRemaining + ((cancelAfterMinutes - currentCancelMinutes) * 60));
     const now = new Date();
-    const shouldAutoCancelNow = order.status === OrderStatus.SEARCHING_DRIVER && nextRemaining <= 0;
+    const shouldAutoCancelNow =
+      (order.status === OrderStatus.SEARCHING_DRIVER || order.status === OrderStatus.PENDING_PUBLISH) &&
+      nextRemaining <= 0;
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.order.update({
         where: { id: orderId },
@@ -343,12 +438,19 @@ export class OrdersService {
               cancelTimerLastResumedAt: null,
               cancelTimerPausedAt: now,
             }
-          : {
-              cancelAfterMinutes,
-              cancelTimerRemainingSeconds: nextRemaining,
-              cancelTimerLastResumedAt: order.status === OrderStatus.SEARCHING_DRIVER ? now : null,
-              cancelTimerPausedAt: order.status === OrderStatus.SEARCHING_DRIVER ? null : (order.cancelTimerPausedAt ?? now),
-            },
+          : order.status === OrderStatus.PENDING_PUBLISH
+            ? {
+                cancelAfterMinutes,
+                cancelTimerRemainingSeconds: nextRemaining,
+                cancelTimerLastResumedAt: null,
+                cancelTimerPausedAt: order.cancelTimerPausedAt ?? now,
+              }
+            : {
+                cancelAfterMinutes,
+                cancelTimerRemainingSeconds: nextRemaining,
+                cancelTimerLastResumedAt: order.status === OrderStatus.SEARCHING_DRIVER ? now : null,
+                cancelTimerPausedAt: order.status === OrderStatus.SEARCHING_DRIVER ? null : (order.cancelTimerPausedAt ?? now),
+              },
         include: this.orderInclude(),
       });
       if (shouldAutoCancelNow) {
@@ -477,7 +579,11 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { customer: true } });
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
-    if (order.status !== OrderStatus.SEARCHING_DRIVER && order.status !== OrderStatus.DRAFT) {
+    if (
+      order.status !== OrderStatus.SEARCHING_DRIVER &&
+      order.status !== OrderStatus.DRAFT &&
+      order.status !== OrderStatus.PENDING_PUBLISH
+    ) {
       throw new BadRequestException('Order cannot be cancelled at this stage');
     }
     await this.prisma.$transaction(async (tx) => {
@@ -2016,6 +2122,7 @@ export class OrdersService {
         typeof order.cancelTimerRemainingSeconds === 'number' ? order.cancelTimerRemainingSeconds : null,
       cancelTimerRunning: order.status === OrderStatus.SEARCHING_DRIVER,
       cancelTimerLastResumedAt: order.cancelTimerLastResumedAt ?? null,
+      scheduledPublishAt: order.scheduledPublishAt ?? null,
       deliveryZoneType: order.pricingPolicy?.deliveryZoneType || null,
       createdAt: order.createdAt,
       pickupAddress: order.pickupAddress ? {
@@ -2087,6 +2194,9 @@ export class OrdersService {
     const baseRemaining = typeof order.cancelTimerRemainingSeconds === 'number'
       ? order.cancelTimerRemainingSeconds
       : fallback;
+    if (order.status === OrderStatus.PENDING_PUBLISH) {
+      return Math.max(0, baseRemaining);
+    }
     if (order.status !== OrderStatus.SEARCHING_DRIVER) {
       return Math.max(0, baseRemaining);
     }

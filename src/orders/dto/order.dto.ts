@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max, ValidateIf } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsEnum, IsOptional, IsBoolean, IsInt, Min, Max, ValidateIf, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaymentType, OrderStatus, DeliveryZoneType, OrderSourceType } from '@prisma/client';
 
@@ -48,6 +48,11 @@ export class CreateOrderDto {
   @Min(0)
   @Max(10000)
   customerExtraAmount?: number;
+
+  /** ISO 8601 — future instant when the order becomes visible to drivers (min ~1 min from now). */
+  @IsOptional()
+  @IsDateString()
+  scheduledPublishAt?: string;
 }
 
 export class UpdateCancelAfterDto {
@@ -56,6 +61,12 @@ export class UpdateCancelAfterDto {
   @Min(5)
   @Max(1440)
   cancelAfterMinutes: number;
+}
+
+/** Customer reschedules when order is still PENDING_PUBLISH (same rules as create). */
+export class UpdateScheduledPublishDto {
+  @IsDateString()
+  scheduledPublishAt: string;
 }
 
 export class PreviewOrderDto {
@@ -86,6 +97,10 @@ export class PreviewOrderDto {
   @Min(0)
   @Max(10000)
   customerExtraAmount?: number;
+
+  @IsOptional()
+  @IsDateString()
+  scheduledPublishAt?: string;
 }
 
 export class ChangePaymentMethodDto {
@@ -197,6 +212,8 @@ export class OrderResponseDto {
   cancelTimerRemainingSeconds: number | null;
   cancelTimerRunning: boolean;
   cancelTimerLastResumedAt: Date | null;
+  /** When status is PENDING_PUBLISH, drivers see the order starting at this time. */
+  scheduledPublishAt?: Date | string | null;
   deliveryZoneType: DeliveryZoneType | null;
   createdAt: Date;
   pickupAddress: any;

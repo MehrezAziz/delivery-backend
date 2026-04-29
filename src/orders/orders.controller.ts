@@ -3,7 +3,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { DriverAssignmentService } from './services/driver-assignment.service';
 import { OrderUrgentNotifyService } from './services/order-urgent-notify.service';
-import { CreateOrderDto, PreviewOrderDto, CancelOrderDto, ChangePaymentMethodDto, UpdateOrderStatusDto, SendChatMessageDto, CreateDisputeDto, RequestAssistanceDto, RateOrderDto, UpdateCancelAfterDto, ReturnDepositFeedbackDto } from './dto/order.dto';
+import { CreateOrderDto, PreviewOrderDto, CancelOrderDto, ChangePaymentMethodDto, UpdateOrderStatusDto, SendChatMessageDto, CreateDisputeDto, RequestAssistanceDto, RateOrderDto, UpdateCancelAfterDto, UpdateScheduledPublishDto, ReturnDepositFeedbackDto } from './dto/order.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, CustomerGuard, DriverGuard, UserActiveGuard, UserRestrictionGuard, VerifiedDriverGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
@@ -68,6 +68,16 @@ export class OrdersController {
     @Body() dto: UpdateCancelAfterDto,
   ) {
     return this.ordersService.updateCancelAfterMinutes(orderId, user.id, dto.cancelAfterMinutes);
+  }
+
+  @Patch(':id/scheduled-publish')
+  @UseGuards(CustomerGuard, UserActiveGuard, UserRestrictionGuard)
+  async updateScheduledPublish(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body() dto: UpdateScheduledPublishDto,
+  ) {
+    return this.ordersService.updateScheduledPublishAt(orderId, user.id, dto.scheduledPublishAt);
   }
 
   @Delete(':id')

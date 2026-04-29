@@ -53,6 +53,8 @@ enum DriverStatus {
 
 enum OrderStatus {
   DRAFT
+  /// Customer chose a future time — drivers do not see the order until publish.
+  PENDING_PUBLISH
   SEARCHING_DRIVER
   PENDING_CUSTOMER_APPROVAL
   DRIVER_ASSIGNED
@@ -894,6 +896,8 @@ model Order {
   urgentNotifyCycleStartedAt  DateTime? @map("urgent_notify_cycle_started_at")
   urgentNotifyLastButtonAt    DateTime? @map("urgent_notify_last_button_at")
   urgentNotifyCycleId         String?   @map("urgent_notify_cycle_id")
+  /// When status is PENDING_PUBLISH, drivers become eligible at this instant (UTC).
+  scheduledPublishAt DateTime? @map("scheduled_publish_at")
 
   // Relations
   customer            Customer              @relation(fields: [customerId], references: [id])

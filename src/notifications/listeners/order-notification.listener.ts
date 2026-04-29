@@ -20,6 +20,33 @@ function driverTrackLine(currentStep: number): string {
 export class OrderNotificationListener {
   constructor(private notificationsService: NotificationsService) {}
 
+  @OnEvent('order.scheduled_publish')
+  async handleOrderScheduledPublish(payload: {
+    orderId: string;
+    userId: string;
+    pickupGovernorateId: string;
+    scheduledPublishAt: string;
+  }) {
+    const when = new Date(payload.scheduledPublishAt);
+    const body = `Drivers will be notified at ${when.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    })}.`;
+    await this.notificationsService.send({
+      userId: payload.userId,
+      userType: 'USER',
+      type: NotificationType.ORDER_CREATED,
+      title: '📅 Order scheduled',
+      body,
+      relatedEntityType: 'Order',
+      relatedEntityId: payload.orderId,
+      groupKey: `order:${payload.orderId}`,
+      ongoing: true,
+      orderStatus: 'PENDING_PUBLISH',
+      updateExisting: true,
+    });
+  }
+
   @OnEvent('order.created')
   async handleOrderCreated(payload: {
     orderId: string;
@@ -27,7 +54,7 @@ export class OrderNotificationListener {
     userId: string;
     pickupGovernorateId: string;
   }) {
-    // Notify customer
+    // Notify customer (same groupKey as scheduled publish so SEARCHING_DRIVER replaces the draft notification)
     await this.notificationsService.send({
       userId: payload.userId,
       userType: 'USER',
@@ -36,6 +63,8 @@ export class OrderNotificationListener {
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
       ongoing: true,
+      orderStatus: 'SEARCHING_DRIVER',
+      updateExisting: true,
     });
 
     // Customer service only (by pickup governorate); admins are not notified for new orders
