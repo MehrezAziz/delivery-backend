@@ -1360,7 +1360,7 @@ export class OrdersService {
       if (prevStatus === OrderStatus.DRIVER_ASSIGNED) {
         const u = order.driverAssignment.driver.user;
         const driverName = `${u.firstName || ''} ${u.secondName || ''}`.trim() || 'Driver';
-        this.eventEmitter.emit('order.driver_assigned', {
+        await this.eventEmitter.emitAsync('order.driver_assigned', {
           orderId,
           customerId: order.customer.id,
           customerUserId,
@@ -1448,7 +1448,7 @@ export class OrdersService {
         include: { user: { select: { id: true, firstName: true, secondName: true } } },
       });
       if (driverData) {
-        this.eventEmitter.emit('order.driver_assigned', {
+        await this.eventEmitter.emitAsync('order.driver_assigned', {
           orderId,
           customerId: order.customerId,
           customerUserId: userId,

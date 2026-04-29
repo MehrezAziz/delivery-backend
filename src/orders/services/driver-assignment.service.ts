@@ -358,6 +358,24 @@ export class DriverAssignmentService {
       }
     });
 
+    const refreshed = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { status: true, customer: { select: { userId: true } } },
+    });
+    if (refreshed?.customer?.userId) {
+      if (refreshed.status === OrderStatus.SEARCHING_DRIVER) {
+        await this.eventEmitter.emitAsync('order.driver_rejected', {
+          orderId,
+          customerUserId: refreshed.customer.userId,
+        });
+      } else if (String(refreshed.status) === 'AUTO_CANCELLED') {
+        await this.eventEmitter.emitAsync('order.no_driver_found', {
+          orderId,
+          customerUserId: refreshed.customer.userId,
+        });
+      }
+    }
+
     return { message: 'Order assignment cancelled successfully' };
   }
 

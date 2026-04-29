@@ -68,6 +68,7 @@ export class OrderNotificationListener {
       relatedEntityType: 'Order',
       relatedEntityId: payload.orderId,
       groupKey: `order:${payload.orderId}`,
+      orderStatus: 'DRIVER_ASSIGNED',
       templateData: { driverName: payload.driverName, orderStatus: 'DRIVER_ASSIGNED' },
       updateExisting: true,
       ongoing: true,

@@ -222,6 +222,11 @@ export class NotificationsService {
           ? `${dto.relatedEntityType}:${dto.relatedEntityId}`
           : `singleton:${notificationId}`);
 
+      const parsedOrderIdFromGroupKey =
+        dto.groupKey?.startsWith('order:')
+          ? dto.groupKey.replace(/^order:/, '').split(':')[0]
+          : undefined;
+
       const result = await this.firebaseService.sendPush({
         token: user.fcmToken,
         title,
@@ -233,7 +238,7 @@ export class NotificationsService {
           ...(dto.relatedEntityType ? { relatedEntityType: dto.relatedEntityType } : {}),
           ...(dto.relatedEntityId ? { relatedEntityId: dto.relatedEntityId } : {}),
           // Pass orderId separately for Notifee notification ID
-          ...(dto.groupKey?.startsWith('order:') ? { orderId: dto.groupKey.replace('order:', '') } : {}),
+          ...(parsedOrderIdFromGroupKey ? { orderId: parsedOrderIdFromGroupKey } : {}),
           // Pass orderStatus so the frontend dedup map stays in sync
           ...(orderStatus ? { orderStatus } : {}),
           ...(dto.trackingAudience ? { trackingAudience: dto.trackingAudience } : {}),
