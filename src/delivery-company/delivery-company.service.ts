@@ -1759,6 +1759,8 @@ export class DeliveryCompanyService {
     });
     const driverUserId = room?.driver?.user?.id;
     if (driverUserId) {
+      const preview =
+        text.length > 220 ? `${text.slice(0, 217)}...` : text;
       await this.notificationsService.send({
         userId: driverUserId,
         userType: 'USER',
@@ -1766,7 +1768,12 @@ export class DeliveryCompanyService {
         relatedEntityType: 'Order',
         relatedEntityId: orderId,
         groupKey: `chat:${orderId}`,
-        templateData: { customerName: 'Company' },
+        templateData: {
+          customerName: 'Company',
+          messagePreview: preview,
+          messageId: message.id,
+          sentAt: message.timestamp.toISOString(),
+        },
       } as any);
     }
     return {

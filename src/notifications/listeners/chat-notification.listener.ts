@@ -12,6 +12,9 @@ export class ChatNotificationListener {
     orderId: string;
     customerUserId: string;
     driverName?: string;
+    messagePreview: string;
+    messageId: string;
+    sentAt: string;
   }) {
     await this.notificationsService.send({
       userId: payload.customerUserId,
@@ -20,7 +23,12 @@ export class ChatNotificationListener {
       relatedEntityType: 'ChatRoom',
       relatedEntityId: payload.orderId,
       groupKey: `chat:${payload.orderId}`,
-      templateData: { driverName: payload.driverName },
+      templateData: {
+        driverName: payload.driverName,
+        messagePreview: payload.messagePreview,
+        messageId: payload.messageId,
+        sentAt: payload.sentAt,
+      },
     });
   }
 
@@ -29,6 +37,9 @@ export class ChatNotificationListener {
     orderId: string;
     driverUserId: string;
     customerName?: string;
+    messagePreview: string;
+    messageId: string;
+    sentAt: string;
   }) {
     await this.notificationsService.send({
       userId: payload.driverUserId,
@@ -37,7 +48,12 @@ export class ChatNotificationListener {
       relatedEntityType: 'ChatRoom',
       relatedEntityId: payload.orderId,
       groupKey: `chat:${payload.orderId}`,
-      templateData: { customerName: payload.customerName },
+      templateData: {
+        customerName: payload.customerName,
+        messagePreview: payload.messagePreview,
+        messageId: payload.messageId,
+        sentAt: payload.sentAt,
+      },
     });
   }
 }

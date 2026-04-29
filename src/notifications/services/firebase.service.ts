@@ -112,6 +112,12 @@ export class FirebaseService implements OnModuleInit {
             : undefined);
         const androidTag =
           threadId && threadId.length <= 64 ? threadId : threadId?.slice(0, 64);
+        const chatOrderIdForTag =
+          isChatMessageNotification && dataPayload.orderId ? dataPayload.orderId.trim() : '';
+        const chatStableTag =
+          chatOrderIdForTag.length > 0
+            ? `chat_thread_${chatOrderIdForTag}`.slice(0, 64)
+            : '';
 
         // Non-order notifications: standard notification display + stable thread for OS grouping
         message = {
@@ -131,8 +137,8 @@ export class FirebaseService implements OnModuleInit {
               // Must match Notifee `CHANNEL_CHAT` in `delivery-frontend/services/notifications.ts` (`chat-messages`).
               channelId: isChatMessageNotification ? 'chat-messages' : 'default',
               sound: 'default',
-              ...(isChatMessageNotification && dataPayload.notificationId
-                ? { tag: `c_${dataPayload.notificationId}`.slice(0, 64) }
+              ...(isChatMessageNotification && chatStableTag
+                ? { tag: chatStableTag }
                 : !isChatMessageNotification && androidTag
                   ? { tag: androidTag }
                   : {}),

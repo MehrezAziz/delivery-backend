@@ -122,8 +122,8 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
 
   // Customer - Chat
   NEW_MESSAGE_FROM_DRIVER: (d) => ({
-    title: 'New Message',
-    body: `${d?.driverName || 'Your driver'} sent you a message.`,
+    title: String(d?.driverName != null ? d.driverName : 'Driver'),
+    body: String(d?.messagePreview || '').trim() || 'New message',
   }),
 
   // Driver - Order Opportunities
@@ -198,8 +198,8 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
 
   // Driver - Chat
   NEW_MESSAGE_FROM_CUSTOMER: (d) => ({
-    title: 'New Message',
-    body: `${d?.customerName || 'Your customer'} sent you a message.`,
+    title: String(d?.customerName != null ? d.customerName : 'Customer'),
+    body: String(d?.messagePreview || '').trim() || 'New message',
   }),
 
   // Admin - Driver Management

@@ -46,10 +46,11 @@ describe('DeliveryCompanyService', () => {
     calculateLocalPickupOnlyPrice: jest.fn(),
   };
   const mockNotifications: any = { send: jest.fn() };
+  const mockOrdersService: any = {};
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new DeliveryCompanyService(mockPrisma, mockPriceCalc, mockNotifications);
+    service = new DeliveryCompanyService(mockPrisma, mockPriceCalc, mockNotifications, mockOrdersService);
   });
 
   it('throws when company is missing in previewOrder', async () => {

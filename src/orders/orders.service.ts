@@ -1327,18 +1327,32 @@ export class OrdersService {
       },
     });
 
+    const messagePreview = (() => {
+      const text = (content || '').trim();
+      if (text) return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+      if (image) return '📷 Photo';
+      return 'Message';
+    })();
+    const sentAtIso = message.timestamp.toISOString();
+
     // Emit chat notification event
     if (isCust && order.driverAssignment?.driver) {
       this.eventEmitter.emit('chat.new_message_from_customer', {
         orderId,
         driverUserId: order.driverAssignment.driver.userId,
         customerName: `${order.customer.user.firstName || ''} ${order.customer.user.secondName || ''}`.trim(),
+        messagePreview,
+        messageId: message.id,
+        sentAt: sentAtIso,
       });
     } else if (isDrv) {
       this.eventEmitter.emit('chat.new_message_from_driver', {
         orderId,
         customerUserId: order.customer.userId,
         driverName: `${order.driverAssignment!.driver.user.firstName || ''} ${order.driverAssignment!.driver.user.secondName || ''}`.trim(),
+        messagePreview,
+        messageId: message.id,
+        sentAt: sentAtIso,
       });
       if (order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.deliveryCompanyId) {
         const targetCompanyUserId = order.deliveryCompanyDepartmentId || order.deliveryCompanyId;
@@ -1351,7 +1365,12 @@ export class OrdersService {
           relatedEntityType: 'Order',
           relatedEntityId: orderId,
           groupKey: `chat:${orderId}`,
-          templateData: { driverName: driverName || 'Driver' },
+          templateData: {
+            driverName: driverName || 'Driver',
+            messagePreview,
+            messageId: message.id,
+            sentAt: sentAtIso,
+          },
           socketMirrorUserIds: mirror,
         } as any);
         const refreshTargets = [order.deliveryCompanyDepartmentId, order.deliveryCompanyId].filter(

@@ -226,6 +226,23 @@ export class NotificationsService {
         dto.groupKey?.startsWith('order:')
           ? dto.groupKey.replace(/^order:/, '').split(':')[0]
           : undefined;
+      const parsedOrderIdFromChatKey =
+        dto.groupKey?.startsWith('chat:')
+          ? dto.groupKey.replace(/^chat:/, '').split(':')[0]
+          : undefined;
+      const orderIdForPush =
+        parsedOrderIdFromGroupKey || parsedOrderIdFromChatKey || undefined;
+
+      const chatTemplateData: Record<string, string> = {};
+      if (
+        (dto.type === 'NEW_MESSAGE_FROM_DRIVER' || dto.type === 'NEW_MESSAGE_FROM_CUSTOMER') &&
+        dto.templateData
+      ) {
+        for (const [k, v] of Object.entries(dto.templateData)) {
+          if (v === undefined || v === null) continue;
+          chatTemplateData[k] = typeof v === 'string' ? v : String(v);
+        }
+      }
 
       const result = await this.firebaseService.sendPush({
         token: user.fcmToken,
@@ -237,8 +254,9 @@ export class NotificationsService {
           type: dto.type,
           ...(dto.relatedEntityType ? { relatedEntityType: dto.relatedEntityType } : {}),
           ...(dto.relatedEntityId ? { relatedEntityId: dto.relatedEntityId } : {}),
-          // Pass orderId separately for Notifee notification ID
-          ...(parsedOrderIdFromGroupKey ? { orderId: parsedOrderIdFromGroupKey } : {}),
+          // Pass orderId for order: and chat: group keys (Notifee / client thread grouping)
+          ...(orderIdForPush ? { orderId: orderIdForPush } : {}),
+          ...chatTemplateData,
           // Pass orderStatus so the frontend dedup map stays in sync
           ...(orderStatus ? { orderStatus } : {}),
           ...(dto.trackingAudience ? { trackingAudience: dto.trackingAudience } : {}),
