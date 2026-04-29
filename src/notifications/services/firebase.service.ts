@@ -128,16 +128,28 @@ export class FirebaseService implements OnModuleInit {
             priority: 'high',
             ...(!isChatMessageNotification && threadId ? { collapseKey: threadId.slice(0, 128) } : {}),
             notification: {
-              // Route chat to the high-importance stable channel for better closed-app delivery consistency.
-              channelId: isChatMessageNotification ? 'order-updates' : 'default',
+              // Must match Notifee `CHANNEL_CHAT` in `delivery-frontend/services/notifications.ts` (`chat-messages`).
+              channelId: isChatMessageNotification ? 'chat-messages' : 'default',
               sound: 'default',
-              ...(!isChatMessageNotification && androidTag ? { tag: androidTag } : {}),
+              ...(isChatMessageNotification && dataPayload.notificationId
+                ? { tag: `c_${dataPayload.notificationId}`.slice(0, 64) }
+                : !isChatMessageNotification && androidTag
+                  ? { tag: androidTag }
+                  : {}),
             },
           },
+          // Without `aps.alert`, iOS treats this as silent — customer never saw chat banners. Keep in sync with `notification` title/body.
           apns: {
-            headers: { 'apns-priority': '10' },
+            headers: {
+              'apns-priority': '10',
+              'apns-push-type': 'alert',
+            },
             payload: {
               aps: {
+                alert: {
+                  title: payload.title,
+                  body: payload.body,
+                },
                 sound: 'default',
                 ...(threadId ? { 'thread-id': threadId } : {}),
               },
