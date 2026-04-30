@@ -79,6 +79,9 @@ export class FirebaseService implements OnModuleInit {
       if (isOrderNotification) {
         // Order notifications must be DATA-ONLY so the app controls a single
         // persistent notification per order (instead of Android creating native ones).
+        // IMPORTANT (Android): do not add a top-level `notification` field — when it is
+        // present, the OS may not deliver the message to the JS background handler while
+        // backgrounded/killed, so Notifee cannot update the ongoing order notification.
         message = {
           token: payload.token,
           // No `notification` field for order updates
@@ -112,20 +115,12 @@ export class FirebaseService implements OnModuleInit {
             : undefined);
         const androidTag =
           threadId && threadId.length <= 64 ? threadId : threadId?.slice(0, 64);
-        const chatOrderIdForTag =
-          isChatMessageNotification && dataPayload.orderId ? dataPayload.orderId.trim() : '';
-        const chatStableTag =
-          chatOrderIdForTag.length > 0
-            ? `chat_thread_${chatOrderIdForTag}`.slice(0, 64)
-            : '';
 
-        // Non-order notifications: standard notification display + stable thread for OS grouping
+        // Chat + other non-order pushes: DATA-ONLY on Android so `setBackgroundMessageHandler`
+        // runs when the app is backgrounded/killed; the app shows Notifee (chat) / tray logic.
+        // iOS still gets a visible alert via `aps.alert` below (no dependency on top-level `notification`).
         message = {
           token: payload.token,
-          notification: {
-            title: payload.title,
-            body: payload.body,
-          },
           data: {
             ...dataPayload,
             ...(threadId ? { threadId } : {}),
@@ -133,18 +128,8 @@ export class FirebaseService implements OnModuleInit {
           android: {
             priority: 'high',
             ...(!isChatMessageNotification && threadId ? { collapseKey: threadId.slice(0, 128) } : {}),
-            notification: {
-              // Must match Notifee `CHANNEL_CHAT` in `delivery-frontend/services/notifications.ts` (`chat-messages`).
-              channelId: isChatMessageNotification ? 'chat-messages' : 'default',
-              sound: 'default',
-              ...(isChatMessageNotification && chatStableTag
-                ? { tag: chatStableTag }
-                : !isChatMessageNotification && androidTag
-                  ? { tag: androidTag }
-                  : {}),
-            },
+            ...(isChatMessageNotification && androidTag ? { collapseKey: androidTag.slice(0, 128) } : {}),
           },
-          // Without `aps.alert`, iOS treats this as silent — customer never saw chat banners. Keep in sync with `notification` title/body.
           apns: {
             headers: {
               'apns-priority': '10',
