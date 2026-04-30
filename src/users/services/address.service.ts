@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
-import { CustomerStatus } from '@prisma/client';
+import { CustomerStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateAddressDto, UpdateAddressDto, AddressResponseDto } from '../dto/address.dto';
 
@@ -7,6 +7,62 @@ import { CreateAddressDto, UpdateAddressDto, AddressResponseDto } from '../dto/a
 export class AddressService {
   constructor(private readonly prisma: PrismaService) {}
   private static readonly MAIN_NICKNAME = 'MAIN';
+
+  private async ensureCustomerWalletForMain(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    delegationId: string,
+  ): Promise<void> {
+    const customer = await tx.customer.findUnique({
+      where: { userId },
+      select: { id: true, customerStatus: true },
+    });
+    if (!customer) return;
+
+    const existingWallet = await tx.digitalWallet.findUnique({
+      where: { customerId: customer.id },
+      select: { id: true },
+    });
+    if (existingWallet) {
+      if (customer.customerStatus === CustomerStatus.CREATED) {
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { customerStatus: CustomerStatus.ACTIVE },
+        });
+      }
+      return;
+    }
+
+    const delegation = await tx.delegation.findUnique({
+      where: { id: delegationId },
+      select: {
+        governorate: {
+          select: {
+            countryId: true,
+            country: { select: { currencyCode: true } },
+          },
+        },
+      },
+    });
+    if (!delegation?.governorate?.countryId) return;
+
+    await tx.digitalWallet.create({
+      data: {
+        customerId: customer.id,
+        countryId: delegation.governorate.countryId,
+        balance: 0,
+        currency: delegation.governorate.country?.currencyCode || 'TND',
+        discount: 0,
+      },
+    });
+
+    if (customer.customerStatus === CustomerStatus.CREATED) {
+      await tx.customer.update({
+        where: { id: customer.id },
+        data: { customerStatus: CustomerStatus.ACTIVE },
+      });
+    }
+  }
 
   async createAddress(userId: string | null, dto: CreateAddressDto): Promise<AddressResponseDto> {
     // Validate delegation exists
@@ -35,10 +91,7 @@ export class AddressService {
           where: { userId, nickname: AddressService.MAIN_NICKNAME },
           data: { nickname: null },
         });
-        await tx.customer.updateMany({
-          where: { userId, customerStatus: CustomerStatus.CREATED },
-          data: { customerStatus: CustomerStatus.ACTIVE },
-        });
+        await this.ensureCustomerWalletForMain(tx, userId, dto.delegationId);
       }
 
       return tx.address.create({
@@ -122,10 +175,11 @@ export class AddressService {
           where: { userId, id: { not: addressId }, nickname: AddressService.MAIN_NICKNAME },
           data: { nickname: null },
         });
-        await tx.customer.updateMany({
-          where: { userId, customerStatus: CustomerStatus.CREATED },
-          data: { customerStatus: CustomerStatus.ACTIVE },
-        });
+        await this.ensureCustomerWalletForMain(
+          tx,
+          userId,
+          dto.delegationId || address.delegationId,
+        );
       }
 
       return tx.address.update({
