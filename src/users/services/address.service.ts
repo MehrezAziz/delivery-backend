@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { CustomerStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateAddressDto, UpdateAddressDto, AddressResponseDto } from '../dto/address.dto';
 
@@ -33,6 +34,10 @@ export class AddressService {
         await tx.address.updateMany({
           where: { userId, nickname: AddressService.MAIN_NICKNAME },
           data: { nickname: null },
+        });
+        await tx.customer.updateMany({
+          where: { userId, customerStatus: CustomerStatus.CREATED },
+          data: { customerStatus: CustomerStatus.ACTIVE },
         });
       }
 
@@ -116,6 +121,10 @@ export class AddressService {
         await tx.address.updateMany({
           where: { userId, id: { not: addressId }, nickname: AddressService.MAIN_NICKNAME },
           data: { nickname: null },
+        });
+        await tx.customer.updateMany({
+          where: { userId, customerStatus: CustomerStatus.CREATED },
+          data: { customerStatus: CustomerStatus.ACTIVE },
         });
       }
 
