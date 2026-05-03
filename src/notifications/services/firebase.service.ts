@@ -164,4 +164,16 @@ export class FirebaseService implements OnModuleInit {
       return { success: false, error: error.message };
     }
   }
+
+  /** Verify Firebase Auth ID token (e.g. phone auth). */
+  async verifyIdToken(idToken: string): Promise<admin.auth.DecodedIdToken> {
+    if (!this.initialized) {
+      throw new Error('Firebase Admin not initialized');
+    }
+    return admin.auth().verifyIdToken(idToken);
+  }
+
+  get isInitialized(): boolean {
+    return this.initialized;
+  }
 }

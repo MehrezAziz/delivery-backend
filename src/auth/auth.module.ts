@@ -9,6 +9,9 @@ import { OtpService } from './otp.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ReferralModule } from '../referral/referral.module';
 import { DriversModule } from '../drivers/drivers.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { MailService } from './mail.service';
+import { WhatsappOtpService } from './whatsapp-otp.service';
 import { JwtUserStrategy } from './strategies/jwt-user.strategy';
 import { JwtSuperUserStrategy } from './strategies/jwt-superuser.strategy';
 import {
@@ -29,6 +32,7 @@ import {
     PrismaModule,
     ReferralModule,
     DriversModule,
+    NotificationsModule,
     PassportModule,
     ConfigModule,
     // JWT Module
@@ -56,6 +60,8 @@ import {
   providers: [
     AuthService,
     OtpService,
+    MailService,
+    WhatsappOtpService,
     JwtUserStrategy,
     JwtSuperUserStrategy,
     // Guards

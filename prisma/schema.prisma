@@ -24,6 +24,11 @@ enum UserGender {
   FEMALE
 }
 
+enum PasswordResetChannel {
+  EMAIL
+  WHATSAPP
+}
+
 enum SuperUserRole {
   ADMIN
   CUSTOMER_SERVICE
@@ -444,8 +449,25 @@ model User {
   userRestrictions UserRestriction[]
   sentMessages     Message[]
   supportTickets   SupportTicket[]
+  passwordResetSessions PasswordResetSession[]
 
   @@map("users")
+}
+
+model PasswordResetSession {
+  id         String               @id @default(uuid())
+  userId     String               @map("user_id")
+  channel    PasswordResetChannel
+  codeHash   String               @map("code_hash")
+  expiresAt  DateTime             @map("expires_at")
+  attempts   Int                  @default(0)
+  lastSentAt DateTime             @map("last_sent_at")
+  createdAt  DateTime             @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_sessions")
 }
 
 model SuperUser {

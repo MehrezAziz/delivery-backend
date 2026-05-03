@@ -27,12 +27,34 @@ import { RegisterCustomerResponseDto } from './dto/register-customer-response.dt
 import { RegisterDriverStep1Dto } from './dto/register-driver-step1.dto';
 import { RegisterDriverStep1ResponseDto } from './dto/register-driver-step1-response.dto';
 import { DriverLoginDto } from './dto/driver-login.dto';
-import { UserRole, SuperUserRole, UserStatus, ReferralCode } from '@prisma/client';
+import {
+  UserRole,
+  SuperUserRole,
+  UserStatus,
+  ReferralCode,
+  PasswordResetChannel,
+} from '@prisma/client';
 
 import { JwtUserPayload, JwtSuperUserPayload } from './dto/jwt-payload.interface';
+import {
+  ForgotPasswordChannelDto,
+  ForgotPasswordEmailPreviewDto,
+  ForgotPasswordRequestDto,
+  ForgotPasswordResendDto,
+  ForgotPasswordVerifyCodeDto,
+  ForgotPasswordVerifyFirebaseDto,
+  ForgotPasswordResetDto,
+} from './dto/forgot-password.dto';
+import { MailService } from './mail.service';
+import { WhatsappOtpService } from './whatsapp-otp.service';
+import { FirebaseService } from '../notifications/services/firebase.service';
 
 @Injectable()
 export class AuthService {
+  private readonly forgotPwTtlMs = 10 * 60 * 1000;
+  private readonly forgotPwResendMs = 5 * 60 * 1000;
+  private readonly forgotPwMaxAttempts = 3;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -40,6 +62,9 @@ export class AuthService {
     private readonly otpService: OtpService,
     private readonly referralService: ReferralService,
     private readonly codeGeneratorService: CodeGeneratorService,
+    private readonly mailService: MailService,
+    private readonly whatsappOtpService: WhatsappOtpService,
+    private readonly firebaseService: FirebaseService,
   ) {}
 
   /** Log a login attempt for security audit */
@@ -1199,5 +1224,349 @@ export class AuthService {
       }
       throw new UnauthorizedException('Invalid Google token');
     }
+  }
+
+  // ============================================
+  // USER FORGOT PASSWORD — CUSTOMER / DRIVER (email / WhatsApp / Firebase SMS)
+  // ============================================
+
+  /**
+   * Before sending email OTP: check account has a saved email; return masked preview (e.g. aziz*****12@gmail.com).
+   */
+  async forgotPasswordEmailPreview(
+    dto: ForgotPasswordEmailPreviewDto,
+  ): Promise<
+    | { ok: true; maskedEmail: string }
+    | { ok: false; reason: 'NO_ACCOUNT' | 'NO_SAVED_EMAIL' }
+  > {
+    const role = this.resolveForgotPasswordRole(dto.role);
+    const user = await this.findUserWithPasswordForForgot(dto.phone, role);
+    if (!user) {
+      return { ok: false, reason: 'NO_ACCOUNT' };
+    }
+    this.assertForgotPasswordUserAllowed(user);
+    const em = user.myEmail?.trim();
+    if (!em) {
+      return { ok: false, reason: 'NO_SAVED_EMAIL' };
+    }
+    return { ok: true, maskedEmail: this.maskEmailForPreview(em) };
+  }
+
+  async forgotPasswordRequest(dto: ForgotPasswordRequestDto): Promise<
+    | {
+        mode: 'SESSION';
+        sessionId: string;
+        expiresInSeconds: number;
+        resendAfterSeconds: number;
+      }
+    | { mode: 'FIREBASE_SMS'; phoneE164: string }
+  > {
+    const role = this.resolveForgotPasswordRole(dto.role);
+
+    if (dto.channel === ForgotPasswordChannelDto.SMS) {
+      if (!dto.phone) {
+        throw new BadRequestException('Phone is required');
+      }
+      const user = await this.findUserWithPasswordForForgot(dto.phone, role);
+      if (!user) {
+        throw new NotFoundException(
+          'No account with this phone number and a saved password.',
+        );
+      }
+      this.assertForgotPasswordUserAllowed(user);
+      if (!this.firebaseService.isInitialized) {
+        throw new BadRequestException(
+          'SMS recovery is not configured (Firebase Admin missing).',
+        );
+      }
+      return { mode: 'FIREBASE_SMS', phoneE164: dto.phone };
+    }
+
+    if (dto.channel === ForgotPasswordChannelDto.EMAIL) {
+      const user = await this.findUserWithPasswordForForgot(dto.phone, role);
+      if (!user) {
+        throw new NotFoundException(
+          'No account with this phone number and a saved password.',
+        );
+      }
+      this.assertForgotPasswordUserAllowed(user);
+      const dest = user.myEmail?.trim();
+      if (!dest) {
+        throw new BadRequestException(
+          'No email saved on this account. Use phone recovery or sign in to add an email first.',
+        );
+      }
+      await this.prisma.passwordResetSession.deleteMany({
+        where: { userId: user.id },
+      });
+      const code = this.generateSixDigitCode();
+      const codeHash = await bcrypt.hash(code, 10);
+      await this.mailService.sendPasswordResetCode(dest, code);
+      const session = await this.prisma.passwordResetSession.create({
+        data: {
+          userId: user.id,
+          channel: PasswordResetChannel.EMAIL,
+          codeHash,
+          expiresAt: new Date(Date.now() + this.forgotPwTtlMs),
+          attempts: 0,
+          lastSentAt: new Date(),
+        },
+      });
+      return {
+        mode: 'SESSION',
+        sessionId: session.id,
+        expiresInSeconds: Math.floor(this.forgotPwTtlMs / 1000),
+        resendAfterSeconds: Math.floor(this.forgotPwResendMs / 1000),
+      };
+    }
+
+    if (!dto.phone) {
+      throw new BadRequestException('Phone is required');
+    }
+    const waUser = await this.findUserWithPasswordForForgot(dto.phone, role);
+    if (!waUser) {
+      throw new NotFoundException(
+        'No account with this phone number and a saved password.',
+      );
+    }
+    this.assertForgotPasswordUserAllowed(waUser);
+    await this.prisma.passwordResetSession.deleteMany({
+      where: { userId: waUser.id },
+    });
+    const code = this.generateSixDigitCode();
+    const codeHash = await bcrypt.hash(code, 10);
+    const session = await this.prisma.passwordResetSession.create({
+      data: {
+        userId: waUser.id,
+        channel: PasswordResetChannel.WHATSAPP,
+        codeHash,
+        expiresAt: new Date(Date.now() + this.forgotPwTtlMs),
+        attempts: 0,
+        lastSentAt: new Date(),
+      },
+    });
+    const waDigits = dto.phone.replace(/\D/g, '');
+    await this.whatsappOtpService.sendVerificationCode(waDigits, code);
+    return {
+      mode: 'SESSION',
+      sessionId: session.id,
+      expiresInSeconds: Math.floor(this.forgotPwTtlMs / 1000),
+      resendAfterSeconds: Math.floor(this.forgotPwResendMs / 1000),
+    };
+  }
+
+  async forgotPasswordResend(dto: ForgotPasswordResendDto): Promise<{
+    expiresInSeconds: number;
+    resendAfterSeconds: number;
+  }> {
+    const session = await this.prisma.passwordResetSession.findUnique({
+      where: { id: dto.sessionId },
+      include: { user: true },
+    });
+    if (!session) {
+      throw new NotFoundException('Session expired. Start again.');
+    }
+    const sinceLast = Date.now() - session.lastSentAt.getTime();
+    if (sinceLast < this.forgotPwResendMs) {
+      const waitSec = Math.ceil((this.forgotPwResendMs - sinceLast) / 1000);
+      throw new BadRequestException(
+        `Please wait ${waitSec}s before resending.`,
+      );
+    }
+    const code = this.generateSixDigitCode();
+    const codeHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + this.forgotPwTtlMs);
+    const lastSentAt = new Date();
+    if (session.channel === PasswordResetChannel.EMAIL) {
+      const email = session.user.myEmail;
+      if (!email) throw new BadRequestException('User email missing');
+      await this.mailService.sendPasswordResetCode(email, code);
+    } else {
+      const phone = session.user.phone;
+      if (!phone) throw new BadRequestException('User phone missing');
+      await this.whatsappOtpService.sendVerificationCode(
+        phone.replace(/\D/g, ''),
+        code,
+      );
+    }
+    await this.prisma.passwordResetSession.update({
+      where: { id: session.id },
+      data: {
+        codeHash,
+        expiresAt,
+        attempts: 0,
+        lastSentAt,
+      },
+    });
+    return {
+      expiresInSeconds: Math.floor(this.forgotPwTtlMs / 1000),
+      resendAfterSeconds: Math.floor(this.forgotPwResendMs / 1000),
+    };
+  }
+
+  async forgotPasswordVerifyCode(
+    dto: ForgotPasswordVerifyCodeDto,
+  ): Promise<{ resetToken: string }> {
+    const session = await this.prisma.passwordResetSession.findUnique({
+      where: { id: dto.sessionId },
+    });
+    if (!session || session.expiresAt.getTime() < Date.now()) {
+      if (session) {
+        await this.prisma.passwordResetSession.delete({ where: { id: session.id } });
+      }
+      throw new BadRequestException('Code expired. Request a new one.');
+    }
+
+    const nextAttempts = session.attempts + 1;
+    if (nextAttempts > this.forgotPwMaxAttempts) {
+      await this.prisma.passwordResetSession.delete({ where: { id: session.id } });
+      throw new BadRequestException('Too many attempts. Request a new code.');
+    }
+
+    const ok = await bcrypt.compare(dto.code, session.codeHash);
+    if (!ok) {
+      await this.prisma.passwordResetSession.update({
+        where: { id: session.id },
+        data: { attempts: nextAttempts },
+      });
+      throw new BadRequestException('Invalid code');
+    }
+
+    await this.prisma.passwordResetSession.delete({ where: { id: session.id } });
+    const resetToken = this.issuePasswordResetToken(session.userId);
+    return { resetToken };
+  }
+
+  async forgotPasswordVerifyFirebase(
+    dto: ForgotPasswordVerifyFirebaseDto,
+  ): Promise<{ resetToken: string }> {
+    if (!this.firebaseService.isInitialized) {
+      throw new BadRequestException('Firebase Auth is not configured.');
+    }
+    const role = this.resolveForgotPasswordRole(dto.role);
+    let decoded: { phone_number?: string };
+    try {
+      decoded = await this.firebaseService.verifyIdToken(dto.idToken);
+    } catch {
+      throw new UnauthorizedException('Invalid Firebase token');
+    }
+    const phone = decoded.phone_number;
+    if (!phone) {
+      throw new BadRequestException('Phone number missing from token');
+    }
+    const user = await this.findUserWithPasswordForForgot(phone, role);
+    if (!user) {
+      throw new NotFoundException(
+        'No account with this phone number and a saved password.',
+      );
+    }
+    this.assertForgotPasswordUserAllowed(user);
+    const resetToken = this.issuePasswordResetToken(user.id);
+    return { resetToken };
+  }
+
+  async forgotPasswordReset(dto: ForgotPasswordResetDto): Promise<{ message: string }> {
+    if (dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+    let userId: string;
+    try {
+      const payload = this.jwtService.verify<{ sub: string; type?: string }>(
+        dto.resetToken,
+      );
+      if (payload.type !== 'PASSWORD_RESET') {
+        throw new UnauthorizedException('Invalid reset token');
+      }
+      userId = payload.sub;
+    } catch {
+      throw new UnauthorizedException('Invalid or expired reset token');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { customer: true, driver: true },
+    });
+    if (!user || (user.role !== UserRole.CUSTOMER && user.role !== UserRole.DRIVER)) {
+      throw new NotFoundException('User not found');
+    }
+    if (user.role === UserRole.CUSTOMER) {
+      if (!user.customer || user.customer.customerStatus === 'BLOCKED') {
+        throw new UnauthorizedException('Your account has been blocked');
+      }
+    }
+    if (user.role === UserRole.DRIVER) {
+      if (!user.driver || user.driver.status === 'SUSPENDED') {
+        throw new UnauthorizedException('Your account has been suspended');
+      }
+    }
+
+    const hashed = await bcrypt.hash(dto.newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password: hashed },
+    });
+    return { message: 'Password updated successfully' };
+  }
+
+  private issuePasswordResetToken(userId: string): string {
+    return this.jwtService.sign(
+      { sub: userId, type: 'PASSWORD_RESET' },
+      { expiresIn: '15m' },
+    );
+  }
+
+  private generateSixDigitCode(): string {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  private resolveForgotPasswordRole(role?: UserRole): UserRole {
+    const r = role ?? UserRole.CUSTOMER;
+    if (r !== UserRole.CUSTOMER && r !== UserRole.DRIVER) {
+      throw new BadRequestException('Password recovery supports CUSTOMER or DRIVER only.');
+    }
+    return r;
+  }
+
+  private async findUserWithPasswordForForgot(phone: string, role: UserRole) {
+    return this.prisma.user.findFirst({
+      where: {
+        phone,
+        role,
+        password: { not: null },
+      },
+      include: { customer: true, driver: true },
+    });
+  }
+
+  private assertForgotPasswordUserAllowed(
+    user: {
+      role: UserRole;
+      customer: { customerStatus: string } | null;
+      driver: { status: string } | null;
+    },
+  ): void {
+    if (user.role === UserRole.CUSTOMER && user.customer?.customerStatus === 'BLOCKED') {
+      throw new UnauthorizedException('Your account has been blocked');
+    }
+    if (user.role === UserRole.DRIVER && user.driver?.status === 'SUSPENDED') {
+      throw new UnauthorizedException('Your account has been suspended');
+    }
+  }
+
+  /** e.g. azizmehrez12@gmail.com → aziz*****12@gmail.com */
+  private maskEmailForPreview(email: string): string {
+    const trimmed = email.trim();
+    const at = trimmed.indexOf('@');
+    if (at <= 0) return '***@***';
+    const local = trimmed.slice(0, at);
+    const domain = trimmed.slice(at + 1);
+    if (!domain) return '***@***';
+    if (local.length <= 2) {
+      return `***@${domain}`;
+    }
+    if (local.length <= 5) {
+      return `${local[0]}***${local.slice(-1)}@${domain}`;
+    }
+    return `${local.slice(0, 4)}*****${local.slice(-2)}@${domain}`;
   }
 }

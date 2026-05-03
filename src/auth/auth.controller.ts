@@ -37,6 +37,14 @@ import { RegisterDriverStep3Dto } from './dto/register-driver-step3.dto';
 import { RegisterLivenessCheckpointDto } from './dto/register-liveness-checkpoint.dto';
 import { DriverLoginDto } from './dto/driver-login.dto';
 import { GoogleDriverAuthDto } from './dto/google-driver-auth.dto';
+import {
+  ForgotPasswordEmailPreviewDto,
+  ForgotPasswordRequestDto,
+  ForgotPasswordResendDto,
+  ForgotPasswordVerifyCodeDto,
+  ForgotPasswordVerifyFirebaseDto,
+  ForgotPasswordResetDto,
+} from './dto/forgot-password.dto';
 import { Public, CurrentUser, UserId } from './decorators/auth.decorators';
 import { JwtUserGuard } from './guards/auth.guards';
 import type { AuthenticatedUser } from './dto/jwt-payload.interface';
@@ -177,6 +185,76 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async googleLogin(@Body() dto: GoogleAuthDto): Promise<AuthTokensDto> {
     return this.authService.googleLogin(dto.idToken, dto.role);
+  }
+
+  /**
+   * POST /auth/user/forgot-password/email-preview
+   * Check saved email for account phone; returns masked address for confirmation UI.
+   */
+  @Public()
+  @Post('user/forgot-password/email-preview')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
+  async forgotPasswordEmailPreview(@Body() dto: ForgotPasswordEmailPreviewDto) {
+    return this.authService.forgotPasswordEmailPreview(dto);
+  }
+
+  /**
+   * POST /auth/user/forgot-password/request
+   * Email / WhatsApp (backend OTP) or SMS (Firebase — returns phone for client Phone Auth).
+   */
+  @Public()
+  @Post('user/forgot-password/request')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  async forgotPasswordRequest(@Body() dto: ForgotPasswordRequestDto) {
+    return this.authService.forgotPasswordRequest(dto);
+  }
+
+  /**
+   * POST /auth/user/forgot-password/resend
+   */
+  @Public()
+  @Post('user/forgot-password/resend')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 6, ttl: 60000 } })
+  async forgotPasswordResend(@Body() dto: ForgotPasswordResendDto) {
+    return this.authService.forgotPasswordResend(dto);
+  }
+
+  /**
+   * POST /auth/user/forgot-password/verify-code
+   * After email or WhatsApp OTP.
+   */
+  @Public()
+  @Post('user/forgot-password/verify-code')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
+  async forgotPasswordVerifyCode(@Body() dto: ForgotPasswordVerifyCodeDto) {
+    return this.authService.forgotPasswordVerifyCode(dto);
+  }
+
+  /**
+   * POST /auth/user/forgot-password/verify-firebase
+   * After Firebase Phone Auth SMS verification.
+   */
+  @Public()
+  @Post('user/forgot-password/verify-firebase')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
+  async forgotPasswordVerifyFirebase(@Body() dto: ForgotPasswordVerifyFirebaseDto) {
+    return this.authService.forgotPasswordVerifyFirebase(dto);
+  }
+
+  /**
+   * POST /auth/user/forgot-password/reset
+   */
+  @Public()
+  @Post('user/forgot-password/reset')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  async forgotPasswordReset(@Body() dto: ForgotPasswordResetDto) {
+    return this.authService.forgotPasswordReset(dto);
   }
 
   // ============================================
