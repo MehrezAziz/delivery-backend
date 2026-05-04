@@ -15,7 +15,7 @@ import { OtpData } from './dto/jwt-payload.interface';
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
-  private readonly twilioClient!: Twilio;
+  private readonly twilioClient: Twilio | undefined;
 
   // Redis key prefixes
   private readonly OTP_PREFIX = 'otp:';
@@ -41,10 +41,14 @@ export class OtpService {
     if (accountSid && authToken && accountSid.startsWith('AC')) {
       this.twilioClient = new Twilio(accountSid, authToken);
       this.logger.log('Twilio client initialized');
-    } else if (!this.isDev) {
-      throw new Error('Twilio credentials missing in production');
-    } else {
+    } else if (this.isDev) {
+      this.twilioClient = undefined;
       this.logger.warn('Twilio not configured - OTP will be logged to console (dev mode only)');
+    } else {
+      this.twilioClient = undefined;
+      this.logger.warn(
+        'Twilio not configured in production: SMS OTP will fail until TWILIO_ACCOUNT_SID (AC…), TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER are set.',
+      );
     }
   }
 
