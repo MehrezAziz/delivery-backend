@@ -4,6 +4,8 @@ import {
   ConflictException,
   BadRequestException,
   NotFoundException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -1366,8 +1368,10 @@ export class AuthService {
     if (!session) {
       throw new NotFoundException('Session expired. Start again.');
     }
-    const sinceLast = Date.now() - session.lastSentAt.getTime();
-    if (sinceLast < this.forgotPwResendMs) {
+    const now = Date.now();
+    const codeExpired = session.expiresAt.getTime() < now;
+    const sinceLast = now - session.lastSentAt.getTime();
+    if (!codeExpired && sinceLast < this.forgotPwResendMs) {
       const waitSec = Math.ceil((this.forgotPwResendMs - sinceLast) / 1000);
       throw new BadRequestException(
         `Please wait ${waitSec}s before resending.`,
@@ -1417,11 +1421,20 @@ export class AuthService {
       throw new BadRequestException('Code expired. Request a new one.');
     }
 
-    const nextAttempts = session.attempts + 1;
-    if (nextAttempts > this.forgotPwMaxAttempts) {
+    if (session.attempts >= this.forgotPwMaxAttempts) {
       await this.prisma.passwordResetSession.delete({ where: { id: session.id } });
-      throw new BadRequestException('Too many attempts. Request a new code.');
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: 'Maximum verification attempts reached. Request a new code.',
+          attempts: session.attempts,
+          maxAttempts: this.forgotPwMaxAttempts,
+        },
+        HttpStatus.BAD_REQUEST,
+      );
     }
+
+    const nextAttempts = session.attempts + 1;
 
     const ok = await bcrypt.compare(dto.code, session.codeHash);
     if (!ok) {
@@ -1429,7 +1442,15 @@ export class AuthService {
         where: { id: session.id },
         data: { attempts: nextAttempts },
       });
-      throw new BadRequestException('Invalid code');
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: 'Invalid code',
+          attempts: nextAttempts,
+          maxAttempts: this.forgotPwMaxAttempts,
+        },
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     await this.prisma.passwordResetSession.delete({ where: { id: session.id } });
