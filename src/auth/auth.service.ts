@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
   ConflictException,
   BadRequestException,
@@ -53,6 +54,7 @@ import { FirebaseService } from '../notifications/services/firebase.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private readonly forgotPwTtlMs = 10 * 60 * 1000;
   private readonly forgotPwResendMs = 5 * 60 * 1000;
   private readonly forgotPwMaxAttempts = 3;
@@ -807,10 +809,14 @@ export class AuthService {
       if (
         error instanceof UnauthorizedException ||
         error instanceof ConflictException ||
-        error instanceof NotFoundException
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException
       ) {
         throw error;
       }
+      this.logger.warn(
+        `googleAuth: token verify or DB failed — ${error?.message ?? error}`,
+      );
       throw new UnauthorizedException('Invalid Google token');
     }
   }
@@ -882,6 +888,9 @@ export class AuthService {
       if (error instanceof UnauthorizedException || error instanceof NotFoundException) {
         throw error;
       }
+      this.logger.warn(
+        `googleLogin: token verify failed — ${error?.message ?? error}`,
+      );
       throw new UnauthorizedException('Invalid Google token');
     }
   }
