@@ -42,6 +42,15 @@ export class WalletController {
   }
 
   /**
+   * GET /wallet/me/payout-bank-details
+   * Saved bank payout profile (optional).
+   */
+  @Get('me/payout-bank-details')
+  async getMyPayoutBankDetails(@CurrentUser() user: AuthenticatedUser) {
+    return this.walletService.getPayoutBankDetails(user.id);
+  }
+
+  /**
    * GET /wallet/me/withdrawals
    * Returns paginated withdrawal request history.
    */

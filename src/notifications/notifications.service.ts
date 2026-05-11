@@ -6,6 +6,9 @@ import {
   NotificationChannel,
   NotificationDeliveryStatus,
   Prisma,
+  SuperUserRole,
+  UserStatus,
+  CustomerServiceRole,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FirebaseService } from './services/firebase.service';
@@ -135,9 +138,13 @@ export class NotificationsService {
 
       const notification = { id: notificationId, sentAt: new Date() };
 
-      // Dispatch to PUSH channel
-      if (channels.includes(NotificationChannel.PUSH) && dto.userType === 'USER') {
-        await this.sendPush(dto.userId, title, body, notification.id, dto);
+      // Dispatch to PUSH channel (customers/drivers on User table; staff may store FCM on SuperUser)
+      if (channels.includes(NotificationChannel.PUSH)) {
+        if (dto.userType === 'USER') {
+          await this.sendPush(dto.userId, title, body, notification.id, dto, 'USER');
+        } else if (dto.userType === 'SUPER_USER') {
+          await this.sendPush(dto.userId, title, body, notification.id, dto, 'SUPER_USER');
+        }
       }
 
       // Dispatch to WEB_SOCKET channel
@@ -189,19 +196,30 @@ export class NotificationsService {
     body: string,
     notificationId: string,
     dto: SendNotificationDto,
+    pushRecipient: 'USER' | 'SUPER_USER' = 'USER',
   ) {
     try {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { fcmToken: true },
-      });
+      let fcmToken: string | null = null;
+      if (pushRecipient === 'USER') {
+        const user = await this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { fcmToken: true },
+        });
+        fcmToken = user?.fcmToken ?? null;
+      } else {
+        const su = await this.prisma.superUser.findUnique({
+          where: { id: userId },
+          select: { fcmToken: true },
+        });
+        fcmToken = su?.fcmToken ?? null;
+      }
 
-      if (!user?.fcmToken) {
-        this.logger.warn(`No FCM token for user ${userId}, skipping push`);
+      if (!fcmToken) {
+        this.logger.warn(`No FCM token for ${pushRecipient} ${userId}, skipping push`);
         return;
       }
 
-      this.logger.log(`Sending push to user ${userId}, type: ${dto.type}, groupKey: ${dto.groupKey}`);
+      this.logger.log(`Sending push to ${pushRecipient} ${userId}, type: ${dto.type}, groupKey: ${dto.groupKey}`);
 
       // Map notification type to order status so the frontend can update its dedup map
       const ORDER_STATUS_BY_TYPE: Partial<Record<string, string>> = {
@@ -245,7 +263,7 @@ export class NotificationsService {
       }
 
       const result = await this.firebaseService.sendPush({
-        token: user.fcmToken,
+        token: fcmToken,
         title,
         body,
         threadId,
@@ -280,14 +298,21 @@ export class NotificationsService {
 
         // Clear invalid token
         if (result.error?.startsWith('Invalid token')) {
-          await this.prisma.user.update({
-            where: { id: userId },
-            data: { fcmToken: null, fcmPlatform: null },
-          });
+          if (pushRecipient === 'USER') {
+            await this.prisma.user.update({
+              where: { id: userId },
+              data: { fcmToken: null, fcmPlatform: null },
+            });
+          } else {
+            await this.prisma.superUser.update({
+              where: { id: userId },
+              data: { fcmToken: null, fcmPlatform: null },
+            });
+          }
         }
       }
     } catch (error) {
-      this.logger.error(`Push notification failed for user ${userId}`, error.stack);
+      this.logger.error(`Push notification failed for ${pushRecipient} ${userId}`, error.stack);
     }
   }
 
@@ -497,6 +522,70 @@ export class NotificationsService {
       this.send({ ...options, userId: admin.id, userType: 'SUPER_USER', type }),
     );
     await Promise.allSettled(promises);
+  }
+
+  /**
+   * Customer or driver created a fiat payout (withdrawal) request.
+   * Notifies every active admin and every CS agent with PROCESS_WITHDRAWALS or MANAGE_FINANCIAL_REPORTS (deduped).
+   */
+  async notifyFiatPayoutRequest(payload: {
+    source: 'customer' | 'driver';
+    requestId: string;
+    amount: string;
+    currency: string;
+    payoutMethod: string;
+  }) {
+    const payoutLabel =
+      payload.payoutMethod === 'CASH'
+        ? 'Cash'
+        : payload.payoutMethod === 'BANK_TRANSFER'
+          ? 'Bank transfer'
+          : payload.payoutMethod;
+    const who = payload.source === 'customer' ? 'Customer wallet' : 'Driver account';
+    const title = 'New payout request';
+    const body = `${who}: ${payload.amount} ${payload.currency} · ${payoutLabel}`;
+    const relatedEntityType =
+      payload.source === 'customer' ? 'WithdrawalRequest' : 'DriverWithdrawalRequest';
+
+    const admins = await this.prisma.superUser.findMany({
+      where: { role: SuperUserRole.ADMIN, status: UserStatus.ACTIVE },
+      select: { id: true },
+    });
+    const csAgents = await this.prisma.customerService.findMany({
+      where: {
+        superUser: { status: UserStatus.ACTIVE },
+        OR: [
+          { roles: { has: CustomerServiceRole.PROCESS_WITHDRAWALS } },
+          { roles: { has: CustomerServiceRole.MANAGE_FINANCIAL_REPORTS } },
+        ],
+      },
+      select: { superUserId: true },
+    });
+
+    const recipientIds = new Set<string>();
+    for (const a of admins) recipientIds.add(a.id);
+    for (const c of csAgents) recipientIds.add(c.superUserId);
+
+    await Promise.allSettled(
+      [...recipientIds].map((userId) =>
+        this.send({
+          userId,
+          userType: 'SUPER_USER',
+          type: NotificationType.LARGE_WITHDRAWAL_REQUEST,
+          title,
+          body,
+          relatedEntityType,
+          relatedEntityId: payload.requestId,
+          groupKey: `fiat-withdrawal:${payload.source}:${payload.requestId}`,
+          templateData: {
+            amount: payload.amount,
+            currency: payload.currency,
+            source: who,
+            payoutMethod: payoutLabel,
+          },
+        }),
+      ),
+    );
   }
 
   // Helper: Send to CS agents with a specific permission

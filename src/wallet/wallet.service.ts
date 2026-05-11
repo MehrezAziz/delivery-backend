@@ -3,12 +3,17 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { FiatPayoutMethod } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWithdrawalRequestDto } from './dto/wallet.dto';
 
 @Injectable()
 export class WalletService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   /**
    * Create a DigitalWallet for a newly registered customer.
@@ -125,6 +130,10 @@ export class WalletService {
           walletId: true,
           amount: true,
           status: true,
+          payoutMethod: true,
+          payoutBankHolderName: true,
+          payoutBankName: true,
+          payoutBankAccountRef: true,
           descriptionOfCustomer: true,
           descriptionOfAdmin: true,
           requestedAt: true,
@@ -145,6 +154,20 @@ export class WalletService {
     };
   }
 
+  /** Saved bank details for payout (profile); customer-only. */
+  async getPayoutBankDetails(userId: string) {
+    const row = await this.prisma.userPayoutBankDetails.findUnique({
+      where: { userId },
+      select: {
+        accountHolderName: true,
+        bankName: true,
+        accountReference: true,
+        updatedAt: true,
+      },
+    });
+    return row ?? null;
+  }
+
   /**
    * Submit a withdrawal request.
    */
@@ -153,17 +176,80 @@ export class WalletService {
     dto: CreateWithdrawalRequestDto,
   ) {
     const wallet = await this.findWalletByUserId(userId);
-
-    if (Number(wallet.balance) < dto.amount) {
-      throw new BadRequestException('Insufficient wallet balance');
+    const bal = Number(wallet.balance);
+    if (dto.amount > bal) {
+      throw new BadRequestException('Amount cannot exceed your available wallet balance');
     }
+    if (dto.amount <= 0 || bal <= 0) {
+      throw new BadRequestException('Invalid amount or zero balance');
+    }
+
+    const payoutMethod =
+      dto.payoutMethod === 'CASH' ? FiatPayoutMethod.CASH : FiatPayoutMethod.BANK_TRANSFER;
+
+    assertBankFieldsForTransfer(payoutMethod, dto);
+
+    const bankHolder =
+      payoutMethod === FiatPayoutMethod.BANK_TRANSFER
+        ? dto.payoutBankHolderName!.trim()
+        : null;
+    const bankName =
+      payoutMethod === FiatPayoutMethod.BANK_TRANSFER ? dto.payoutBankName!.trim() : null;
+    const bankRef =
+      payoutMethod === FiatPayoutMethod.BANK_TRANSFER
+        ? dto.payoutBankAccountRef!.trim()
+        : null;
 
     const request = await this.prisma.withdrawalRequest.create({
       data: {
         walletId: wallet.id,
         amount: dto.amount,
+        payoutMethod,
+        payoutBankHolderName: bankHolder,
+        payoutBankName: bankName,
+        payoutBankAccountRef: bankRef,
         descriptionOfCustomer: dto.descriptionOfCustomer,
       },
+    });
+
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: wallet.customerId },
+      select: { userId: true },
+    });
+    const customerUserId = customer?.userId;
+
+    if (
+      payoutMethod === FiatPayoutMethod.BANK_TRANSFER &&
+      dto.saveBankDetailsToProfile &&
+      customerUserId
+    ) {
+      await this.prisma.userPayoutBankDetails.upsert({
+        where: { userId: customerUserId },
+        create: {
+          userId: customerUserId,
+          accountHolderName: bankHolder!,
+          bankName: bankName!,
+          accountReference: bankRef!,
+        },
+        update: {
+          accountHolderName: bankHolder!,
+          bankName: bankName!,
+          accountReference: bankRef!,
+        },
+      });
+    }
+    if (customerUserId) {
+      this.eventEmitter.emit('withdrawal.status_changed', {
+        userId: customerUserId,
+        status: 'PENDING',
+      });
+    }
+    this.eventEmitter.emit('admin.fiat_withdrawal_requested', {
+      source: 'customer' as const,
+      requestId: request.id,
+      amount: String(dto.amount),
+      currency: wallet.currency,
+      payoutMethod: String(payoutMethod),
     });
 
     return {
@@ -184,5 +270,23 @@ export class WalletService {
     }
 
     return wallet;
+  }
+}
+
+function assertBankFieldsForTransfer(
+  method: FiatPayoutMethod,
+  dto: Pick<
+    CreateWithdrawalRequestDto,
+    'payoutBankHolderName' | 'payoutBankName' | 'payoutBankAccountRef'
+  >,
+) {
+  if (method !== FiatPayoutMethod.BANK_TRANSFER) return;
+  const h = dto.payoutBankHolderName?.trim();
+  const b = dto.payoutBankName?.trim();
+  const r = dto.payoutBankAccountRef?.trim();
+  if (!h || !b || !r) {
+    throw new BadRequestException(
+      'Bank transfer requires account holder name, bank name, and account reference (IBAN/RIB/account number).',
+    );
   }
 }

@@ -14,13 +14,14 @@ import { RegisterDriverStep3Dto } from '../auth/dto/register-driver-step3.dto';
 import { RegisterDriverStep2ResponseDto } from '../auth/dto/register-driver-step2-response.dto';
 import { RegisterDriverStep3ResponseDto } from '../auth/dto/register-driver-step3-response.dto';
 import { DriverProfileDto } from './dto/driver-profile.dto';
-import { DriverStatus, Prisma, UserRole } from '@prisma/client';
+import { DriverStatus, DriverTransactionType, FiatPayoutMethod, Prisma, UserRole } from '@prisma/client';
 import { JwtUserPayload } from '../auth/dto/jwt-payload.interface';
 import { DriverPendingPayload } from '../auth/dto/driver-pending-payload.interface';
 import { MlVerificationService } from './services/ml-verification.service';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { CreateDriverWithdrawalDto } from './dto/driver-withdrawal.dto';
 
 @Injectable()
 export class DriversService {
@@ -664,6 +665,291 @@ export class DriversService {
     };
   }
 
+  private parseEarningsDateRange(
+    preset?: string,
+    fromIso?: string,
+    toIso?: string,
+  ): { from?: Date; to?: Date } {
+    if (fromIso && toIso) {
+      const from = new Date(fromIso);
+      const to = new Date(toIso);
+      if (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        return { from, to: end };
+      }
+    }
+    const p = (preset || 'all_time').toLowerCase();
+    if (p === 'all_time') return {};
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    if (p === 'today') return { from: start, to: end };
+    if (p === 'week') {
+      start.setDate(start.getDate() - 7);
+      return { from: start, to: end };
+    }
+    if (p === 'month') {
+      start.setMonth(start.getMonth() - 1);
+      return { from: start, to: end };
+    }
+    return {};
+  }
+
+  /**
+   * Aggregated driver earnings: **cash** = COD `driver_net` from `cash_transactions`;
+   * **wallet** = in-app account credits from wallet-paid deliveries (driver transaction lines).
+   */
+  async getDriverEarnings(
+    userId: string,
+    query: { channel?: string; preset?: string; from?: string; to?: string },
+  ) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: { driverAccount: true },
+    });
+    if (!driver?.driverAccount) {
+      throw new NotFoundException('Driver account not found');
+    }
+    const { from, to } = this.parseEarningsDateRange(query.preset, query.from, query.to);
+    const range =
+      from && to
+        ? { gte: from, lte: to }
+        : from
+          ? { gte: from }
+          : to
+            ? { lte: to }
+            : undefined;
+    const createdAtWhere = range ? { createdAt: range } : {};
+
+    const cashWhere: Prisma.CashTransactionWhereInput = {
+      driverId: driver.id,
+      ...createdAtWhere,
+    };
+
+    const walletTxWhere: Prisma.DriverTransactionWhereInput = {
+      accountId: driver.driverAccount.id,
+      amount: { gt: 0 },
+      OR: [
+        { description: { contains: 'Wallet order', mode: 'insensitive' } },
+        { description: { contains: 'Company wallet order', mode: 'insensitive' } },
+      ],
+      ...createdAtWhere,
+    };
+
+    const [cashAgg, walletAgg] = await Promise.all([
+      this.prisma.cashTransaction.aggregate({
+        where: cashWhere,
+        _sum: { driverNet: true, cashCollected: true, platformFee: true },
+        _count: true,
+      }),
+      this.prisma.driverTransaction.aggregate({
+        where: walletTxWhere,
+        _sum: { amount: true },
+        _count: true,
+      }),
+    ]);
+
+    const cashTotal = Number(cashAgg._sum.driverNet ?? 0);
+    const walletTotal = Number(walletAgg._sum.amount ?? 0);
+    const channel = (query.channel || 'all').toLowerCase();
+    let combined = 0;
+    if (channel === 'cash') combined = cashTotal;
+    else if (channel === 'wallet') combined = walletTotal;
+    else combined = cashTotal + walletTotal;
+
+    const [cashRows, walletRows] = await Promise.all([
+      this.prisma.cashTransaction.findMany({
+        where: cashWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 80,
+        select: {
+          id: true,
+          orderId: true,
+          driverNet: true,
+          cashCollected: true,
+          platformFee: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.driverTransaction.findMany({
+        where: walletTxWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 80,
+        select: {
+          id: true,
+          amount: true,
+          description: true,
+          referenceId: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    type Item = {
+      id: string;
+      at: string;
+      channel: 'cash' | 'wallet';
+      label: string;
+      amount: number;
+      orderId?: string | null;
+    };
+    const items: Item[] = [
+      ...cashRows.map((r) => ({
+        id: `cash-${r.id}`,
+        at: r.createdAt.toISOString(),
+        channel: 'cash' as const,
+        label: `COD delivery #${r.orderId.slice(0, 8)}`,
+        amount: Number(r.driverNet),
+        orderId: r.orderId,
+      })),
+      ...walletRows.map((r) => ({
+        id: `wal-${r.id}`,
+        at: r.createdAt.toISOString(),
+        channel: 'wallet' as const,
+        label: (r.description || 'Wallet delivery').slice(0, 120),
+        amount: Number(r.amount),
+        orderId: r.referenceId,
+      })),
+    ]
+      .filter((row) => channel === 'all' || row.channel === channel)
+      .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+      .slice(0, 100);
+
+    return {
+      currency: driver.driverAccount.currency,
+      preset: query.preset || 'all_time',
+      channel,
+      totals: {
+        cash: cashTotal,
+        wallet: walletTotal,
+        combined,
+        cashOrderCount: cashAgg._count,
+        walletLineCount: walletAgg._count,
+      },
+      items,
+    };
+  }
+
+  async getDriverWithdrawalRequests(userId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: { driverAccount: true },
+    });
+    if (!driver?.driverAccount) throw new NotFoundException('Driver account not found');
+    const rows = await this.prisma.driverWithdrawalRequest.findMany({
+      where: { driverAccountId: driver.driverAccount.id },
+      orderBy: { requestedAt: 'desc' },
+      take: 50,
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      amount: Number(r.amount),
+      status: r.status,
+      payoutMethod: r.payoutMethod,
+      payoutBankHolderName: r.payoutBankHolderName,
+      payoutBankName: r.payoutBankName,
+      payoutBankAccountRef: r.payoutBankAccountRef,
+      descriptionFromDriver: r.descriptionFromDriver,
+      descriptionFromStaff: r.descriptionFromStaff,
+      requestedAt: r.requestedAt,
+      processedAt: r.processedAt,
+    }));
+  }
+
+  /** Same profile row as customer wallet — one saved payout bank per User. */
+  async getPayoutBankDetails(userId: string) {
+    const row = await this.prisma.userPayoutBankDetails.findUnique({
+      where: { userId },
+      select: {
+        accountHolderName: true,
+        bankName: true,
+        accountReference: true,
+        updatedAt: true,
+      },
+    });
+    return row ?? null;
+  }
+
+  async createDriverWithdrawalRequest(userId: string, dto: CreateDriverWithdrawalDto) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: { driverAccount: true },
+    });
+    if (!driver?.driverAccount) throw new NotFoundException('Driver account not found');
+    const bal = Number(driver.driverAccount.balance);
+    if (dto.amount <= 0 || dto.amount > bal) {
+      throw new BadRequestException('Amount must be positive and cannot exceed your available balance');
+    }
+    const payout =
+      dto.payoutMethod === 'CASH' ? FiatPayoutMethod.CASH : FiatPayoutMethod.BANK_TRANSFER;
+
+    if (payout === FiatPayoutMethod.BANK_TRANSFER) {
+      const h = dto.payoutBankHolderName?.trim();
+      const b = dto.payoutBankName?.trim();
+      const r = dto.payoutBankAccountRef?.trim();
+      if (!h || !b || !r) {
+        throw new BadRequestException(
+          'Bank transfer requires account holder name, bank name, and account reference (IBAN/RIB/account number).',
+        );
+      }
+    }
+
+    const bankHolder =
+      payout === FiatPayoutMethod.BANK_TRANSFER ? dto.payoutBankHolderName!.trim() : null;
+    const bankName =
+      payout === FiatPayoutMethod.BANK_TRANSFER ? dto.payoutBankName!.trim() : null;
+    const bankRef =
+      payout === FiatPayoutMethod.BANK_TRANSFER ? dto.payoutBankAccountRef!.trim() : null;
+
+    const row = await this.prisma.driverWithdrawalRequest.create({
+      data: {
+        driverAccountId: driver.driverAccount.id,
+        amount: dto.amount,
+        payoutMethod: payout,
+        payoutBankHolderName: bankHolder,
+        payoutBankName: bankName,
+        payoutBankAccountRef: bankRef,
+        descriptionFromDriver: dto.description,
+      },
+    });
+
+    if (
+      payout === FiatPayoutMethod.BANK_TRANSFER &&
+      dto.saveBankDetailsToProfile &&
+      userId
+    ) {
+      await this.prisma.userPayoutBankDetails.upsert({
+        where: { userId },
+        create: {
+          userId,
+          accountHolderName: bankHolder!,
+          bankName: bankName!,
+          accountReference: bankRef!,
+        },
+        update: {
+          accountHolderName: bankHolder!,
+          bankName: bankName!,
+          accountReference: bankRef!,
+        },
+      });
+    }
+    this.eventEmitter.emit('admin.fiat_withdrawal_requested', {
+      source: 'driver' as const,
+      requestId: row.id,
+      amount: String(dto.amount),
+      currency: driver.driverAccount.currency,
+      payoutMethod: String(payout),
+    });
+    return {
+      id: row.id,
+      amount: Number(row.amount),
+      status: row.status,
+      payoutMethod: row.payoutMethod,
+      requestedAt: row.requestedAt,
+    };
+  }
 
   /**
    * Update Driver Status

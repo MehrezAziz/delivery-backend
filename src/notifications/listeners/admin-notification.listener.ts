@@ -24,11 +24,15 @@ export class AdminNotificationListener {
     });
   }
 
-  @OnEvent('admin.large_withdrawal')
-  async handleLargeWithdrawal(payload: { amount: string; userId: string }) {
-    await this.notificationsService.sendToAllAdmins(NotificationType.LARGE_WITHDRAWAL_REQUEST, {
-      templateData: { amount: payload.amount },
-    });
+  @OnEvent('admin.fiat_withdrawal_requested')
+  async handleFiatWithdrawalRequested(payload: {
+    source: 'customer' | 'driver';
+    requestId: string;
+    amount: string;
+    currency: string;
+    payoutMethod: string;
+  }) {
+    await this.notificationsService.notifyFiatPayoutRequest(payload);
   }
 
   @OnEvent('admin.payment_gateway_failure')

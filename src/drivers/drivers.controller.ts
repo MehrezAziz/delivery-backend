@@ -33,6 +33,7 @@ import {
 import type { AuthenticatedUser, AuthenticatedSuperUser } from '../auth/dto/jwt-payload.interface';
 import { IdentityVerificationService } from './services/identity-verification.service';
 import { MlVerificationService } from './services/ml-verification.service';
+import { CreateDriverWithdrawalDto } from './dto/driver-withdrawal.dto';
 
 @Controller('drivers')
 @UseGuards(JwtUserGuard, DriverGuard)
@@ -94,6 +95,35 @@ export class DriversController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
     return this.driversService.getDriverTransactions(userId, page, limit);
+  }
+
+  /**
+   * GET /drivers/me/earnings?channel=all|wallet|cash&preset=today|week|month|all_time&from=&to=
+   */
+  @Get('me/earnings')
+  async getMyEarnings(
+    @UserId() userId: string,
+    @Query('channel') channel?: string,
+    @Query('preset') preset?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.driversService.getDriverEarnings(userId, { channel, preset, from, to });
+  }
+
+  @Get('me/withdrawal-requests')
+  async getMyWithdrawalRequests(@UserId() userId: string) {
+    return this.driversService.getDriverWithdrawalRequests(userId);
+  }
+
+  @Get('me/payout-bank-details')
+  async getMyPayoutBankDetails(@UserId() userId: string) {
+    return this.driversService.getPayoutBankDetails(userId);
+  }
+
+  @Post('me/withdrawal-requests')
+  async createMyWithdrawalRequest(@UserId() userId: string, @Body() dto: CreateDriverWithdrawalDto) {
+    return this.driversService.createDriverWithdrawalRequest(userId, dto);
   }
 
   @Post('documents')

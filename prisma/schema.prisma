@@ -419,7 +419,13 @@ enum CustomerServiceRole {
   MANAGE_SUPPORT_TICKETS
   VIEW_FINANCIAL_REPORTS
   MANAGE_FINANCIAL_REPORTS
+  PROCESS_WITHDRAWALS
   MANAGE_COMPANY_FINANCE
+}
+
+enum FiatPayoutMethod {
+  CASH
+  BANK_TRANSFER
 }
 
 // ============================================
@@ -450,8 +456,23 @@ model User {
   sentMessages     Message[]
   supportTickets   SupportTicket[]
   passwordResetSessions PasswordResetSession[]
+  payoutBankDetails    UserPayoutBankDetails?
 
   @@map("users")
+}
+
+model UserPayoutBankDetails {
+  id                String   @id @default(uuid())
+  userId            String   @unique @map("user_id")
+  accountHolderName String   @map("account_holder_name")
+  bankName          String   @map("bank_name")
+  accountReference  String   @map("account_reference")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_payout_bank_details")
 }
 
 model PasswordResetSession {
@@ -479,6 +500,8 @@ model SuperUser {
   role          SuperUserRole
   status        UserStatus    @default(ACTIVE)
   createdAt     DateTime      @default(now()) @map("created_at")
+  fcmToken      String?       @map("fcm_token")
+  fcmPlatform   String?       @map("fcm_platform")
 
   // Relations
   admin           Admin?
@@ -589,8 +612,9 @@ model DriverAccount {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   // Relations
-  driver       Driver              @relation(fields: [driverId], references: [id], onDelete: Cascade)
-  transactions DriverTransaction[]
+  driver                 Driver                     @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  transactions           DriverTransaction[]
+  driverWithdrawalRequests DriverWithdrawalRequest[]
 
   @@map("driver_accounts")
 }
@@ -611,6 +635,26 @@ model DriverTransaction {
 
   @@index([accountId, createdAt])
   @@map("driver_transactions")
+}
+
+model DriverWithdrawalRequest {
+  id                     String           @id @default(uuid())
+  driverAccountId        String           @map("driver_account_id")
+  amount                 Decimal          @db.Decimal(10, 2)
+  status                 ResponseType     @default(PENDING)
+  payoutMethod           FiatPayoutMethod @default(BANK_TRANSFER) @map("payout_method")
+  payoutBankHolderName   String?          @map("payout_bank_holder_name")
+  payoutBankName         String?          @map("payout_bank_name")
+  payoutBankAccountRef   String?          @map("payout_bank_account_ref")
+  descriptionFromDriver  String?          @map("description_from_driver")
+  descriptionFromStaff   String?          @map("description_from_staff")
+  requestedAt            DateTime         @default(now()) @map("requested_at")
+  processedAt            DateTime?        @map("processed_at")
+
+  account DriverAccount @relation(fields: [driverAccountId], references: [id], onDelete: Cascade)
+
+  @@index([driverAccountId, requestedAt])
+  @@map("driver_withdrawal_requests")
 }
 
 // ============================================
@@ -1398,14 +1442,18 @@ model WalletTransaction {
 }
 
 model WithdrawalRequest {
-  id                    String       @id @default(uuid())
-  walletId              String       @map("wallet_id")
-  amount                Decimal      @db.Decimal(10, 2)
-  status                ResponseType @default(PENDING)
-  descriptionOfCustomer String?      @map("description_of_customer")
-  descriptionOfAdmin    String?      @map("description_of_admin")
-  requestedAt           DateTime     @default(now()) @map("requested_at")
-  processedAt           DateTime?    @map("processed_at")
+  id                    String           @id @default(uuid())
+  walletId              String           @map("wallet_id")
+  amount                Decimal          @db.Decimal(10, 2)
+  status                ResponseType     @default(PENDING)
+  payoutMethod          FiatPayoutMethod @default(BANK_TRANSFER) @map("payout_method")
+  payoutBankHolderName  String?          @map("payout_bank_holder_name")
+  payoutBankName        String?          @map("payout_bank_name")
+  payoutBankAccountRef  String?          @map("payout_bank_account_ref")
+  descriptionOfCustomer String?          @map("description_of_customer")
+  descriptionOfAdmin    String?          @map("description_of_admin")
+  requestedAt           DateTime         @default(now()) @map("requested_at")
+  processedAt           DateTime?        @map("processed_at")
 
   // Relations
   wallet DigitalWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)

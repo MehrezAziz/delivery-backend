@@ -246,8 +246,10 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
 
   // Admin - Financial
   LARGE_WITHDRAWAL_REQUEST: (d) => ({
-    title: 'Large Withdrawal Request',
-    body: `A withdrawal of ${d?.amount || ''} has been requested.`,
+    title: 'New payout request',
+    body: d?.source
+      ? `${d.source}: ${d?.amount || ''} ${d?.currency || ''} · ${d?.payoutMethod || ''}`
+      : `A withdrawal of ${d?.amount || ''} has been requested.`,
   }),
   PAYMENT_GATEWAY_FAILURE: (d) => ({
     title: 'Payment Gateway Failure ⚠️',
