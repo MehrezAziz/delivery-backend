@@ -53,6 +53,15 @@ export class NotificationsService {
     private gateway: NotificationsGateway,
   ) {}
 
+  /** Control panel + CS agents subscribed to `support_ticket:{id}` reload the thread without tight HTTP polling. */
+  emitSupportTicketThreadRefresh(ticketId: string): void {
+    try {
+      this.gateway.emitSupportTicketThreadUpdate(ticketId);
+    } catch (e) {
+      this.logger.warn(`emitSupportTicketThreadRefresh: ${(e as Error).message}`);
+    }
+  }
+
   private async createNotificationRow(
     notificationId: string,
     dto: SendNotificationDto,
@@ -716,6 +725,17 @@ export class NotificationsService {
     return company?.id ?? ticketOwnerUserId;
   }
 
+  /** Staff / bot / admin messages the end user has not marked read yet (for grouped support push copy). */
+  private async countUnreadStaffSupportMessages(ticketId: string): Promise<number> {
+    return this.prisma.supportMessage.count({
+      where: {
+        ticketId,
+        readAt: null,
+        senderType: { in: ['CUSTOMER_SERVICE', 'BOT', 'ADMIN'] },
+      },
+    });
+  }
+
   /** CS / bot replied — notify ticket owner (customer app user id or company portal inbox id). */
   async notifySupportTicketReply(ticketId: string) {
     const ticket = await this.prisma.supportTicket.findUnique({
@@ -727,14 +747,26 @@ export class NotificationsService {
       return;
     }
     const inboxUserId = await this.resolveSupportTicketInboxUserId(ticket.userId);
+    const unread = await this.countUnreadStaffSupportMessages(ticketId);
+    const n = Math.max(1, unread);
+    const title = 'Support';
+    const body =
+      n === 1
+        ? 'You have a new reply on your support ticket.'
+        : `You have ${n} new replies on your support ticket.`;
     await this.send({
       userId: inboxUserId,
       userType: 'USER',
       type: NotificationType.SUPPORT_TICKET_REPLY,
+      title,
+      body,
       relatedEntityType: 'SupportTicket',
       relatedEntityId: ticketId,
       groupKey: `support:${ticketId}`,
+      updateExisting: true,
+      templateData: { unreadCount: String(n) },
     });
+    this.emitSupportTicketThreadRefresh(ticketId);
   }
 
   /** End user or company wrote on the ticket — notify CS (assigned agent or governorate-scoped pool). */
@@ -759,15 +791,16 @@ export class NotificationsService {
         type: NotificationType.CUSTOMER_REPLIED_TICKET,
         ...baseOpts,
       });
-      return;
+    } else {
+      const govIds = await this.getGovernorateIdsForSupportTicket(ticketId, ticket.userId);
+      await this.sendToCsWithPermissionForGovernorates(
+        govIds,
+        'MANAGE_SUPPORT_TICKETS',
+        NotificationType.CUSTOMER_REPLIED_TICKET,
+        baseOpts,
+      );
     }
-    const govIds = await this.getGovernorateIdsForSupportTicket(ticketId, ticket.userId);
-    await this.sendToCsWithPermissionForGovernorates(
-      govIds,
-      'MANAGE_SUPPORT_TICKETS',
-      NotificationType.CUSTOMER_REPLIED_TICKET,
-      baseOpts,
-    );
+    this.emitSupportTicketThreadRefresh(ticketId);
   }
 
   /** New support ticket (e.g. company portal or mobile) — CS + admins. */

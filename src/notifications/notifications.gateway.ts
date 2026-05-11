@@ -3,12 +3,17 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  SubscribeMessage,
+  ConnectedSocket,
+  MessageBody,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { jwtVerify } from 'jose';
+import { CustomerServiceRole } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -23,6 +28,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   constructor(
     private jwtService: JwtService,
     private configService: ConfigService,
+    private prisma: PrismaService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -74,6 +80,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         payload.departmentId ||
         payload.companyId;
       client.data.userType = payload.superUserId ? 'SUPER_USER' : 'USER';
+      client.data.superUserId = payload.superUserId ? String(payload.superUserId) : null;
 
       if (!client.data.userId) {
         this.logger.warn('No userId found in token payload');
@@ -128,6 +135,59 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     for (const uid of uniq) {
       this.server.to(`user:${uid}`).emit('order_updated', { orderId, status: status ?? null });
     }
+  }
+
+  /** Staff viewing a support ticket in delivery-control — instant refresh without HTTP polling. */
+  emitSupportTicketThreadUpdate(ticketId: string) {
+    this.server.to(`support_ticket:${ticketId}`).emit('support_ticket_thread', { ticketId });
+  }
+
+  private async assertCanSubscribeSupportTicket(superUserId: string, ticketId: string): Promise<boolean> {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { assignedTo: true },
+    });
+    if (!ticket) return false;
+
+    const su = await this.prisma.superUser.findUnique({
+      where: { id: superUserId },
+      select: {
+        admin: { select: { id: true } },
+        customerService: { select: { id: true, roles: true } },
+      },
+    });
+    if (!su) return false;
+    if (su.admin) return true;
+    if (!su.customerService) return false;
+    const roles = su.customerService.roles ?? [];
+    if (!roles.includes(CustomerServiceRole.MANAGE_SUPPORT_TICKETS)) return false;
+    if (!ticket.assignedTo) return true;
+    return ticket.assignedTo === su.customerService.id;
+  }
+
+  @SubscribeMessage('subscribe_support_ticket')
+  async handleSubscribeSupportTicket(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() ticketId: unknown,
+  ) {
+    const id = typeof ticketId === 'string' ? ticketId : null;
+    if (!id) return { ok: false, error: 'ticketId required' };
+    const superUserId = client.data.superUserId ? String(client.data.superUserId) : String(client.data.userId);
+    const ok = await this.assertCanSubscribeSupportTicket(superUserId, id);
+    if (!ok) return { ok: false, error: 'forbidden' };
+    await client.join(`support_ticket:${id}`);
+    return { ok: true };
+  }
+
+  @SubscribeMessage('unsubscribe_support_ticket')
+  async handleUnsubscribeSupportTicket(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() ticketId: unknown,
+  ) {
+    const id = typeof ticketId === 'string' ? ticketId : null;
+    if (!id) return { ok: false };
+    await client.leave(`support_ticket:${id}`);
+    return { ok: true };
   }
 
   // Send notification to all connected clients (broadcast)

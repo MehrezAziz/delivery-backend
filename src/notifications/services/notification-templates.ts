@@ -115,10 +115,15 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
     title: 'Dispute Resolved',
     body: `Your dispute has been resolved.`,
   }),
-  SUPPORT_TICKET_REPLY: (d) => ({
-    title: 'Support Reply',
-    body: `You have a new reply on your support ticket.`,
-  }),
+  SUPPORT_TICKET_REPLY: (d) => {
+    const raw = d?.unreadCount;
+    const n = raw != null && String(raw).trim() !== '' ? Math.max(1, parseInt(String(raw), 10) || 1) : 1;
+    const body =
+      n <= 1
+        ? 'You have a new reply on your support ticket.'
+        : `You have ${n} new replies on your support ticket.`;
+    return { title: 'Support', body };
+  },
 
   // Customer - Chat
   NEW_MESSAGE_FROM_DRIVER: (d) => ({

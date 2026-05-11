@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateTicketDto, SendMessageDto, AiFeedbackDto } from './dto/support.dto';
 import { SupportTicketStatus } from '@prisma/client';
 import { AiSupportOrchestratorService } from '../ai-support/ai-support-orchestrator.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class SupportService {
@@ -19,6 +20,7 @@ export class SupportService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly aiSupport: AiSupportOrchestratorService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   // ============================================
@@ -98,6 +100,10 @@ export class SupportService {
       }
     }
 
+    if (botMessage) {
+      this.notificationsService.emitSupportTicketThreadRefresh(ticketId);
+    }
+
     return { message, botMessage };
   }
 
@@ -149,6 +155,9 @@ export class SupportService {
     }
 
     emit('done', { botMessage: botMessage ?? null });
+    if (botMessage) {
+      this.notificationsService.emitSupportTicketThreadRefresh(ticketId);
+    }
   }
 
   async submitAiFeedback(ticketId: string, userId: string, dto: AiFeedbackDto) {
@@ -219,6 +228,10 @@ export class SupportService {
       } catch (e) {
         this.logger.warn(`AI follow-up failed: ${(e as Error).message}`);
       }
+    }
+
+    if (botMessage) {
+      this.notificationsService.emitSupportTicketThreadRefresh(ticketId);
     }
 
     return { botMessage };
@@ -343,7 +356,7 @@ export class SupportService {
         readAt: null,
         senderType:
           readerType === 'USER'
-            ? { in: ['CUSTOMER_SERVICE', 'BOT'] }
+            ? { in: ['CUSTOMER_SERVICE', 'BOT', 'ADMIN'] }
             : 'USER',
       },
       data: { readAt: new Date() },
