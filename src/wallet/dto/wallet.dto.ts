@@ -66,6 +66,20 @@ export class WalletTransactionResponseDto {
   createdAt: Date;
 }
 
+export class UpdatePayoutBankDetailsDto {
+  @IsString()
+  @MaxLength(200)
+  accountHolderName: string;
+
+  @IsString()
+  @MaxLength(200)
+  bankName: string;
+
+  @IsString()
+  @MaxLength(120)
+  accountReference: string;
+}
+
 export class WithdrawalRequestResponseDto {
   id: string;
   walletId: string;

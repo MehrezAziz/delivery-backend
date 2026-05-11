@@ -4,7 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { FiatPayoutMethod } from '@prisma/client';
+import { FiatPayoutMethod, ResponseType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWithdrawalRequestDto } from './dto/wallet.dto';
 
@@ -152,6 +152,62 @@ export class WalletService {
       page,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  async updatePayoutBankDetails(userId: string, dto: { accountHolderName: string; bankName: string; accountReference: string }) {
+    const h = dto.accountHolderName.trim();
+    const b = dto.bankName.trim();
+    const r = dto.accountReference.trim();
+    if (!h || !b || !r) {
+      throw new BadRequestException('All bank fields are required');
+    }
+    return this.prisma.userPayoutBankDetails.upsert({
+      where: { userId },
+      create: {
+        userId,
+        accountHolderName: h,
+        bankName: b,
+        accountReference: r,
+      },
+      update: {
+        accountHolderName: h,
+        bankName: b,
+        accountReference: r,
+      },
+      select: {
+        accountHolderName: true,
+        bankName: true,
+        accountReference: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async deletePayoutBankDetails(userId: string) {
+    await this.prisma.userPayoutBankDetails.deleteMany({ where: { userId } });
+    return { ok: true };
+  }
+
+  async cancelWithdrawalRequest(userId: string, requestId: string) {
+    const wallet = await this.findWalletByUserId(userId);
+    const row = await this.prisma.withdrawalRequest.findFirst({
+      where: { id: requestId, walletId: wallet.id },
+    });
+    if (!row) {
+      throw new NotFoundException('Withdrawal request not found');
+    }
+    if (row.status !== ResponseType.PENDING) {
+      throw new BadRequestException('Only pending withdrawal requests can be cancelled');
+    }
+    await this.prisma.withdrawalRequest.update({
+      where: { id: requestId },
+      data: {
+        status: ResponseType.REJECTED,
+        processedAt: new Date(),
+        descriptionOfAdmin: 'Cancelled by customer',
+      },
+    });
+    return { ok: true };
   }
 
   /** Saved bank details for payout (profile); customer-only. */

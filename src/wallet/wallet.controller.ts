@@ -2,14 +2,17 @@ import {
   Controller,
   Get,
   Post,
+  Put,
+  Delete,
   Body,
   Query,
+  Param,
   UseGuards,
   ParseIntPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
 import { WalletService } from './wallet.service';
-import { CreateWithdrawalRequestDto } from './dto/wallet.dto';
+import { CreateWithdrawalRequestDto, UpdatePayoutBankDetailsDto } from './dto/wallet.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, CustomerGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
@@ -61,6 +64,36 @@ export class WalletController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
     return this.walletService.getMyWithdrawalRequests(user.id, page, limit);
+  }
+
+  /**
+   * PUT /wallet/me/payout-bank-details
+   */
+  @Put('me/payout-bank-details')
+  async putPayoutBankDetails(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdatePayoutBankDetailsDto,
+  ) {
+    return this.walletService.updatePayoutBankDetails(user.id, dto);
+  }
+
+  /**
+   * DELETE /wallet/me/payout-bank-details
+   */
+  @Delete('me/payout-bank-details')
+  async deletePayoutBankDetails(@CurrentUser() user: AuthenticatedUser) {
+    return this.walletService.deletePayoutBankDetails(user.id);
+  }
+
+  /**
+   * POST /wallet/me/withdrawals/:requestId/cancel
+   */
+  @Post('me/withdrawals/:requestId/cancel')
+  async cancelWithdrawalRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.walletService.cancelWithdrawalRequest(user.id, requestId);
   }
 
   /**

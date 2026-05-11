@@ -1,16 +1,17 @@
-import { 
+import {
   BadRequestException,
-  Controller, 
-  Get, 
+  Controller,
+  Get,
   Post,
   Put,
   Patch,
-  Body, 
-  Param, 
+  Delete,
+  Body,
+  Param,
   Query,
   DefaultValuePipe,
   ParseIntPipe,
-  UseGuards 
+  UseGuards,
 } from '@nestjs/common';
 import { DriversService } from './drivers.service';
 import { VerificationService } from './services/verification.service';
@@ -34,6 +35,7 @@ import type { AuthenticatedUser, AuthenticatedSuperUser } from '../auth/dto/jwt-
 import { IdentityVerificationService } from './services/identity-verification.service';
 import { MlVerificationService } from './services/ml-verification.service';
 import { CreateDriverWithdrawalDto } from './dto/driver-withdrawal.dto';
+import { UpdatePayoutBankDetailsDto } from '../wallet/dto/wallet.dto';
 
 @Controller('drivers')
 @UseGuards(JwtUserGuard, DriverGuard)
@@ -121,9 +123,24 @@ export class DriversController {
     return this.driversService.getPayoutBankDetails(userId);
   }
 
+  @Post('me/withdrawal-requests/:requestId/cancel')
+  async cancelMyWithdrawalRequest(@UserId() userId: string, @Param('requestId') requestId: string) {
+    return this.driversService.cancelDriverWithdrawalRequest(userId, requestId);
+  }
+
   @Post('me/withdrawal-requests')
   async createMyWithdrawalRequest(@UserId() userId: string, @Body() dto: CreateDriverWithdrawalDto) {
     return this.driversService.createDriverWithdrawalRequest(userId, dto);
+  }
+
+  @Put('me/payout-bank-details')
+  async putMyPayoutBankDetails(@UserId() userId: string, @Body() dto: UpdatePayoutBankDetailsDto) {
+    return this.driversService.updatePayoutBankDetails(userId, dto);
+  }
+
+  @Delete('me/payout-bank-details')
+  async deleteMyPayoutBankDetails(@UserId() userId: string) {
+    return this.driversService.deletePayoutBankDetails(userId);
   }
 
   @Post('documents')

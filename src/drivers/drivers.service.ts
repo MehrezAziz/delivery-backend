@@ -14,7 +14,14 @@ import { RegisterDriverStep3Dto } from '../auth/dto/register-driver-step3.dto';
 import { RegisterDriverStep2ResponseDto } from '../auth/dto/register-driver-step2-response.dto';
 import { RegisterDriverStep3ResponseDto } from '../auth/dto/register-driver-step3-response.dto';
 import { DriverProfileDto } from './dto/driver-profile.dto';
-import { DriverStatus, DriverTransactionType, FiatPayoutMethod, Prisma, UserRole } from '@prisma/client';
+import {
+  DriverStatus,
+  DriverTransactionType,
+  FiatPayoutMethod,
+  Prisma,
+  ResponseType,
+  UserRole,
+} from '@prisma/client';
 import { JwtUserPayload } from '../auth/dto/jwt-payload.interface';
 import { DriverPendingPayload } from '../auth/dto/driver-pending-payload.interface';
 import { MlVerificationService } from './services/ml-verification.service';
@@ -856,6 +863,64 @@ export class DriversService {
       requestedAt: r.requestedAt,
       processedAt: r.processedAt,
     }));
+  }
+
+  async updatePayoutBankDetails(userId: string, dto: { accountHolderName: string; bankName: string; accountReference: string }) {
+    const h = dto.accountHolderName.trim();
+    const b = dto.bankName.trim();
+    const r = dto.accountReference.trim();
+    if (!h || !b || !r) {
+      throw new BadRequestException('All bank fields are required');
+    }
+    return this.prisma.userPayoutBankDetails.upsert({
+      where: { userId },
+      create: {
+        userId,
+        accountHolderName: h,
+        bankName: b,
+        accountReference: r,
+      },
+      update: {
+        accountHolderName: h,
+        bankName: b,
+        accountReference: r,
+      },
+      select: {
+        accountHolderName: true,
+        bankName: true,
+        accountReference: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async deletePayoutBankDetails(userId: string) {
+    await this.prisma.userPayoutBankDetails.deleteMany({ where: { userId } });
+    return { ok: true };
+  }
+
+  async cancelDriverWithdrawalRequest(userId: string, requestId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: { driverAccount: true },
+    });
+    if (!driver?.driverAccount) throw new NotFoundException('Driver account not found');
+    const row = await this.prisma.driverWithdrawalRequest.findFirst({
+      where: { id: requestId, driverAccountId: driver.driverAccount.id },
+    });
+    if (!row) throw new NotFoundException('Withdrawal request not found');
+    if (row.status !== ResponseType.PENDING) {
+      throw new BadRequestException('Only pending withdrawal requests can be cancelled');
+    }
+    await this.prisma.driverWithdrawalRequest.update({
+      where: { id: requestId },
+      data: {
+        status: ResponseType.REJECTED,
+        processedAt: new Date(),
+        descriptionFromStaff: 'Cancelled by driver',
+      },
+    });
+    return { ok: true };
   }
 
   /** Same profile row as customer wallet — one saved payout bank per User. */
