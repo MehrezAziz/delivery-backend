@@ -297,6 +297,9 @@ export class NotificationsService {
       });
 
       if (!result.success) {
+        this.logger.warn(
+          `FCM push failed for ${pushRecipient} ${userId} (type=${dto.type}): ${result.error || 'unknown'}`,
+        );
         await this.prisma.notification.update({
           where: { id: notificationId },
           data: {
