@@ -40,6 +40,11 @@ export class CreatePricingPolicyDto {
 
   @IsNumber()
   @Min(0)
+  @IsOptional()
+  referralCommission?: number;
+
+  @IsNumber()
+  @Min(0)
   maxNegativeDays: number;
 
   @IsBoolean()
@@ -82,6 +87,11 @@ export class UpdatePricingPolicyDto {
   @Min(0)
   @IsOptional()
   platformFee?: number;
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  referralCommission?: number;
 
   @IsNumber()
   @Min(0)

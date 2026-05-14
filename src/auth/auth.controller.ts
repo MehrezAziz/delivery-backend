@@ -45,6 +45,8 @@ import {
   ForgotPasswordVerifyFirebaseDto,
   ForgotPasswordResetDto,
 } from './dto/forgot-password.dto';
+import { ChangeUserPasswordDto, SecurityVerificationDocumentDto } from './dto/change-password.dto';
+import { EstablishSecuritySessionPasswordDto } from './dto/security-session.dto';
 import { Public, CurrentUser, UserId } from './decorators/auth.decorators';
 import { JwtUserGuard } from './guards/auth.guards';
 import type { AuthenticatedUser } from './dto/jwt-payload.interface';
@@ -141,6 +143,62 @@ export class AuthController {
     @Body() body: { password: string },
   ) {
     return this.authService.verifyUserPassword(userId, body.password);
+  }
+
+  /**
+   * PATCH /auth/user/password — change account password (Settings → Security).
+   */
+  @UseGuards(JwtUserGuard)
+  @Patch('user/password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 8, ttl: 60000 } })
+  async changeUserPassword(@UserId() userId: string, @Body() dto: ChangeUserPasswordDto) {
+    return this.authService.changeUserPassword(userId, dto.currentPassword, dto.newPassword);
+  }
+
+  /**
+   * POST /auth/user/security-session — verify account password and start post–Security-screen window (PIN/password changes without current values).
+   */
+  @UseGuards(JwtUserGuard)
+  @Post('user/security-session')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  async establishSecuritySession(
+    @UserId() userId: string,
+    @Body() dto: EstablishSecuritySessionPasswordDto,
+  ) {
+    return this.authService.establishSecuritySessionWithPassword(userId, dto.password);
+  }
+
+  /**
+   * POST /auth/user/security-session/revoke — clear post–Security-screen window (e.g. when user taps Lock).
+   */
+  @UseGuards(JwtUserGuard)
+  @Post('user/security-session/revoke')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  async revokeSecuritySession(@UserId() userId: string) {
+    return this.authService.revokeSecuritySession(userId);
+  }
+
+  /**
+   * GET /auth/user/security-summary — PIN / document / tier for Security screen.
+   */
+  @UseGuards(JwtUserGuard)
+  @Get('user/security-summary')
+  async userSecuritySummary(@UserId() userId: string) {
+    return this.authService.getUserSecuritySummary(userId);
+  }
+
+  /**
+   * PATCH /auth/user/security-verification-document — optional verification image (base64).
+   */
+  @UseGuards(JwtUserGuard)
+  @Patch('user/security-verification-document')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 6, ttl: 60000 } })
+  async setSecurityVerificationDocument(@UserId() userId: string, @Body() dto: SecurityVerificationDocumentDto) {
+    return this.authService.setSecurityVerificationDocument(userId, dto.image);
   }
 
   /**

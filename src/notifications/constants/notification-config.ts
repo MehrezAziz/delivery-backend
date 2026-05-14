@@ -98,4 +98,7 @@ export const DEFAULT_PRIORITY: Record<NotificationType, NotificationPriority> = 
   [NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_CS]: NotificationPriority.CRITICAL,
   [NotificationType.CUSTOMER_REJECTED_ARRIVED_DRIVER_TO_DRIVER]: NotificationPriority.HIGH,
   [NotificationType.ARRIVAL_CONFLICT_DRIVER_FEEDBACK_CS]: NotificationPriority.HIGH,
+  [NotificationType.COIN_TRANSFER_RECEIVED]: NotificationPriority.HIGH,
+  [NotificationType.COIN_TRANSFER_OUTBOUND_COMPLETED]: NotificationPriority.MEDIUM,
+  [NotificationType.COIN_TRANSFER_CANCELLED]: NotificationPriority.MEDIUM,
 };

@@ -46,6 +46,7 @@ export class WalletService {
         id: true,
         customerId: true,
         balance: true,
+        lockedForTransfers: true,
         currency: true,
         discount: true,
         updatedAt: true,
@@ -59,6 +60,9 @@ export class WalletService {
     return {
       ...wallet,
       balance: Number(wallet.balance),
+      lockedForTransfers: Number(wallet.lockedForTransfers ?? 0),
+      spendable:
+        Math.round((Number(wallet.balance) - Number(wallet.lockedForTransfers ?? 0)) * 100) / 100,
       discount: Number(wallet.discount),
     };
   }
@@ -233,10 +237,12 @@ export class WalletService {
   ) {
     const wallet = await this.findWalletByUserId(userId);
     const bal = Number(wallet.balance);
-    if (dto.amount > bal) {
+    const locked = Number(wallet.lockedForTransfers ?? 0);
+    const spendable = Math.round((bal - locked) * 100) / 100;
+    if (dto.amount > spendable) {
       throw new BadRequestException('Amount cannot exceed your available wallet balance');
     }
-    if (dto.amount <= 0 || bal <= 0) {
+    if (dto.amount <= 0 || spendable <= 0) {
       throw new BadRequestException('Invalid amount or zero balance');
     }
 

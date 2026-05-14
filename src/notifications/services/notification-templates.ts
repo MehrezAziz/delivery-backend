@@ -340,6 +340,18 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
     title: 'Driver responded to arrival incident',
     body: `Order ${d?.orderIdShort || ''}: driver submitted feedback. Review in admin.`,
   }),
+  COIN_TRANSFER_RECEIVED: (d) => ({
+    title: 'Coins received',
+    body: `You received ${d?.amount ?? ''} coins from ${d?.senderName ?? 'someone'}.${d?.giftMessage ? ` Message: ${d.giftMessage}` : ''}`,
+  }),
+  COIN_TRANSFER_OUTBOUND_COMPLETED: (d) => ({
+    title: 'Transfer completed',
+    body: `Your send of ${d?.amount ?? ''} coins has completed.`,
+  }),
+  COIN_TRANSFER_CANCELLED: (d) => ({
+    title: 'Transfer cancelled',
+    body: `Your pending transfer (${d?.amount ?? ''} coins) was cancelled.`,
+  }),
 };
 
 export function getNotificationTemplate(

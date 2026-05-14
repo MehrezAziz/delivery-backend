@@ -160,6 +160,8 @@ enum DriverTransactionType {
   REFUND
   DISPUTE_DEBIT
   DEPOSIT
+  COIN_TRANSFER_SENT
+  COIN_TRANSFER_RECEIVED
 }
 
 enum WalletTransactionType {
@@ -172,6 +174,8 @@ enum WalletTransactionType {
   BONUS
   REFERRAL_REWARD
   ADJUSTMENT
+  COIN_TRANSFER_SENT
+  COIN_TRANSFER_RECEIVED
 }
 
 enum TransactionStatus {
@@ -186,6 +190,15 @@ enum ReferenceType {
   REFERRAL
   WITHDRAWAL
   ADMIN_ADJUSTMENT
+  COIN_TRANSFER
+}
+
+enum CoinTransferStatus {
+  SCHEDULED
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
 }
 
 enum ResponseType {
@@ -291,6 +304,9 @@ enum NotificationType {
   ORDER_PAYMENT_DEDUCTED
   REFUND_PROCESSED
   WITHDRAWAL_STATUS
+  COIN_TRANSFER_RECEIVED
+  COIN_TRANSFER_OUTBOUND_COMPLETED
+  COIN_TRANSFER_CANCELLED
   // Customer - Referral
   REFERRAL_BONUS
   REFERRED_FRIEND_REGISTERED
@@ -446,6 +462,9 @@ model User {
   role        UserRole
   fcmToken    String?     @map("fcm_token")
   fcmPlatform String?     @map("fcm_platform") // 'android' or 'ios'
+  /// Optional identity / security verification doc (e.g. base64 image) — Settings → Security
+  securityVerificationDocument    String?   @map("security_verification_document") @db.Text
+  securityVerificationSubmittedAt DateTime? @map("security_verification_submitted_at")
   createdAt   DateTime    @default(now()) @map("created_at")
 
   // Relations
@@ -457,6 +476,10 @@ model User {
   supportTickets   SupportTicket[]
   passwordResetSessions PasswordResetSession[]
   payoutBankDetails    UserPayoutBankDetails?
+  transferPin            UserTransferPin?
+  transferStepUpChallenges TransferStepUpChallenge[]
+  coinTransfersSent      CoinTransfer[] @relation("CoinTransferSender")
+  coinTransfersReceived   CoinTransfer[] @relation("CoinTransferRecipient")
 
   @@map("users")
 }
@@ -604,6 +627,8 @@ model DriverAccount {
   id                  String   @id @default(uuid())
   driverId            String   @unique @map("driver_id")
   balance             Decimal  @default(0) @db.Decimal(10, 2) // Can be negative (debt)
+  /// Coins reserved for outbound P2P transfers until completed or cancelled
+  lockedForTransfers Decimal @default(0) @map("locked_for_transfers") @db.Decimal(10, 2)
   currency            String   @default("TND")
   avgDeliveryTime     Int?     @map("avg_delivery_time") // in minutes
   completedDeliveries Int      @default(0) @map("completed_deliveries")
@@ -843,6 +868,7 @@ model Country {
   governorates    Governorate[]
   pricingPolicies CountryPricingPolicy[]
   digitalWallets  DigitalWallet[]
+  coinConfigs     CountryCoinConfig[]
 
   @@map("countries")
 }
@@ -906,6 +932,8 @@ model CountryPricingPolicy {
   extraWeightPrice Decimal           @map("extra_weight_price") @db.Decimal(10, 2)
   nightFee         Decimal           @map("night_fee") @db.Decimal(10, 2)
   platformFee      Decimal           @map("platform_fee") @db.Decimal(10, 2)
+  /// Referral slice of base fee: invariant `base_fee = platform_fee + referral_commission`
+  referralCommission Decimal         @map("referral_commission") @db.Decimal(10, 2)
   maxNegativeDays  Int               @map("max_negative_days")
   deliveryZoneType DeliveryZoneType? @map("delivery_zone_type")
   isActive         Boolean           @default(true) @map("is_active")
@@ -1407,6 +1435,8 @@ model DigitalWallet {
   id         String  @id @default(uuid())
   customerId String  @unique @map("customer_id")
   balance    Decimal @default(0) @db.Decimal(10, 2)
+  /// Coins reserved for outbound P2P transfers in PENDING / until settlement
+  lockedForTransfers Decimal @default(0) @map("locked_for_transfers") @db.Decimal(10, 2)
   currency   String  @default("TND")
   countryId  String  @map("country_id")
   discount   Decimal @default(0) @db.Decimal(10, 2)
@@ -1459,6 +1489,101 @@ model WithdrawalRequest {
   wallet DigitalWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
 
   @@map("withdrawal_requests")
+}
+
+// ============================================
+// COIN P2P & CONFIG
+// ============================================
+
+model CountryCoinConfig {
+  id              String    @id @default(uuid())
+  countryId       String    @map("country_id")
+  /// Platform fee on P2P transfers in basis points (e.g. 200 = 2%)
+  transferFeeBps  Int       @default(200) @map("transfer_fee_bps")
+  effectiveFrom   DateTime  @default(now()) @map("effective_from")
+  effectiveTo     DateTime? @map("effective_to")
+  isActive        Boolean   @default(true) @map("is_active")
+  promoLabel      String?   @map("promo_label")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@index([countryId, isActive, effectiveFrom])
+  @@map("country_coin_configs")
+}
+
+model UserTransferPin {
+  userId         String    @id @map("user_id")
+  pinHash        String    @map("pin_hash")
+  failedAttempts Int       @default(0) @map("failed_attempts")
+  lockedUntil    DateTime? @map("locked_until")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_transfer_pins")
+}
+
+model TransferStepUpChallenge {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  tokenHash  String    @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("transfer_step_up_challenges")
+}
+
+model CoinTransfer {
+  id                 String             @id @default(uuid())
+  senderUserId       String             @map("sender_user_id")
+  recipientUserId    String             @map("recipient_user_id")
+  grossCoins         Decimal            @map("gross_coins") @db.Decimal(12, 2)
+  feeCoins           Decimal            @map("fee_coins") @db.Decimal(12, 2)
+  netCoins           Decimal            @map("net_coins") @db.Decimal(12, 2)
+  feeBps             Int                @map("fee_bps")
+  status             CoinTransferStatus @default(PENDING)
+  giftMessage        String?            @map("gift_message") @db.VarChar(500)
+  scheduledAt        DateTime?          @map("scheduled_at")
+  pendingUntil       DateTime?          @map("pending_until")
+  idempotencyKey     String?            @unique @map("idempotency_key")
+  senderCountryId    String             @map("sender_country_id")
+  recipientCountryId String             @map("recipient_country_id")
+  clientIp           String?            @map("client_ip") @db.VarChar(64)
+  deviceId           String?            @map("device_id") @db.VarChar(128)
+  completedAt        DateTime?          @map("completed_at")
+  cancelledAt        DateTime?          @map("cancelled_at")
+  failedReason       String?            @map("failed_reason") @db.VarChar(500)
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  sender    User @relation("CoinTransferSender", fields: [senderUserId], references: [id], onDelete: Cascade)
+  recipient User @relation("CoinTransferRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  reports   CoinTransferReport[]
+
+  @@index([senderUserId, createdAt])
+  @@index([recipientUserId, createdAt])
+  @@index([status, pendingUntil])
+  @@index([status, scheduledAt])
+  @@map("coin_transfers")
+}
+
+model CoinTransferReport {
+  id             String   @id @default(uuid())
+  transferId     String   @map("transfer_id")
+  reporterUserId String   @map("reporter_user_id")
+  note           String?  @db.VarChar(1000)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  transfer CoinTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@index([transferId])
+  @@index([reporterUserId, createdAt])
+  @@map("coin_transfer_reports")
 }
 
 // ============================================

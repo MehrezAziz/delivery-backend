@@ -105,6 +105,21 @@ export class DriverGuard implements CanActivate {
 }
 
 /**
+ * Customer or driver (any regular app user).
+ * Usage: @UseGuards(JwtUserGuard, CustomerOrDriverGuard)
+ */
+@Injectable()
+export class CustomerOrDriverGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const user: AuthenticatedUser = context.switchToHttp().getRequest().user;
+    if (user?.role !== UserRole.CUSTOMER && user?.role !== UserRole.DRIVER) {
+      throw new ForbiddenException('Customer or driver access only');
+    }
+    return true;
+  }
+}
+
+/**
  * Restricts to ADMIN only
  * Usage: @UseGuards(JwtSuperUserGuard, AdminGuard)
  */

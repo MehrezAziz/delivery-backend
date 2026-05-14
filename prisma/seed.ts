@@ -92,6 +92,7 @@ async function main() {
       extraWeightPrice: 0.5,
       nightFee: 3.0,
       platformFee: 1.5,
+      referralCommission: 3.5,
       maxNegativeDays: 7,
       deliveryZoneType: 'SAME_GOVERNORATE',
       isActive: true,

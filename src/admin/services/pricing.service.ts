@@ -2,6 +2,17 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePricingPolicyDto, UpdatePricingPolicyDto } from '../dto/pricing.dto';
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function assertBaseFeeSplit(baseFee: number, platformFee: number, referralCommission: number): void {
+  const sum = round2(platformFee + referralCommission);
+  if (Math.abs(round2(baseFee) - sum) > 0.001) {
+    throw new BadRequestException('base_fee must equal platform_fee + referral_commission (within 0.01)');
+  }
+}
+
 @Injectable()
 export class PricingService {
   constructor(private readonly prisma: PrismaService) {}
@@ -34,9 +45,25 @@ export class PricingService {
       );
     }
 
+    const referralCommission =
+      dto.referralCommission !== undefined && dto.referralCommission !== null
+        ? dto.referralCommission
+        : round2(dto.baseFee - dto.platformFee);
+    assertBaseFeeSplit(dto.baseFee, dto.platformFee, referralCommission);
+
     return this.prisma.countryPricingPolicy.create({
       data: {
-        ...dto,
+        countryId: dto.countryId,
+        deliveryZoneType: dto.deliveryZoneType,
+        pricePerKm: dto.pricePerKm,
+        baseFee: dto.baseFee,
+        baseWeight: dto.baseWeight,
+        extraWeightStep: dto.extraWeightStep,
+        extraWeightPrice: dto.extraWeightPrice,
+        nightFee: dto.nightFee,
+        platformFee: dto.platformFee,
+        referralCommission,
+        maxNegativeDays: dto.maxNegativeDays,
         isActive: dto.isActive ?? true,
       },
       include: {
@@ -131,9 +158,28 @@ export class PricingService {
       }
     }
 
+    const nextBase = dto.baseFee ?? Number(policy.baseFee);
+    const nextPlatform = dto.platformFee ?? Number(policy.platformFee);
+    const nextReferral =
+      dto.referralCommission !== undefined && dto.referralCommission !== null
+        ? dto.referralCommission
+        : round2(nextBase - nextPlatform);
+    assertBaseFeeSplit(nextBase, nextPlatform, nextReferral);
+
     return this.prisma.countryPricingPolicy.update({
       where: { id },
-      data: dto,
+      data: {
+        ...(dto.pricePerKm !== undefined && { pricePerKm: dto.pricePerKm }),
+        ...(dto.baseFee !== undefined && { baseFee: dto.baseFee }),
+        ...(dto.baseWeight !== undefined && { baseWeight: dto.baseWeight }),
+        ...(dto.extraWeightStep !== undefined && { extraWeightStep: dto.extraWeightStep }),
+        ...(dto.extraWeightPrice !== undefined && { extraWeightPrice: dto.extraWeightPrice }),
+        ...(dto.nightFee !== undefined && { nightFee: dto.nightFee }),
+        ...(dto.platformFee !== undefined && { platformFee: dto.platformFee }),
+        referralCommission: nextReferral,
+        ...(dto.maxNegativeDays !== undefined && { maxNegativeDays: dto.maxNegativeDays }),
+        ...(dto.isActive !== undefined && { isActive: dto.isActive }),
+      },
       include: {
         country: true,
       },

@@ -141,7 +141,11 @@ export class OrdersService {
       );
     }
 
-    const walletBalance = customer.wallet ? Number(customer.wallet.balance) : null;
+    const walletBalance = customer.wallet
+      ? Math.round(
+          (Number(customer.wallet.balance) - Number(customer.wallet.lockedForTransfers ?? 0)) * 100,
+        ) / 100
+      : null;
 
     const extra = this.normalizeCustomerExtraAmount(dto.customerExtraAmount);
     const calculatedPrice = priceCalc.totalPrice;
@@ -267,8 +271,13 @@ export class OrdersService {
       isScheduled = true;
     }
 
-    if (dto.paymentType === PaymentType.WALLET && Number(customer.wallet!.balance) < finalPrice) {
-      throw new BadRequestException('Insufficient wallet balance');
+    if (dto.paymentType === PaymentType.WALLET) {
+      const w = customer.wallet!;
+      const spendable =
+        Math.round((Number(w.balance) - Number(w.lockedForTransfers ?? 0)) * 100) / 100;
+      if (spendable < finalPrice) {
+        throw new BadRequestException('Insufficient wallet balance');
+      }
     }
 
     const order = await this.prisma.order.create({
@@ -341,7 +350,10 @@ export class OrdersService {
     if (!allowed.includes(order.status)) throw new BadRequestException('Cannot change payment method after pickup');
     if (dto.paymentType === PaymentType.WALLET) {
       if (!order.customer.wallet) throw new BadRequestException('No digital wallet');
-      if (Number(order.customer.wallet.balance) < Number(order.price)) throw new BadRequestException('Insufficient wallet balance');
+      const w = order.customer.wallet;
+      const spendable =
+        Math.round((Number(w.balance) - Number(w.lockedForTransfers ?? 0)) * 100) / 100;
+      if (spendable < Number(order.price)) throw new BadRequestException('Insufficient wallet balance');
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: { paymentType: dto.paymentType }, include: this.orderInclude() });
     return this.mapToResponseDto(updated, { viewerIsCustomer: true });

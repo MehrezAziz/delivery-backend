@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { RedisModule } from '@nestjs-modules/ioredis';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { SecuritySessionService } from './security-session.service';
 import { OtpService } from './otp.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ReferralModule } from '../referral/referral.module';
@@ -19,6 +20,7 @@ import {
   JwtSuperUserGuard,
   CustomerGuard,
   DriverGuard,
+  CustomerOrDriverGuard,
   AdminGuard,
   CustomerServiceGuard,
   StaffGuard,
@@ -58,6 +60,7 @@ import {
   ],
   controllers: [AuthController],
   providers: [
+    SecuritySessionService,
     AuthService,
     OtpService,
     MailService,
@@ -69,6 +72,7 @@ import {
     JwtSuperUserGuard,
     CustomerGuard,
     DriverGuard,
+    CustomerOrDriverGuard,
     AdminGuard,
     CustomerServiceGuard,
     StaffGuard,
@@ -77,12 +81,14 @@ import {
     VerifiedDriverGuard,
   ],
   exports: [
+    SecuritySessionService,
     AuthService,
     OtpService,
     JwtUserGuard,
     JwtSuperUserGuard,
     CustomerGuard,
     DriverGuard,
+    CustomerOrDriverGuard,
     AdminGuard,
     CustomerServiceGuard,
     StaffGuard,

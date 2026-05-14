@@ -21,6 +21,7 @@ import { SupportModule } from './support/support.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ControlPanelModule } from './control-panel/control-panel.module';
 import { DeliveryCompanyModule } from './delivery-company/delivery-company.module';
+import { CoinTransfersModule } from './coin-transfers/coin-transfers.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { DeliveryCompanyModule } from './delivery-company/delivery-company.modul
     SupportModule,
     ControlPanelModule,
     DeliveryCompanyModule,
+    CoinTransfersModule,
   ],
   controllers: [AppController],
   providers: [

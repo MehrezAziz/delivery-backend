@@ -51,6 +51,7 @@ import {
 import { MailService } from './mail.service';
 import { WhatsappOtpService } from './whatsapp-otp.service';
 import { FirebaseService } from '../notifications/services/firebase.service';
+import { SecuritySessionService } from './security-session.service';
 
 @Injectable()
 export class AuthService {
@@ -69,6 +70,7 @@ export class AuthService {
     private readonly mailService: MailService,
     private readonly whatsappOtpService: WhatsappOtpService,
     private readonly firebaseService: FirebaseService,
+    private readonly securitySession: SecuritySessionService,
   ) {}
 
   /** Log a login attempt for security audit */
@@ -438,6 +440,101 @@ export class AuthService {
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) throw new UnauthorizedException('Invalid password');
     return { verified: true };
+  }
+
+  async changeUserPassword(
+    userId: string,
+    currentPassword: string | undefined,
+    newPassword: string,
+  ): Promise<{ ok: true }> {
+    if (!newPassword || newPassword.length < 8) {
+      throw new BadRequestException('New password must be at least 8 characters');
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.password) {
+      throw new BadRequestException(
+        'No account password is set on this login. Use “Forgot password” from sign-in, or contact support.',
+      );
+    }
+    const bypass = this.securitySession.isActive(userId);
+    if (!bypass) {
+      const cp = (currentPassword ?? '').trim();
+      if (!cp) {
+        throw new BadRequestException('Current password is required');
+      }
+      const ok = await bcrypt.compare(cp, user.password);
+      if (!ok) throw new UnauthorizedException('Current password is incorrect');
+    }
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({ where: { id: userId }, data: { password: hashed } });
+    return { ok: true };
+  }
+
+  /** After verifying the account password, opens a short window where password/PIN can be changed without re-entering current values. */
+  async establishSecuritySessionWithPassword(userId: string, password: string): Promise<{ ok: true }> {
+    const trimmed = (password ?? '').trim();
+    if (!trimmed) {
+      throw new BadRequestException('Password is required');
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { password: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.password) {
+      throw new BadRequestException('No account password is set on this login.');
+    }
+    const ok = await bcrypt.compare(trimmed, user.password);
+    if (!ok) throw new UnauthorizedException('Invalid password');
+    this.securitySession.grant(userId);
+    return { ok: true };
+  }
+
+  revokeSecuritySession(userId: string): { ok: true } {
+    this.securitySession.clear(userId);
+    return { ok: true };
+  }
+
+  async getUserSecuritySummary(userId: string): Promise<{
+    hasPassword: boolean;
+    hasTransferPin: boolean;
+    hasVerificationDocument: boolean;
+    securityTier: 'LOW' | 'MEDIUM' | 'HIGH';
+  }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { password: true, securityVerificationDocument: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    const pin = await this.prisma.userTransferPin.findUnique({ where: { userId }, select: { userId: true } });
+    const hasPassword = !!user.password;
+    const hasTransferPin = !!pin;
+    const hasVerificationDocument = !!(
+      user.securityVerificationDocument && user.securityVerificationDocument.length > 0
+    );
+    let securityTier: 'LOW' | 'MEDIUM' | 'HIGH' = 'LOW';
+    if (hasPassword && hasTransferPin && hasVerificationDocument) securityTier = 'HIGH';
+    else if (hasPassword && (hasTransferPin || hasVerificationDocument)) securityTier = 'MEDIUM';
+    return { hasPassword, hasTransferPin, hasVerificationDocument, securityTier };
+  }
+
+  async setSecurityVerificationDocument(userId: string, image: string): Promise<{ ok: true }> {
+    const trimmed = (image || '').trim();
+    if (trimmed.length < 32) {
+      throw new BadRequestException('Please provide a document image');
+    }
+    if (trimmed.length > 1_500_000) {
+      throw new BadRequestException('Document is too large');
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        securityVerificationDocument: trimmed,
+        securityVerificationSubmittedAt: new Date(),
+      },
+    });
+    return { ok: true };
   }
 
   // ============================================

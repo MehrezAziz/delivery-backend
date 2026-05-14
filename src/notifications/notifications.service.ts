@@ -271,6 +271,17 @@ export class NotificationsService {
         }
       }
 
+      const coinTransferTemplateData: Record<string, string> = {};
+      if (
+        (dto.type === 'COIN_TRANSFER_RECEIVED' || dto.type === 'COIN_TRANSFER_OUTBOUND_COMPLETED') &&
+        dto.templateData
+      ) {
+        for (const [k, v] of Object.entries(dto.templateData)) {
+          if (v === undefined || v === null) continue;
+          coinTransferTemplateData[k] = typeof v === 'string' ? v : String(v);
+        }
+      }
+
       const result = await this.firebaseService.sendPush({
         token: fcmToken,
         title,
@@ -284,6 +295,7 @@ export class NotificationsService {
           // Pass orderId for order: and chat: group keys (Notifee / client thread grouping)
           ...(orderIdForPush ? { orderId: orderIdForPush } : {}),
           ...chatTemplateData,
+          ...coinTransferTemplateData,
           // Pass orderStatus so the frontend dedup map stays in sync
           ...(orderStatus ? { orderStatus } : {}),
           ...(dto.trackingAudience ? { trackingAudience: dto.trackingAudience } : {}),
@@ -308,13 +320,16 @@ export class NotificationsService {
           },
         });
 
-        // Clear invalid token
+        // Clear invalid token so the next app open re-registers FCM
         if (result.error?.startsWith('Invalid token')) {
           if (pushRecipient === 'USER') {
             await this.prisma.user.update({
               where: { id: userId },
               data: { fcmToken: null, fcmPlatform: null },
             });
+            this.logger.log(
+              `Cleared stale FCM token for USER ${userId}. Push will work again after the user opens the app on that device.`,
+            );
           } else {
             await this.prisma.superUser.update({
               where: { id: userId },
