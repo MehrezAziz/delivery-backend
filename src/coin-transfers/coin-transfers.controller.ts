@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Ip,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -23,6 +24,7 @@ import {
   CreateTransferChallengeDto,
   PreviewCoinTransferDto,
   ReportCoinTransferDto,
+  RescheduleCoinTransferDto,
   SetTransferPinDto,
   VerifyTransferPinDto,
   RemoveTransferPinDto,
@@ -67,14 +69,14 @@ export class CoinTransfersController {
   @Post('transfers/challenge')
   @Throttle({ default: { ttl: 60_000, limit: 15 } })
   async createChallenge(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateTransferChallengeDto) {
-    const pin = dto.transferPin?.trim();
-    return this.coinTransfers.createChallenge(user.id, pin || undefined);
+    return this.coinTransfers.createChallenge(user.id, dto);
   }
 
   @Post('transfers/preview')
   @Throttle({ default: { ttl: 60_000, limit: 60 } })
   async preview(@CurrentUser() user: AuthenticatedUser, @Body() dto: PreviewCoinTransferDto) {
-    return this.coinTransfers.previewTransfer(user.id, dto.recipientUserId, dto.grossCoins);
+    const recipientUserId = await this.coinTransfers.resolveRecipientUserIdOrThrow(user.id, dto);
+    return this.coinTransfers.previewTransfer(user.id, recipientUserId, dto.grossCoins);
   }
 
   @Post('transfers')
@@ -88,10 +90,11 @@ export class CoinTransfersController {
   ) {
     const deviceId = (req.headers['x-device-id'] as string | undefined)?.slice(0, 128) || null;
     const scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : undefined;
+    const recipientUserId = await this.coinTransfers.resolveRecipientUserIdOrThrow(user.id, dto);
     return this.coinTransfers.createTransfer(
       user.id,
       {
-        recipientUserId: dto.recipientUserId,
+        recipientUserId,
         grossCoins: dto.grossCoins,
         challengeToken: dto.challengeToken,
         giftMessage: dto.giftMessage,
@@ -119,6 +122,16 @@ export class CoinTransfersController {
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
   async cancel(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.coinTransfers.cancelTransfer(user.id, id);
+  }
+
+  @Patch('transfers/:id/schedule')
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  async reschedule(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RescheduleCoinTransferDto,
+  ) {
+    return this.coinTransfers.rescheduleTransfer(user.id, id, new Date(dto.scheduledAt));
   }
 
   @Post('transfers/:id/report')

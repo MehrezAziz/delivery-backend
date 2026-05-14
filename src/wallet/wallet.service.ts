@@ -64,6 +64,8 @@ export class WalletService {
       spendable:
         Math.round((Number(wallet.balance) - Number(wallet.lockedForTransfers ?? 0)) * 100) / 100,
       discount: Number(wallet.discount),
+      /** Wallet balance is denominated in platform coins (not fiat labels). */
+      balanceUnit: 'COINS' as const,
     };
   }
 

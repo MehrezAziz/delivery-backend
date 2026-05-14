@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'crypto';
@@ -22,6 +23,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SecuritySessionService } from '../auth/security-session.service';
+import type { CreateTransferChallengeDto } from './dto/coin-transfer.dto';
 
 const CHALLENGE_TTL_MS = 120_000;
 const PIN_LOCK_AFTER_FAILS = 5;
@@ -125,6 +127,26 @@ export class CoinTransfersService {
       orderBy: { effectiveFrom: 'desc' },
     });
     return row?.transferFeeBps ?? 200;
+  }
+
+  /**
+   * Coins to credit for cash in this country's fiat (active `CountryCoinConfig.coinsPerFiatUnit` × amount).
+   * Use when converting COD / manual cash intake into wallet coins.
+   */
+  async computeCoinsFromCashFiat(countryId: string, fiatAmount: number): Promise<number> {
+    if (!Number.isFinite(fiatAmount) || fiatAmount <= 0) return 0;
+    const now = new Date();
+    const row = await this.prisma.countryCoinConfig.findFirst({
+      where: {
+        countryId,
+        isActive: true,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
+      },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    const rate = row ? Number(row.coinsPerFiatUnit) : 1;
+    return round2(fiatAmount * rate);
   }
 
   private async assertUserEligibleForCoinTransfer(userId: string): Promise<void> {
@@ -284,22 +306,48 @@ export class CoinTransfersService {
     });
   }
 
+  private async verifyAccountPasswordForChallenge(userId: string, rawPassword: string): Promise<void> {
+    const pwd = (rawPassword ?? '').trim();
+    if (pwd.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters');
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { password: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.password) {
+      throw new BadRequestException(
+        'No account password is set on this account. Use your 8-digit transfer PIN or set a password in Settings.',
+      );
+    }
+    const ok = await bcrypt.compare(pwd, user.password);
+    if (!ok) throw new UnauthorizedException('Invalid password');
+  }
+
   private hashChallengeToken(token: string): string {
     return createHash('sha256').update(token, 'utf8').digest('hex');
   }
 
   async createChallenge(
     userId: string,
-    transferPin?: string | null,
+    dto: CreateTransferChallengeDto = {},
   ): Promise<{ challengeToken: string; expiresAt: string }> {
     await this.assertP2pEnabled();
+    const pinTrim = (dto.transferPin ?? '').trim();
+    const passTrim = (dto.accountPassword ?? '').trim();
+    if (pinTrim && passTrim) {
+      throw new BadRequestException('Provide either transfer PIN or account password, not both');
+    }
     const row = await this.prisma.userTransferPin.findUnique({ where: { userId } });
     if (row) {
-      const pin = (transferPin ?? '').trim();
-      if (!pin) {
-        throw new BadRequestException('Transfer PIN is required to authorize coin sends');
+      if (!pinTrim && !passTrim) {
+        throw new BadRequestException('Transfer PIN or account password is required to authorize coin sends');
       }
-      await this.verifyTransferPinOnly(userId, pin);
+      if (pinTrim) await this.verifyTransferPinOnly(userId, pinTrim);
+      else await this.verifyAccountPasswordForChallenge(userId, passTrim);
+    } else if (passTrim) {
+      await this.verifyAccountPasswordForChallenge(userId, passTrim);
     }
     const plain = randomBytes(32).toString('hex');
     const tokenHash = this.hashChallengeToken(plain);
@@ -308,6 +356,45 @@ export class CoinTransfersService {
       data: { userId, tokenHash, expiresAt },
     });
     return { challengeToken: plain, expiresAt: expiresAt.toISOString() };
+  }
+
+  /** Trim; remove spaces/dashes. Caller must enforce E.164 with +. */
+  normalizeCoinRecipientPhone(raw: string | undefined | null): string {
+    if (raw == null) return '';
+    return String(raw).trim().replace(/[\s\-\u00A0]/g, '');
+  }
+
+  /**
+   * Resolves recipient from exactly one of UUID or E.164 phone (must match `users.phone` unique column).
+   */
+  async resolveRecipientUserIdOrThrow(
+    senderUserId: string,
+    dto: { recipientUserId?: string; recipientPhone?: string },
+  ): Promise<string> {
+    const id = (dto.recipientUserId ?? '').trim();
+    const phoneNorm = this.normalizeCoinRecipientPhone(dto.recipientPhone);
+    if (id && phoneNorm) {
+      throw new BadRequestException('Provide either recipient user ID or phone number, not both.');
+    }
+    if (!id && !phoneNorm) {
+      throw new BadRequestException(
+        'Provide recipient user ID or phone number in international format (e.g. +21655664488).',
+      );
+    }
+    if (id) {
+      if (id === senderUserId) throw new BadRequestException('Cannot send coins to yourself');
+      return id;
+    }
+    if (!/^\+\d{10,15}$/.test(phoneNorm)) {
+      throw new BadRequestException('Phone must be E.164 with country code (e.g. +21655664488).');
+    }
+    const recipient = await this.prisma.user.findFirst({
+      where: { phone: phoneNorm },
+      select: { id: true },
+    });
+    if (!recipient) throw new NotFoundException('No account found for this phone number.');
+    if (recipient.id === senderUserId) throw new BadRequestException('Cannot send coins to yourself');
+    return recipient.id;
   }
 
   async previewTransfer(senderUserId: string, recipientUserId: string, grossCoins: number) {
@@ -322,9 +409,8 @@ export class CoinTransfersService {
       throw new BadRequestException(`Minimum transfer is ${min} coins (gross)`);
     }
     const senderCountry = await this.resolveCountryIdForUser(senderUserId);
-    const recipientCountry = await this.resolveCountryIdForUser(recipientUserId);
-    if (!senderCountry || !recipientCountry || senderCountry !== recipientCountry) {
-      throw new BadRequestException('Sender and recipient must belong to the same country');
+    if (!senderCountry) {
+      throw new BadRequestException('Sender country could not be resolved; complete wallet setup first.');
     }
     const feeBps = await this.getActiveTransferFeeBps(senderCountry);
     const { feeCoins, netCoins } = splitGrossIntoFeeAndNet(grossCoins, feeBps);
@@ -377,9 +463,6 @@ export class CoinTransfersService {
     const recipientLedger = await this.loadCoinLedger(dto.recipientUserId);
     if (!senderLedger || !recipientLedger) {
       throw new BadRequestException('Wallet or driver account is not available for one of the users');
-    }
-    if (senderLedger.countryId !== recipientLedger.countryId) {
-      throw new BadRequestException('Sender and recipient must belong to the same country');
     }
     if (senderLedger.available < dto.grossCoins) {
       throw new BadRequestException('Insufficient available balance (coins reserved for other pending transfers?)');
@@ -445,7 +528,7 @@ export class CoinTransfersService {
       data: { consumedAt: now },
     });
     if (res.count !== 1) {
-      throw new ForbiddenException('Invalid or expired step-up challenge. Request a new one after biometrics.');
+      throw new ForbiddenException('Invalid or expired step-up challenge. Request a new one after confirming your identity.');
     }
   }
 
@@ -493,6 +576,30 @@ export class CoinTransfersService {
       relatedEntityId: transferId,
     });
     return { ok: true };
+  }
+
+  /** Sender only: update `scheduledAt` while the transfer is still SCHEDULED. */
+  async rescheduleTransfer(senderUserId: string, transferId: string, newScheduledAt: Date) {
+    await this.assertP2pEnabled();
+    const now = new Date();
+    const minLeadMs = 60_000;
+    if (newScheduledAt.getTime() <= now.getTime() + minLeadMs) {
+      throw new BadRequestException('Scheduled time must be at least one minute in the future');
+    }
+    const t = await this.prisma.coinTransfer.findFirst({
+      where: { id: transferId, senderUserId },
+    });
+    if (!t) throw new NotFoundException('Transfer not found');
+    if (t.status !== CoinTransferStatus.SCHEDULED) {
+      throw new BadRequestException('Only scheduled transfers can be rescheduled');
+    }
+    await this.prisma.coinTransfer.update({
+      where: { id: transferId },
+      data: { scheduledAt: newScheduledAt },
+    });
+    const updated = await this.prisma.coinTransfer.findUnique({ where: { id: transferId } });
+    if (!updated) throw new NotFoundException('Transfer not found');
+    return this.serializeTransferForUser(updated, senderUserId);
   }
 
   private async loadCoinLedgerTx(tx: Prisma.TransactionClient, userId: string) {
@@ -682,13 +789,6 @@ export class CoinTransfersService {
             status: CoinTransferStatus.FAILED,
             failedReason: 'Ledger not available at schedule time',
           },
-        });
-        return;
-      }
-      if (senderLedger.countryId !== recipientLedger.countryId) {
-        await tx.coinTransfer.update({
-          where: { id: transferId },
-          data: { status: CoinTransferStatus.FAILED, failedReason: 'Country mismatch at schedule time' },
         });
         return;
       }

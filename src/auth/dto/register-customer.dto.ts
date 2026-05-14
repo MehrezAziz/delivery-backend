@@ -13,7 +13,9 @@ import { UserGender } from '@prisma/client';
 
 export class RegisterCustomerDto {
   @IsString()
-  @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Invalid phone number format' })
+  @Matches(/^\+[1-9]\d{7,14}$/, {
+    message: 'Phone must be in international E.164 format with + and country code (e.g. +21655664488)',
+  })
   phone!: string;
 
   @IsString()

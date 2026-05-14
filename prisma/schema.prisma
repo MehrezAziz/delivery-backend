@@ -1500,6 +1500,8 @@ model CountryCoinConfig {
   countryId       String    @map("country_id")
   /// Platform fee on P2P transfers in basis points (e.g. 200 = 2%)
   transferFeeBps  Int       @default(200) @map("transfer_fee_bps")
+  /// Wallet coins credited per 1.00 unit of this country’s fiat when converting cash (e.g. COD) to coins
+  coinsPerFiatUnit Decimal  @default(1) @map("coins_per_fiat_unit") @db.Decimal(12, 4)
   effectiveFrom   DateTime  @default(now()) @map("effective_from")
   effectiveTo     DateTime? @map("effective_to")
   isActive        Boolean   @default(true) @map("is_active")
