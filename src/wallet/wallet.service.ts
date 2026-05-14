@@ -45,11 +45,15 @@ export class WalletService {
       select: {
         id: true,
         customerId: true,
+        countryId: true,
         balance: true,
         lockedForTransfers: true,
         currency: true,
         discount: true,
         updatedAt: true,
+        country: {
+          select: { currencyCode: true, currencySymbol: true, name: true },
+        },
       },
     });
 
@@ -57,15 +61,54 @@ export class WalletService {
       throw new NotFoundException('Wallet not found');
     }
 
+    const balanceCoins = Number(wallet.balance);
+    const lockedCoins = Number(wallet.lockedForTransfers ?? 0);
+    const spendableCoins =
+      Math.round((balanceCoins - lockedCoins) * 100) / 100;
+
+    const now = new Date();
+    const coinRow = await this.prisma.countryCoinConfig.findFirst({
+      where: {
+        countryId: wallet.countryId,
+        isActive: true,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
+      },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+
+    const rate = coinRow ? Number(coinRow.coinsPerFiatUnit) : NaN;
+    let coinsToLocalFiat: {
+      coinsPerFiatUnit: number;
+      currencyCode: string;
+      currencySymbol: string;
+      balanceAsLocalFiat: number;
+      spendableAsLocalFiat: number;
+    } | null = null;
+    if (Number.isFinite(rate) && rate > 0) {
+      coinsToLocalFiat = {
+        coinsPerFiatUnit: rate,
+        currencyCode: wallet.country.currencyCode,
+        currencySymbol: wallet.country.currencySymbol,
+        balanceAsLocalFiat: Math.round((balanceCoins / rate) * 100) / 100,
+        spendableAsLocalFiat: Math.round((spendableCoins / rate) * 100) / 100,
+      };
+    }
+
     return {
-      ...wallet,
-      balance: Number(wallet.balance),
-      lockedForTransfers: Number(wallet.lockedForTransfers ?? 0),
-      spendable:
-        Math.round((Number(wallet.balance) - Number(wallet.lockedForTransfers ?? 0)) * 100) / 100,
+      id: wallet.id,
+      customerId: wallet.customerId,
+      countryId: wallet.countryId,
+      balance: balanceCoins,
+      lockedForTransfers: lockedCoins,
+      spendable: spendableCoins,
       discount: Number(wallet.discount),
+      currency: wallet.currency,
+      updatedAt: wallet.updatedAt,
       /** Wallet balance is denominated in platform coins (not fiat labels). */
       balanceUnit: 'COINS' as const,
+      /** Optional: estimated local fiat equivalent using active `CountryCoinConfig.coinsPerFiatUnit` (coins per 1.00 fiat unit). */
+      coinsToLocalFiat,
     };
   }
 

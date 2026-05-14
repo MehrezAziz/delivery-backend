@@ -538,29 +538,15 @@ export class CoinTransfersService {
       where: { id: transferId, senderUserId },
     });
     if (!t) throw new NotFoundException('Transfer not found');
-    if (t.status !== CoinTransferStatus.PENDING && t.status !== CoinTransferStatus.SCHEDULED) {
-      throw new BadRequestException('Only scheduled or pending transfers can be cancelled');
+    if (t.status !== CoinTransferStatus.SCHEDULED) {
+      throw new BadRequestException(
+        'Only scheduled sends can be cancelled. Once a send is pending, it can no longer be cancelled.',
+      );
     }
     await this.prisma.$transaction(async (tx) => {
       const cur = await tx.coinTransfer.findFirst({ where: { id: transferId, senderUserId } });
-      if (!cur || (cur.status !== CoinTransferStatus.PENDING && cur.status !== CoinTransferStatus.SCHEDULED)) {
+      if (!cur || cur.status !== CoinTransferStatus.SCHEDULED) {
         throw new BadRequestException('Transfer is no longer cancellable');
-      }
-      if (cur.status === CoinTransferStatus.PENDING) {
-        const senderLedger = await this.loadCoinLedgerTx(tx, senderUserId);
-        if (!senderLedger) throw new BadRequestException('Sender ledger not found');
-        const gross = Number(cur.grossCoins);
-        if (senderLedger.kind === 'CUSTOMER') {
-          await tx.digitalWallet.update({
-            where: { id: senderLedger.walletId! },
-            data: { lockedForTransfers: { decrement: gross } },
-          });
-        } else {
-          await tx.driverAccount.update({
-            where: { id: senderLedger.accountId! },
-            data: { lockedForTransfers: { decrement: gross } },
-          });
-        }
       }
       await tx.coinTransfer.update({
         where: { id: transferId },
