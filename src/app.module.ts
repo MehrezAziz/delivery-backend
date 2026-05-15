@@ -22,6 +22,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ControlPanelModule } from './control-panel/control-panel.module';
 import { DeliveryCompanyModule } from './delivery-company/delivery-company.module';
 import { CoinTransfersModule } from './coin-transfers/coin-transfers.module';
+import { CoinTopupModule } from './coin-topup/coin-topup.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { CoinTransfersModule } from './coin-transfers/coin-transfers.module';
     ControlPanelModule,
     DeliveryCompanyModule,
     CoinTransfersModule,
+    CoinTopupModule,
   ],
   controllers: [AppController],
   providers: [

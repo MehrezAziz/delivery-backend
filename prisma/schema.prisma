@@ -186,11 +186,23 @@ enum TransactionStatus {
 
 enum ReferenceType {
   STRIPE_TOPUP
+  FLOUCI_TOPUP
   ORDER
   REFERRAL
   WITHDRAWAL
   ADMIN_ADJUSTMENT
   COIN_TRANSFER
+}
+
+enum CoinTopupSessionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum CoinTopupPayerRole {
+  CUSTOMER
+  DRIVER
 }
 
 enum CoinTransferStatus {
@@ -480,6 +492,7 @@ model User {
   transferStepUpChallenges TransferStepUpChallenge[]
   coinTransfersSent      CoinTransfer[] @relation("CoinTransferSender")
   coinTransfersReceived   CoinTransfer[] @relation("CoinTransferRecipient")
+  coinTopupSessions      CoinTopupSession[]
 
   @@map("users")
 }
@@ -1512,6 +1525,28 @@ model CountryCoinConfig {
 
   @@index([countryId, isActive, effectiveFrom])
   @@map("country_coin_configs")
+}
+
+model CoinTopupSession {
+  id                  String                @id @default(uuid())
+  userId              String                @map("user_id")
+  payerRole           CoinTopupPayerRole    @map("payer_role")
+  countryId           String                @map("country_id")
+  coinsAmount         Decimal               @map("coins_amount") @db.Decimal(12, 4)
+  fiatAmount          Decimal               @map("fiat_amount") @db.Decimal(14, 6)
+  fiatCurrencyCode    String                @map("fiat_currency_code")
+  amountMillimes      Int                   @map("amount_millimes")
+  coinsPerFiatUnit    Decimal               @map("coins_per_fiat_unit") @db.Decimal(12, 4)
+  developerTrackingId String                @unique @map("developer_tracking_id")
+  flouciPaymentId     String?               @unique @map("flouci_payment_id")
+  status              CoinTopupSessionStatus @default(PENDING)
+  createdAt           DateTime              @default(now()) @map("created_at")
+  completedAt         DateTime?             @map("completed_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@map("coin_topup_sessions")
 }
 
 model UserTransferPin {
