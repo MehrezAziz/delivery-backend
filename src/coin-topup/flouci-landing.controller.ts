@@ -30,8 +30,13 @@ export class FlouciLandingController {
   }
 
   @Get('success')
-  success(@Query('tracking') tracking: string | undefined, @Res() res: Response) {
+  success(
+    @Query('tracking') tracking: string | undefined,
+    @Query('amount') amount: string | undefined,
+    @Res() res: Response,
+  ) {
     const tr = (tracking ?? '').trim();
+    const amt = (amount ?? '').trim();
     res
       .status(200)
       .type('html')
@@ -39,7 +44,8 @@ export class FlouciLandingController {
         this.shell(
           'Payment complete',
           `<h1>Payment received</h1>
-<p>Your bank confirmed the payment. Coins are added as soon as our server verifies the transaction — usually within a few seconds.</p>
+${amt ? `<p style="font-size:1.35rem;font-weight:800;margin:12px 0 0;color:#f8fafc">${escapeHtml(amt)} TND</p>` : ''}
+<p style="margin-top:12px">Your bank confirmed the payment. Coins are added as soon as our server verifies the transaction — usually within a few seconds.</p>
 <p style="margin-top:12px">You can close this window and return to the app.</p>
 ${tr ? `<span class="pill">Ref · ${escapeHtml(tr)}</span>` : ''}`,
         ),
@@ -47,8 +53,13 @@ ${tr ? `<span class="pill">Ref · ${escapeHtml(tr)}</span>` : ''}`,
   }
 
   @Get('failure')
-  failure(@Query('tracking') tracking: string | undefined, @Res() res: Response) {
+  failure(
+    @Query('tracking') tracking: string | undefined,
+    @Query('amount') amount: string | undefined,
+    @Res() res: Response,
+  ) {
     const tr = (tracking ?? '').trim();
+    const amt = (amount ?? '').trim();
     res
       .status(200)
       .type('html')
@@ -56,7 +67,8 @@ ${tr ? `<span class="pill">Ref · ${escapeHtml(tr)}</span>` : ''}`,
         this.shell(
           'Payment not completed',
           `<h1>Payment not completed</h1>
-<p>The payment was cancelled or could not be processed. No charge was applied on our side.</p>
+${amt ? `<p style="font-size:1.2rem;font-weight:700;margin:12px 0 0;color:#fca5a5">${escapeHtml(amt)} TND was not charged</p>` : ''}
+<p style="margin-top:12px">The payment was cancelled or could not be processed. No charge was applied on our side.</p>
 <p style="margin-top:12px">Return to the app to try again.</p>
 ${tr ? `<span class="pill">Ref · ${escapeHtml(tr)}</span>` : ''}`,
         ),

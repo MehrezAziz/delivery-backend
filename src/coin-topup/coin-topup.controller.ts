@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -63,6 +64,19 @@ export class CoinTopupController {
   @Post('flouci/verify')
   verify(@CurrentUser() user: AuthenticatedUser, @Body() dto: VerifyFlouciTopUpDto) {
     return this.coinTopupService.verifyOwnedSession(user.id, dto);
+  }
+
+  @Get('pending')
+  listPending(@CurrentUser() user: AuthenticatedUser) {
+    return this.coinTopupService.listPendingSessionsForUser(user.id);
+  }
+
+  @Delete('pending/:trackingId')
+  cancelPending(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('trackingId') trackingId: string,
+  ) {
+    return this.coinTopupService.cancelPendingSession(user.id, trackingId);
   }
 
   @Get('sessions/:trackingId')

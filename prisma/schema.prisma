@@ -1546,6 +1546,7 @@ model CoinTopupSession {
   coinsPerFiatUnit    Decimal               @map("coins_per_fiat_unit") @db.Decimal(12, 4)
   developerTrackingId String                @unique @map("developer_tracking_id")
   flouciPaymentId     String?               @unique @map("flouci_payment_id")
+  checkoutUrl         String?               @map("checkout_url")
   status              CoinTopupSessionStatus @default(PENDING)
   createdAt           DateTime              @default(now()) @map("created_at")
   completedAt         DateTime?             @map("completed_at")

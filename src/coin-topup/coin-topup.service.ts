@@ -63,8 +63,8 @@ export class CoinTopupService {
     const ctx = await this.resolveContext(userId, role);
 
     const minCoins = this.config.get<number>('COIN_TOPUP_MIN_COINS', 50);
-    const maxCoins = this.config.get<number>('COIN_TOPUP_MAX_COINS', 50_000);
-    const stepCoins = this.config.get<number>('COIN_TOPUP_STEP_COINS', 50);
+    const maxCoins = this.config.get<number>('COIN_TOPUP_SLIDER_MAX_COINS', 5_000);
+    const stepCoins = this.config.get<number>('COIN_TOPUP_STEP_COINS', 1);
 
     const auth = this.flouciAuthorization();
     const flouciReady = ctx.currencyCode === 'TND' && !!auth;
@@ -110,12 +110,11 @@ export class CoinTopupService {
     }
 
     const minCoins = this.config.get<number>('COIN_TOPUP_MIN_COINS', 50);
-    const maxCoins = this.config.get<number>('COIN_TOPUP_MAX_COINS', 50_000);
     let coinsAmt = Number(rawCoinsAmount);
     if (!Number.isFinite(coinsAmt)) throw new BadRequestException('coinsAmount required');
     coinsAmt = Math.round(coinsAmt * 100) / 100;
-    if (coinsAmt < minCoins || coinsAmt > maxCoins) {
-      throw new BadRequestException(`coinsAmount must be between ${minCoins} and ${maxCoins}`);
+    if (coinsAmt < minCoins) {
+      throw new BadRequestException(`coinsAmount must be at least ${minCoins}`);
     }
 
     const rate = ctx.coinsPerFiatUnit;
@@ -147,8 +146,10 @@ export class CoinTopupService {
     const webhookFull = withSecret(webhookBaseTpl, webhookSecret);
 
     const trackingId = randomUUID();
-    const successLink = `${successUrlTpl}${successUrlTpl.includes('?') ? '&' : '?'}tracking=${encodeURIComponent(trackingId)}`;
-    const failLink = `${failUrlTpl}${failUrlTpl.includes('?') ? '&' : '?'}tracking=${encodeURIComponent(trackingId)}`;
+    const fiatLabel = (amountMillimes / 1000).toFixed(3);
+    const trackingQs = `tracking=${encodeURIComponent(trackingId)}&amount=${encodeURIComponent(fiatLabel)}`;
+    const successLink = `${successUrlTpl}${successUrlTpl.includes('?') ? '&' : '?'}${trackingQs}`;
+    const failLink = `${failUrlTpl}${failUrlTpl.includes('?') ? '&' : '?'}${trackingQs}`;
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -221,15 +222,16 @@ export class CoinTopupService {
       throw new BadRequestException(`Flouci did not create a payment session (${msg}).`);
     }
 
+    const checkoutUrl = String(result.link);
     await this.prisma.coinTopupSession.update({
       where: { id: session.id },
-      data: { flouciPaymentId: String(result.payment_id) },
+      data: { flouciPaymentId: String(result.payment_id), checkoutUrl },
     });
 
     return {
       trackingId: session.developerTrackingId,
       paymentId: String(result.payment_id),
-      checkoutUrl: String(result.link),
+      checkoutUrl,
       amountMillimes,
       fiatTotalTnd: Math.round(amountMillimes) / 1000,
       coinsQuoted: coinsAmt,
@@ -280,6 +282,47 @@ export class CoinTopupService {
       trackingId: fresh.developerTrackingId,
       coins: Number(fresh.coinsAmount),
     };
+  }
+
+  /** User dismisses an unpaid checkout — marks session FAILED (not deleted for audit). */
+  async cancelPendingSession(userId: string, trackingId: string) {
+    const id = trackingId.trim();
+    if (!id) throw new BadRequestException('trackingId required');
+    const session = await this.prisma.coinTopupSession.findFirst({
+      where: { userId, developerTrackingId: id, status: CoinTopupSessionStatus.PENDING },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('Pending payment not found');
+    await this.safeMarkFailed(session.id);
+    return { ok: true, trackingId: id };
+  }
+
+  async listPendingSessionsForUser(userId: string) {
+    const rows = await this.prisma.coinTopupSession.findMany({
+      where: { userId, status: CoinTopupSessionStatus.PENDING },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: {
+        developerTrackingId: true,
+        flouciPaymentId: true,
+        checkoutUrl: true,
+        coinsAmount: true,
+        fiatAmount: true,
+        fiatCurrencyCode: true,
+        amountMillimes: true,
+        createdAt: true,
+      },
+    });
+    return rows.map((s) => ({
+      trackingId: s.developerTrackingId,
+      paymentId: s.flouciPaymentId,
+      checkoutUrl: s.checkoutUrl,
+      coins: Number(s.coinsAmount),
+      fiatTotal: Number(s.fiatAmount),
+      currencyCode: s.fiatCurrencyCode,
+      amountMillimes: s.amountMillimes,
+      createdAt: s.createdAt.toISOString(),
+    }));
   }
 
   async getSessionSummaryForUser(userId: string, trackingId: string) {
