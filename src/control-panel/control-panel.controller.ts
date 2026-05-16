@@ -5,6 +5,7 @@ import { DeliveryControlSecretGuard } from './delivery-control-secret.guard';
 import { TriggerCustomerNotificationDto } from './dto/trigger-customer-notification.dto';
 import { SupportTicketIdDto } from './dto/support-ticket-id.dto';
 import { NotifyFiatPayoutSentDto } from './dto/notify-fiat-payout-sent.dto';
+import { NotifyFiatPayoutRejectedDto } from './dto/notify-fiat-payout-rejected.dto';
 
 /**
  * Server-to-server hooks for the Next.js delivery-control app (shared secret).
@@ -71,6 +72,26 @@ export class ControlPanelController {
       relatedEntityType: body.relatedEntityType,
       relatedEntityId: body.withdrawalRequestId,
       templateData: { amount: amt },
+    });
+    return { ok: true };
+  }
+
+  @Post('notify-fiat-payout-rejected')
+  @UseGuards(DeliveryControlSecretGuard)
+  async notifyFiatPayoutRejected(@Body() body: NotifyFiatPayoutRejectedDto) {
+    const amt = body.amount?.trim() || '';
+    const reason = body.reason?.trim() || '';
+    await this.notificationsService.send({
+      userId: body.userId,
+      userType: 'USER',
+      type: NotificationType.WITHDRAWAL_STATUS,
+      title: 'Withdrawal rejected',
+      body: reason
+        ? `Your withdrawal request for ${amt} coins was rejected. Reason: ${reason}`
+        : `Your withdrawal request for ${amt} coins was rejected.`,
+      relatedEntityType: body.relatedEntityType,
+      relatedEntityId: body.withdrawalRequestId,
+      templateData: { status: 'REJECTED', reason },
     });
     return { ok: true };
   }

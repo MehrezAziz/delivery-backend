@@ -6,6 +6,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { FiatPayoutMethod, ResponseType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CountryCoinConfigService } from './country-coin-config.service';
 import { CreateWithdrawalRequestDto } from './dto/wallet.dto';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class WalletService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly coinConfig: CountryCoinConfigService,
   ) {}
 
   /**
@@ -66,24 +68,16 @@ export class WalletService {
     const spendableCoins =
       Math.round((balanceCoins - lockedCoins) * 100) / 100;
 
-    const now = new Date();
-    const coinRow = await this.prisma.countryCoinConfig.findFirst({
-      where: {
-        countryId: wallet.countryId,
-        isActive: true,
-        effectiveFrom: { lte: now },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
-      },
-      orderBy: { effectiveFrom: 'desc' },
-    });
-
+    const coinRow = await this.coinConfig.getActiveConfig(wallet.countryId);
     const rate = coinRow ? Number(coinRow.coinsPerFiatUnit) : NaN;
+    const withdrawalFeeBps = coinRow?.withdrawalFeeBps ?? 0;
     let coinsToLocalFiat: {
       coinsPerFiatUnit: number;
       currencyCode: string;
       currencySymbol: string;
       balanceAsLocalFiat: number;
       spendableAsLocalFiat: number;
+      withdrawalFeeBps: number;
     } | null = null;
     if (Number.isFinite(rate) && rate > 0) {
       coinsToLocalFiat = {
@@ -92,6 +86,7 @@ export class WalletService {
         currencySymbol: wallet.country.currencySymbol,
         balanceAsLocalFiat: Math.round((balanceCoins / rate) * 100) / 100,
         spendableAsLocalFiat: Math.round((spendableCoins / rate) * 100) / 100,
+        withdrawalFeeBps,
       };
     }
 
@@ -185,6 +180,8 @@ export class WalletService {
           payoutBankAccountRef: true,
           descriptionOfCustomer: true,
           descriptionOfAdmin: true,
+          rejectionReason: true,
+          feeAmount: true,
           requestedAt: true,
           processedAt: true,
         },
@@ -196,6 +193,7 @@ export class WalletService {
       requests: requests.map((r) => ({
         ...r,
         amount: Number(r.amount),
+        feeAmount: Number(r.feeAmount ?? 0),
       })),
       total,
       page,
@@ -273,6 +271,48 @@ export class WalletService {
     return row ?? null;
   }
 
+  async getWithdrawalQuote(userId: string, amount: number) {
+    const wallet = await this.findWalletByUserId(userId);
+    const gross = Math.round(amount * 100) / 100;
+    if (!gross || gross <= 0) {
+      throw new BadRequestException('Invalid amount');
+    }
+    const { grossDebit, feeCoins, netPayout, feeBps } = await this.coinConfig.computeWithdrawalSplit(
+      wallet.countryId,
+      gross,
+    );
+    if (netPayout <= 0) {
+      throw new BadRequestException('Amount is too small after the withdrawal fee');
+    }
+    const bal = Number(wallet.balance);
+    const locked = Number(wallet.lockedForTransfers ?? 0);
+    const spendable = Math.round((bal - locked) * 100) / 100;
+
+    const rate = await this.coinConfig.getActiveCoinsPerFiatUnit(wallet.countryId);
+    const country = await this.prisma.country.findUnique({
+      where: { id: wallet.countryId },
+      select: { currencyCode: true, currencySymbol: true },
+    });
+
+    const fiatFor = (coins: number) =>
+      rate && rate > 0 ? Math.round((coins / rate) * 100) / 100 : null;
+
+    return {
+      amountCoins: grossDebit,
+      feeCoins,
+      feeBps,
+      netPayoutCoins: netPayout,
+      totalCoins: grossDebit,
+      spendableCoins: spendable,
+      currencyCode: country?.currencyCode ?? wallet.currency,
+      currencySymbol: country?.currencySymbol ?? wallet.currency,
+      amountFiat: fiatFor(netPayout),
+      feeFiat: fiatFor(feeCoins),
+      totalFiat: fiatFor(grossDebit),
+      coinsPerFiatUnit: rate,
+    };
+  }
+
   /**
    * Submit a withdrawal request.
    */
@@ -284,11 +324,18 @@ export class WalletService {
     const bal = Number(wallet.balance);
     const locked = Number(wallet.lockedForTransfers ?? 0);
     const spendable = Math.round((bal - locked) * 100) / 100;
-    if (dto.amount > spendable) {
-      throw new BadRequestException('Amount cannot exceed your available wallet balance');
+    const { grossDebit, feeCoins, netPayout, feeBps } = await this.coinConfig.computeWithdrawalSplit(
+      wallet.countryId,
+      dto.amount,
+    );
+    if (grossDebit > spendable) {
+      throw new BadRequestException('Amount exceeds your available wallet balance');
     }
-    if (dto.amount <= 0 || spendable <= 0) {
+    if (grossDebit <= 0 || spendable <= 0) {
       throw new BadRequestException('Invalid amount or zero balance');
+    }
+    if (netPayout <= 0) {
+      throw new BadRequestException('Amount is too small after the withdrawal fee');
     }
 
     const payoutMethod =
@@ -310,7 +357,8 @@ export class WalletService {
     const request = await this.prisma.withdrawalRequest.create({
       data: {
         walletId: wallet.id,
-        amount: dto.amount,
+        amount: grossDebit,
+        feeAmount: feeCoins,
         payoutMethod,
         payoutBankHolderName: bankHolder,
         payoutBankName: bankName,

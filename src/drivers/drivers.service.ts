@@ -857,6 +857,65 @@ export class DriversService {
     };
   }
 
+  private async getDriverCountryMeta(userId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: {
+        user: {
+          include: {
+            addresses: {
+              include: { delegation: { include: { governorate: { include: { country: true } } } } },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+    const addr = driver?.user.addresses?.[0];
+    const country = addr?.delegation?.governorate?.country;
+    return country
+      ? {
+          countryId: country.id,
+          currencyCode: country.currencyCode,
+          currencySymbol: country.currencySymbol,
+        }
+      : null;
+  }
+
+  async getDriverWithdrawalQuote(userId: string, amount: number) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: { driverAccount: true },
+    });
+    if (!driver?.driverAccount) throw new NotFoundException('Driver account not found');
+    const gross = Math.round(amount * 100) / 100;
+    if (!gross || gross <= 0) throw new BadRequestException('Invalid amount');
+    const meta = await this.getDriverCountryMeta(userId);
+    const countryId = meta?.countryId;
+    const { grossDebit, feeCoins, netPayout, feeBps } = countryId
+      ? await this.coinConfig.computeWithdrawalSplit(countryId, gross)
+      : { grossDebit: gross, feeCoins: 0, netPayout: gross, feeBps: 0 };
+    if (netPayout <= 0) throw new BadRequestException('Amount is too small after the withdrawal fee');
+    const bal = Number(driver.driverAccount.balance);
+    const rate = countryId ? await this.coinConfig.getActiveCoinsPerFiatUnit(countryId) : null;
+    const fiatFor = (coins: number) =>
+      rate && rate > 0 ? Math.round((coins / rate) * 100) / 100 : null;
+    return {
+      amountCoins: grossDebit,
+      feeCoins,
+      feeBps,
+      netPayoutCoins: netPayout,
+      totalCoins: grossDebit,
+      spendableCoins: Math.round(bal * 100) / 100,
+      currencyCode: meta?.currencyCode ?? driver.driverAccount.currency,
+      currencySymbol: meta?.currencySymbol ?? driver.driverAccount.currency,
+      amountFiat: fiatFor(netPayout),
+      feeFiat: fiatFor(feeCoins),
+      totalFiat: fiatFor(grossDebit),
+      coinsPerFiatUnit: rate,
+    };
+  }
+
   async getDriverWithdrawalRequests(userId: string) {
     const driver = await this.prisma.driver.findUnique({
       where: { userId },
@@ -871,6 +930,7 @@ export class DriversService {
     return rows.map((r) => ({
       id: r.id,
       amount: Number(r.amount),
+      feeAmount: Number(r.feeAmount ?? 0),
       status: r.status,
       payoutMethod: r.payoutMethod,
       payoutBankHolderName: r.payoutBankHolderName,
@@ -878,6 +938,7 @@ export class DriversService {
       payoutBankAccountRef: r.payoutBankAccountRef,
       descriptionFromDriver: r.descriptionFromDriver,
       descriptionFromStaff: r.descriptionFromStaff,
+      rejectionReason: r.rejectionReason,
       requestedAt: r.requestedAt,
       processedAt: r.processedAt,
     }));
@@ -962,8 +1023,16 @@ export class DriversService {
     });
     if (!driver?.driverAccount) throw new NotFoundException('Driver account not found');
     const bal = Number(driver.driverAccount.balance);
-    if (dto.amount <= 0 || dto.amount > bal) {
+    const meta = await this.getDriverCountryMeta(userId);
+    const split = meta?.countryId
+      ? await this.coinConfig.computeWithdrawalSplit(meta.countryId, dto.amount)
+      : { grossDebit: dto.amount, feeCoins: 0, netPayout: dto.amount, feeBps: 0 };
+    const { grossDebit, feeCoins, netPayout } = split;
+    if (dto.amount <= 0 || grossDebit > bal) {
       throw new BadRequestException('Amount must be positive and cannot exceed your available balance');
+    }
+    if (netPayout <= 0) {
+      throw new BadRequestException('Amount is too small after the withdrawal fee');
     }
     const payout =
       dto.payoutMethod === 'CASH' ? FiatPayoutMethod.CASH : FiatPayoutMethod.BANK_TRANSFER;
@@ -989,7 +1058,8 @@ export class DriversService {
     const row = await this.prisma.driverWithdrawalRequest.create({
       data: {
         driverAccountId: driver.driverAccount.id,
-        amount: dto.amount,
+        amount: grossDebit,
+        feeAmount: feeCoins,
         payoutMethod: payout,
         payoutBankHolderName: bankHolder,
         payoutBankName: bankName,

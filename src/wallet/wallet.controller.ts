@@ -97,6 +97,19 @@ export class WalletController {
   }
 
   /**
+   * GET /wallet/me/withdrawals/quote?amount=
+   * Preview payout amount, fee, and fiat equivalent.
+   */
+  @Get('me/withdrawals/quote')
+  async getWithdrawalQuote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('amount') amountStr: string,
+  ) {
+    const amount = Number(amountStr);
+    return this.walletService.getWithdrawalQuote(user.id, amount);
+  }
+
+  /**
    * POST /wallet/me/withdrawals
    * Submit a new withdrawal request.
    */

@@ -680,6 +680,7 @@ model DriverWithdrawalRequest {
   id                     String           @id @default(uuid())
   driverAccountId        String           @map("driver_account_id")
   amount                 Decimal          @db.Decimal(10, 2)
+  feeAmount              Decimal          @default(0) @map("fee_amount") @db.Decimal(10, 2)
   status                 ResponseType     @default(PENDING)
   payoutMethod           FiatPayoutMethod @default(BANK_TRANSFER) @map("payout_method")
   payoutBankHolderName   String?          @map("payout_bank_holder_name")
@@ -687,6 +688,7 @@ model DriverWithdrawalRequest {
   payoutBankAccountRef   String?          @map("payout_bank_account_ref")
   descriptionFromDriver  String?          @map("description_from_driver")
   descriptionFromStaff   String?          @map("description_from_staff")
+  rejectionReason        String?          @map("rejection_reason")
   requestedAt            DateTime         @default(now()) @map("requested_at")
   processedAt            DateTime?        @map("processed_at")
 
@@ -1489,6 +1491,7 @@ model WithdrawalRequest {
   id                    String           @id @default(uuid())
   walletId              String           @map("wallet_id")
   amount                Decimal          @db.Decimal(10, 2)
+  feeAmount             Decimal          @default(0) @map("fee_amount") @db.Decimal(10, 2)
   status                ResponseType     @default(PENDING)
   payoutMethod          FiatPayoutMethod @default(BANK_TRANSFER) @map("payout_method")
   payoutBankHolderName  String?          @map("payout_bank_holder_name")
@@ -1496,6 +1499,7 @@ model WithdrawalRequest {
   payoutBankAccountRef  String?          @map("payout_bank_account_ref")
   descriptionOfCustomer String?          @map("description_of_customer")
   descriptionOfAdmin    String?          @map("description_of_admin")
+  rejectionReason       String?          @map("rejection_reason")
   requestedAt           DateTime         @default(now()) @map("requested_at")
   processedAt           DateTime?        @map("processed_at")
 
@@ -1516,6 +1520,8 @@ model CountryCoinConfig {
   transferFeeBps  Int       @default(200) @map("transfer_fee_bps")
   /// Wallet coins credited per 1.00 unit of this country’s fiat when converting cash (e.g. COD) to coins
   coinsPerFiatUnit Decimal  @default(1) @map("coins_per_fiat_unit") @db.Decimal(12, 4)
+  /// Platform fee on fiat withdrawal requests in basis points (e.g. 250 = 2.5% of payout amount)
+  withdrawalFeeBps Int      @default(0) @map("withdrawal_fee_bps")
   effectiveFrom   DateTime  @default(now()) @map("effective_from")
   effectiveTo     DateTime? @map("effective_to")
   isActive        Boolean   @default(true) @map("is_active")

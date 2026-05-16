@@ -118,6 +118,11 @@ export class DriversController {
     return this.driversService.getDriverWithdrawalRequests(userId);
   }
 
+  @Get('me/withdrawal-requests/quote')
+  async getMyWithdrawalQuote(@UserId() userId: string, @Query('amount') amountStr: string) {
+    return this.driversService.getDriverWithdrawalQuote(userId, Number(amountStr));
+  }
+
   @Get('me/payout-bank-details')
   async getMyPayoutBankDetails(@UserId() userId: string) {
     return this.driversService.getPayoutBankDetails(userId);
