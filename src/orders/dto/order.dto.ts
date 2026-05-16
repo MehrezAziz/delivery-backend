@@ -259,6 +259,12 @@ export class OrderResponseDto {
     driverResponse: string | null;
     driverRespondedAt: Date | null;
   } | null;
+  /** Base fee taken by platform (coins), for driver transaction detail. */
+  driverFeeBreakdown?: {
+    totalPriceCoins: number;
+    baseFeeCoins: number;
+    platformFeeCoins: number;
+  };
 }
 
 export class AvailableOrdersResponseDto {

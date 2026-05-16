@@ -8,9 +8,10 @@ import { OrderUrgentNotifyService } from './services/order-urgent-notify.service
 import { ScheduledOrderPublishService } from './services/scheduled-order-publish.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
-  imports: [PrismaModule, NotificationsModule],
+  imports: [PrismaModule, NotificationsModule, WalletModule],
   controllers: [OrdersController, DriverOrdersController, AdminOrdersController, PublicTrackingController],
   providers: [
     OrdersService,

@@ -24,6 +24,7 @@ import { randomBytes } from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { rollbackDeliveryCompanyOrderFundsInTx } from '../delivery-company/company-order-budget.util';
+import { CountryCoinConfigService } from '../wallet/country-coin-config.service';
 
 @Injectable()
 export class OrdersService {
@@ -34,6 +35,7 @@ export class OrdersService {
     private readonly notificationsService: NotificationsService,
     private readonly notificationsGateway: NotificationsGateway,
     private readonly eventEmitter: EventEmitter2,
+    private readonly coinConfig: CountryCoinConfigService,
   ) {}
 
   // ISO code → IANA timezone mapping for night delivery auto-detection
@@ -150,6 +152,8 @@ export class OrdersService {
     const extra = this.normalizeCustomerExtraAmount(dto.customerExtraAmount);
     const calculatedPrice = priceCalc.totalPrice;
     const totalPrice = Math.round((calculatedPrice + extra) * 100) / 100;
+    const coinsPerFiatUnit = await this.coinConfig.getActiveCoinsPerFiatUnit(country.id);
+    const totalPriceCoins = this.coinConfig.fiatToCoins(totalPrice, coinsPerFiatUnit);
 
     return {
       isNightDelivery: isNight,
@@ -163,6 +167,8 @@ export class OrdersService {
       calculatedPrice,
       customerExtraAmount: extra,
       totalPrice,
+      totalPriceCoins,
+      coinsPerFiatUnit,
       currency: country.currencyCode,
       currencySymbol: country.currencySymbol,
       walletBalance,
@@ -271,11 +277,15 @@ export class OrdersService {
       isScheduled = true;
     }
 
+    const coinsPerFiatUnit = await this.coinConfig.getActiveCoinsPerFiatUnit(
+      pickupAddr.delegation.governorate.country.id,
+    );
     if (dto.paymentType === PaymentType.WALLET) {
       const w = customer.wallet!;
       const spendable =
         Math.round((Number(w.balance) - Number(w.lockedForTransfers ?? 0)) * 100) / 100;
-      if (spendable < finalPrice) {
+      const priceInCoins = this.coinConfig.fiatToCoins(finalPrice, coinsPerFiatUnit);
+      if (spendable < priceInCoins) {
         throw new BadRequestException('Insufficient wallet balance');
       }
     }
@@ -353,7 +363,15 @@ export class OrdersService {
       const w = order.customer.wallet;
       const spendable =
         Math.round((Number(w.balance) - Number(w.lockedForTransfers ?? 0)) * 100) / 100;
-      if (spendable < Number(order.price)) throw new BadRequestException('Insufficient wallet balance');
+      const pickupAddr = await this.prisma.address.findUnique({
+        where: { id: order.pickupAddressId },
+        include: { delegation: { include: { governorate: true } } },
+      });
+      const coinsPerFiatUnit = pickupAddr
+        ? await this.coinConfig.getActiveCoinsPerFiatUnit(pickupAddr.delegation.governorate.countryId)
+        : null;
+      const priceInCoins = this.coinConfig.fiatToCoins(Number(order.price), coinsPerFiatUnit);
+      if (spendable < priceInCoins) throw new BadRequestException('Insufficient wallet balance');
     }
     const updated = await this.prisma.order.update({ where: { id: orderId }, data: { paymentType: dto.paymentType }, include: this.orderInclude() });
     return this.mapToResponseDto(updated, { viewerIsCustomer: true });
@@ -532,7 +550,94 @@ export class OrdersService {
       );
       dto.urgentNotify = this.buildUrgentNotifySummary(order);
     }
+    if (isDriver && order.pricingPolicy && order.pickupAddress?.delegation?.governorate?.countryId) {
+      const rate = await this.coinConfig.getActiveCoinsPerFiatUnit(
+        order.pickupAddress.delegation.governorate.countryId,
+      );
+      const baseFeeFiat = Number(order.pricingPolicy.baseFee);
+      const platformFeeFiat = Number(order.pricingPolicy.platformFee);
+      dto.driverFeeBreakdown = {
+        totalPriceCoins: this.coinConfig.fiatToCoins(Number(order.price), rate),
+        baseFeeCoins: this.coinConfig.fiatToCoins(baseFeeFiat, rate),
+        platformFeeCoins: this.coinConfig.fiatToCoins(platformFeeFiat, rate),
+      };
+    }
     return dto;
+  }
+
+  /**
+   * Pay referrer from `referral_commission` when eligible; otherwise platform keeps full `base_fee`.
+   * Invariant: base_fee = platform_fee + referral_commission (pricing policy).
+   */
+  private async payReferralCommissionIfEligible(
+    tx: any,
+    order: {
+      id: string;
+      customerId: string;
+      sourceType: OrderSourceType;
+      pricingPolicy: { baseFee: unknown; platformFee: unknown } | null;
+      customer: { referredByCode?: { id: string; ownerId: string } | null };
+    },
+    coinsPerFiatUnit: number | null,
+  ): Promise<
+    | { paid: false }
+    | { paid: true; referrerUserId: string; commissionCoins: number; orderId: string }
+  > {
+    if (!order.pricingPolicy || !order.customer.referredByCode?.ownerId) return { paid: false };
+    const existing = await tx.referralCommission.findFirst({ where: { orderId: order.id } });
+    if (existing) return { paid: false };
+
+    const baseFeeFiat = Number(order.pricingPolicy.baseFee);
+    const platformFeeFiat = Number(order.pricingPolicy.platformFee);
+    const referralFiat = Math.round((baseFeeFiat - platformFeeFiat) * 100) / 100;
+    if (!Number.isFinite(referralFiat) || referralFiat <= 0) return { paid: false };
+
+    const multiplier = order.sourceType === OrderSourceType.DELIVERY_COMPANY ? 0.5 : 1;
+    const commissionFiat = Math.round(referralFiat * multiplier * 100) / 100;
+    const commissionCoins = this.coinConfig.fiatToCoins(commissionFiat, coinsPerFiatUnit);
+
+    const referrerCustomer = await tx.customer.findUnique({
+      where: { id: order.customer.referredByCode.ownerId },
+      select: { userId: true },
+    });
+    if (!referrerCustomer) return { paid: false };
+
+    await tx.referralCommission.create({
+      data: {
+        referralCodeId: order.customer.referredByCode.id,
+        referrerCustomerId: order.customer.referredByCode.ownerId,
+        referredCustomerId: order.customerId,
+        orderId: order.id,
+        commissionAmount: commissionFiat,
+        status: ReferralCommissionStatus.PAID,
+      },
+    });
+
+    const rw = await tx.digitalWallet.findUnique({
+      where: { customerId: order.customer.referredByCode.ownerId },
+    });
+    if (rw) {
+      const nbl = Number(rw.balance) + commissionCoins;
+      await tx.digitalWallet.update({ where: { id: rw.id }, data: { balance: nbl } });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: rw.id,
+          orderId: order.id,
+          type: WalletTransactionType.REFERRAL_REWARD,
+          amount: commissionCoins,
+          status: TransactionStatus.SUCCESS,
+          referenceId: order.id,
+          referenceType: ReferenceType.REFERRAL,
+          balanceAfter: nbl,
+        },
+      });
+    }
+    return {
+      paid: true,
+      referrerUserId: referrerCustomer.userId,
+      commissionCoins,
+      orderId: order.id,
+    };
   }
 
   async getCustomerOrders(userId: string): Promise<OrderResponseDto[]> {
@@ -666,6 +771,7 @@ export class OrdersService {
           },
         },
         pricingPolicy: true,
+        pickupAddress: { include: { delegation: { include: { governorate: true } } } },
       },
     }) as any;
     if (!order) throw new NotFoundException('Order not found');
@@ -678,33 +784,51 @@ export class OrdersService {
 
     const expiryMinutes = await this.getTrackingExpiryMinutes();
     const trackingExpiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+    const countryId = order.pickupAddress?.delegation?.governorate?.countryId as string | undefined;
+    const coinsPerFiatUnit = countryId
+      ? await this.coinConfig.getActiveCoinsPerFiatUnit(countryId)
+      : null;
+
+    type ReferralPayoutInfo = { referrerUserId: string; commissionCoins: number; orderId: string };
+    const referralPayouts: ReferralPayoutInfo[] = [];
 
     const result = await this.prisma.$transaction(async (tx) => {
       const updatedOrder = await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.DELIVERED, trackingExpiresAt }, include: this.orderInclude() });      await tx.driverAssignment.update({ where: { orderId }, data: { deliveredAt: new Date() } });
       await tx.customer.update({ where: { id: order.customerId }, data: { completedOrders: { increment: 1 } } });
 
+      const baseFeeFiat = order.pricingPolicy ? Number(order.pricingPolicy.baseFee) : 0;
+      const platformFeeFiat = order.pricingPolicy ? Number(order.pricingPolicy.platformFee) : 0;
+      const baseFeeCoins = this.coinConfig.fiatToCoins(baseFeeFiat, coinsPerFiatUnit);
+
+      const referralResult = await this.payReferralCommissionIfEligible(tx, order, coinsPerFiatUnit);
+      if (referralResult.paid) {
+        referralPayouts.push({
+          referrerUserId: referralResult.referrerUserId,
+          commissionCoins: referralResult.commissionCoins,
+          orderId: referralResult.orderId,
+        });
+      }
+
       if (order.paymentType === PaymentType.COD) {
-        const pFee = Number(order.pricingPolicy.platformFee);
         const cash = Number(order.price);
-        await tx.cashTransaction.create({ data: { orderId, driverId: order.driverAssignment.driverId, cashCollected: cash, platformFee: pFee, driverNet: cash - pFee } });
+        const platformShareFiat = referralResult.paid ? platformFeeFiat : baseFeeFiat;
+        await tx.cashTransaction.create({
+          data: {
+            orderId,
+            driverId: order.driverAssignment.driverId,
+            cashCollected: cash,
+            platformFee: platformShareFiat,
+            driverNet: Math.round((cash - baseFeeFiat) * 100) / 100,
+          },
+        });
 
-        // Calculate referral commission if applicable
-        let referralAmount = 0;
-        if (order.customer.referredByCode?.ownerId) {
-          const ex = await tx.referralCommission.findFirst({ where: { orderId } });
-          if (!ex && order.pricingPolicy) {
-            referralAmount = Number(order.pricingPolicy.baseFee);
-          }
-        }
-
-        // Debit driver account: platformFee + referralCommission
-        const totalDebit = pFee + referralAmount;
-        const driverAccount = await tx.driverAccount.findUnique({ where: { driverId: order.driverAssignment.driverId } });
-        if (driverAccount) {
+        const driverAccount = await tx.driverAccount.findUnique({
+          where: { driverId: order.driverAssignment.driverId },
+        });
+        if (driverAccount && baseFeeCoins > 0) {
           const oldBalance = Number(driverAccount.balance);
-          const newBalance = oldBalance - totalDebit;
+          const newBalance = Math.round((oldBalance - baseFeeCoins) * 100) / 100;
           const updateData: any = { balance: newBalance };
-          // Track when balance first goes negative
           if (newBalance < 0 && oldBalance >= 0) {
             updateData.negativeBalanceSince = new Date();
           }
@@ -713,23 +837,36 @@ export class OrdersService {
             data: {
               accountId: driverAccount.id,
               type: 'PLATFORM_FEE',
-              amount: -totalDebit,
+              amount: -baseFeeCoins,
               referenceId: orderId,
               referenceType: 'ORDER',
-              description: `COD order #${orderId.slice(0, 8)} — platform fee${referralAmount > 0 ? ' + referral commission' : ''}`,
+              description: `COD order #${orderId.slice(0, 8)} — base fee (platform share, coins)`,
               balanceAfter: newBalance,
             },
           });
         }
       } else if (order.customer.wallet && order.sourceType !== OrderSourceType.DELIVERY_COMPANY) {
-        const nb = Number(order.customer.wallet.balance) - Number(order.price);
+        const priceCoins = this.coinConfig.fiatToCoins(Number(order.price), coinsPerFiatUnit);
+        const nb = Number(order.customer.wallet.balance) - priceCoins;
         await tx.digitalWallet.update({ where: { id: order.customer.wallet.id }, data: { balance: nb } });
-        await tx.walletTransaction.create({ data: { walletId: order.customer.wallet.id, orderId, type: WalletTransactionType.ORDER_PAYMENT, amount: -Number(order.price), status: TransactionStatus.SUCCESS, referenceId: orderId, referenceType: ReferenceType.ORDER, balanceAfter: nb } });
+        await tx.walletTransaction.create({
+          data: {
+            walletId: order.customer.wallet.id,
+            orderId,
+            type: WalletTransactionType.ORDER_PAYMENT,
+            amount: -priceCoins,
+            status: TransactionStatus.SUCCESS,
+            referenceId: orderId,
+            referenceType: ReferenceType.ORDER,
+            balanceAfter: nb,
+          },
+        });
 
-        const pFee = Number(order.pricingPolicy.platformFee);
-        const driverNet = Math.round((Number(order.price) - pFee) * 100) / 100;
+        const driverNet = Math.round((priceCoins - baseFeeCoins) * 100) / 100;
         if (driverNet !== 0) {
-          const driverAccount = await tx.driverAccount.findUnique({ where: { driverId: order.driverAssignment.driverId } });
+          const driverAccount = await tx.driverAccount.findUnique({
+            where: { driverId: order.driverAssignment.driverId },
+          });
           if (driverAccount) {
             const oldBalance = Number(driverAccount.balance);
             const newBalance = oldBalance + driverNet;
@@ -747,26 +884,10 @@ export class OrdersService {
                 amount: driverNet,
                 referenceId: orderId,
                 referenceType: 'ORDER',
-                description: `Wallet order #${orderId.slice(0, 8)} — payout (price − platform fee)`,
+                description: `Wallet order #${orderId.slice(0, 8)} — payout (price − base fee, coins)`,
                 balanceAfter: newBalance,
               },
             });
-          }
-        }
-      }
-
-      if (order.customer.referredByCode?.ownerId) {
-        const ex = await tx.referralCommission.findFirst({ where: { orderId } });
-        if (!ex && order.pricingPolicy) {
-          const baseCommission = Number(order.pricingPolicy.baseFee);
-          const multiplier = order.sourceType === OrderSourceType.DELIVERY_COMPANY ? 0.5 : 1;
-          const ca = Math.round(baseCommission * multiplier * 100) / 100;
-          await tx.referralCommission.create({ data: { referralCodeId: order.customer.referredByCode.id, referrerCustomerId: order.customer.referredByCode.ownerId, referredCustomerId: order.customerId, orderId, commissionAmount: ca, status: ReferralCommissionStatus.PAID } });
-          const rw = await tx.digitalWallet.findUnique({ where: { customerId: order.customer.referredByCode.ownerId } });
-          if (rw) {
-            const nbl = Number(rw.balance) + ca;
-            await tx.digitalWallet.update({ where: { id: rw.id }, data: { balance: nbl } });
-            await tx.walletTransaction.create({ data: { walletId: rw.id, orderId, type: WalletTransactionType.REFERRAL_REWARD, amount: ca, status: TransactionStatus.SUCCESS, referenceId: orderId, referenceType: ReferenceType.REFERRAL, balanceAfter: nbl } });
           }
         }
       }
@@ -807,8 +928,8 @@ export class OrdersService {
           }
         }
         if (order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.paymentType === PaymentType.WALLET && order.pricingPolicy) {
-          const pFee = Number(order.pricingPolicy.platformFee);
-          const driverNet = Math.round((Number(order.price) - pFee) * 100) / 100;
+          const priceCoins = this.coinConfig.fiatToCoins(Number(order.price), coinsPerFiatUnit);
+          const driverNet = Math.round((priceCoins - baseFeeCoins) * 100) / 100;
           if (driverNet !== 0) {
             const dAcc = await tx.driverAccount.findUnique({ where: { driverId: order.driverAssignment.driverId } });
             if (dAcc) {
@@ -878,6 +999,9 @@ export class OrdersService {
       customerUserId: order.customer.userId,
       driverUserId: order.driverAssignment.driver.userId,
     });
+    for (const payout of referralPayouts) {
+      this.eventEmitter.emit('referral.commission_paid', payout);
+    }
     return this.mapToResponseDto(result as any, { viewerUserId: order.driverAssignment.driver.userId });
   }
 

@@ -282,6 +282,14 @@ export class NotificationsService {
         }
       }
 
+      const referralBonusTemplateData: Record<string, string> = {};
+      if (dto.type === 'REFERRAL_BONUS' && dto.templateData) {
+        for (const [k, v] of Object.entries(dto.templateData)) {
+          if (v === undefined || v === null) continue;
+          referralBonusTemplateData[k] = typeof v === 'string' ? v : String(v);
+        }
+      }
+
       const result = await this.firebaseService.sendPush({
         token: fcmToken,
         title,
@@ -296,6 +304,7 @@ export class NotificationsService {
           ...(orderIdForPush ? { orderId: orderIdForPush } : {}),
           ...chatTemplateData,
           ...coinTransferTemplateData,
+          ...referralBonusTemplateData,
           // Pass orderStatus so the frontend dedup map stays in sync
           ...(orderStatus ? { orderStatus } : {}),
           ...(dto.trackingAudience ? { trackingAudience: dto.trackingAudience } : {}),

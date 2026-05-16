@@ -557,7 +557,8 @@ model Customer {
   completedOrders  Int            @default(0) @map("completed_orders")
   customerStatus   CustomerStatus @default(CREATED) @map("customer_status")
   referredByCodeId String?        @map("referred_by_code_id")
-  termsAcceptedAt  DateTime?      @map("terms_accepted_at")
+  termsAcceptedAt            DateTime? @map("terms_accepted_at")
+  notifyReferralCommission   Boolean   @default(true) @map("notify_referral_commission")
 
   // Relations
   user                      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)

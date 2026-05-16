@@ -16,6 +16,7 @@ import { SupportNotificationListener } from './listeners/support-notification.li
 import { ChatNotificationListener } from './listeners/chat-notification.listener';
 import { DriverOpportunityListener } from './listeners/driver-opportunity.listener';
 import { AdminNotificationListener } from './listeners/admin-notification.listener';
+import { CustomerReferralNotificationListener } from './listeners/customer-referral-notification.listener';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { AdminNotificationListener } from './listeners/admin-notification.listen
     ChatNotificationListener,
     DriverOpportunityListener,
     AdminNotificationListener,
+    CustomerReferralNotificationListener,
   ],
   exports: [NotificationsService, NotificationsGateway, FirebaseService],
 })

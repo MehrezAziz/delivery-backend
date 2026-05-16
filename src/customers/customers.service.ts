@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateCustomerDto, CustomerResponseDto, CustomerListResponseDto, CustomerStatsDto } from './dto/customer.dto';
+import {
+  NotificationPreferencesDto,
+  UpdateNotificationPreferencesDto,
+} from './dto/notification-preferences.dto';
 import { SetupCustomerDto } from './dto/setup-customer.dto';
 import { CustomerStatus } from '@prisma/client';
 
@@ -366,6 +370,25 @@ export class CustomersService {
 
       return { message: 'Setup completed. Wallet and address saved successfully.' };
     });
+  }
+
+  async getNotificationPreferences(userId: string): Promise<NotificationPreferencesDto> {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) throw new NotFoundException('Customer profile not found');
+    return { notifyReferralCommission: customer.notifyReferralCommission };
+  }
+
+  async updateNotificationPreferences(
+    userId: string,
+    dto: UpdateNotificationPreferencesDto,
+  ): Promise<NotificationPreferencesDto> {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) throw new NotFoundException('Customer profile not found');
+    const updated = await this.prisma.customer.update({
+      where: { userId },
+      data: { notifyReferralCommission: dto.notifyReferralCommission },
+    });
+    return { notifyReferralCommission: updated.notifyReferralCommission };
   }
 
   private mapToResponseDto(customer: any): CustomerResponseDto {

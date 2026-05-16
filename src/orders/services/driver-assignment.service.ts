@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { OrderSourceType, OrderStatus, DriverStatus, ChatStatus, NotificationType } from '@prisma/client';
 import { rollbackDeliveryCompanyOrderFundsInTx } from '../../delivery-company/company-order-budget.util';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { CountryCoinConfigService } from '../../wallet/country-coin-config.service';
 
 @Injectable()
 export class DriverAssignmentService {
@@ -11,6 +12,7 @@ export class DriverAssignmentService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly notificationsService: NotificationsService,
+    private readonly coinConfig: CountryCoinConfigService,
   ) {}
 
   /**
@@ -140,14 +142,31 @@ export class DriverAssignmentService {
         if (matches && bucket) bucket.push(order);
       }
 
-      const mapFn = (o: any) => this.mapOrderToResponse(o);
+      const rateCache = new Map<string, number | null>();
+      const mapWithCoinRate = async (o: any) => {
+        const countryId = o.pickupAddress?.delegation?.governorate?.country?.id as string | undefined;
+        let rate: number | null = null;
+        if (countryId) {
+          if (!rateCache.has(countryId)) {
+            rateCache.set(countryId, await this.coinConfig.getActiveCoinsPerFiatUnit(countryId));
+          }
+          rate = rateCache.get(countryId) ?? null;
+        }
+        return this.mapOrderToResponse(o, rate);
+      };
+      const [sd, sg, dg, dc] = await Promise.all([
+        Promise.all(sameDelegation.map(mapWithCoinRate)),
+        Promise.all(sameGovernorate.map(mapWithCoinRate)),
+        Promise.all(differentGovernorate.map(mapWithCoinRate)),
+        Promise.all(differentCountry.map(mapWithCoinRate)),
+      ]);
       return {
         canAccept: driver.status === DriverStatus.VERIFIED,
         isAvailable: true,
-        sameDelegation: sameDelegation.map(mapFn),
-        sameGovernorate: sameGovernorate.map(mapFn),
-        differentGovernorate: differentGovernorate.map(mapFn),
-        differentCountry: differentCountry.map(mapFn),
+        sameDelegation: sd,
+        sameGovernorate: sg,
+        differentGovernorate: dg,
+        differentCountry: dc,
       };
     }
 
@@ -379,11 +398,14 @@ export class DriverAssignmentService {
     return { message: 'Order assignment cancelled successfully' };
   }
 
-  private mapOrderToResponse(order: any) {
+  private mapOrderToResponse(order: any, coinsPerFiatUnit: number | null = null) {
     const companyName =
       order.sourceType === OrderSourceType.DELIVERY_COMPANY && order.deliveryCompany?.name
         ? String(order.deliveryCompany.name)
         : null;
+    const country = order.pickupAddress?.delegation?.governorate?.country;
+    const priceFiat = Number(order.price);
+    const priceCoins = this.coinConfig.fiatToCoins(priceFiat, coinsPerFiatUnit);
     return {
       id: order.id,
       customerId: order.customerId,
@@ -393,7 +415,12 @@ export class DriverAssignmentService {
       deliveryCompanyName: companyName,
       paymentType: order.paymentType, description: order.description,
       weight: Number(order.weight), distanceKm: Number(order.distanceKm),
-      price: Number(order.price), nightFee: Number(order.nightFee),
+      price: priceFiat,
+      priceCoins,
+      coinsPerFiatUnit,
+      currencySymbol: country?.currencySymbol ?? null,
+      currencyCode: country?.currencyCode ?? null,
+      nightFee: Number(order.nightFee),
       extraWeightFee: Number(order.extraWeightFee), isNightDelivery: order.isNightDelivery,
       localPickupOnly: !!order.localPickupOnly,
       cancelAfterMinutes: order.cancelAfterMinutes ?? 15,
@@ -413,7 +440,11 @@ export class DriverAssignmentService {
         latitude: order.pickupAddress.latitude, longitude: order.pickupAddress.longitude,
         delegation: { nameDelegation: order.pickupAddress.delegation.nameDelegation,
           governorate: { nameGovernorate: order.pickupAddress.delegation.governorate.nameGovernorate,
-            country: { name: order.pickupAddress.delegation.governorate.country.name } } },
+            country: {
+              name: order.pickupAddress.delegation.governorate.country.name,
+              currencySymbol: order.pickupAddress.delegation.governorate.country.currencySymbol,
+              currencyCode: order.pickupAddress.delegation.governorate.country.currencyCode,
+            } } },
       } : null,
       dropoffAddress: order.dropoffAddress ? {
         id: order.dropoffAddress.id, street: order.dropoffAddress.street,
@@ -525,9 +556,23 @@ export class DriverAssignmentService {
       orderBy: { createdAt: 'asc' },
     });
 
+    const rateCache = new Map<string, number | null>();
+    const mapped = await Promise.all(
+      orders.map(async (o: any) => {
+        const countryId = o.pickupAddress?.delegation?.governorate?.country?.id as string | undefined;
+        let rate: number | null = null;
+        if (countryId) {
+          if (!rateCache.has(countryId)) {
+            rateCache.set(countryId, await this.coinConfig.getActiveCoinsPerFiatUnit(countryId));
+          }
+          rate = rateCache.get(countryId) ?? null;
+        }
+        return this.mapOrderToResponse(o, rate);
+      }),
+    );
     return {
       canAccept: driver.status === DriverStatus.VERIFIED,
-      orders: orders.map((o: any) => this.mapOrderToResponse(o)),
+      orders: mapped,
     };
   }
 
@@ -581,9 +626,23 @@ export class DriverAssignmentService {
       orderBy: { createdAt: 'asc' },
     });
 
+    const rateCache = new Map<string, number | null>();
+    const mapped = await Promise.all(
+      orders.map(async (o: any) => {
+        const countryId = o.pickupAddress?.delegation?.governorate?.country?.id as string | undefined;
+        let rate: number | null = null;
+        if (countryId) {
+          if (!rateCache.has(countryId)) {
+            rateCache.set(countryId, await this.coinConfig.getActiveCoinsPerFiatUnit(countryId));
+          }
+          rate = rateCache.get(countryId) ?? null;
+        }
+        return this.mapOrderToResponse(o, rate);
+      }),
+    );
     return {
       canAccept: driver.status === DriverStatus.VERIFIED,
-      orders: orders.map((o: any) => this.mapOrderToResponse(o)),
+      orders: mapped,
     };
   }
 
@@ -655,14 +714,28 @@ export class DriverAssignmentService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return rejections.map(r => ({
-      rejectionId: r.id,
-      rejectedAt: r.createdAt,
-      reason: r.reason,
-      driverResponse: r.driverResponse ?? null,
-      driverRespondedAt: r.driverRespondedAt ?? null,
-      order: this.mapOrderToResponse(r.order),
-    }));
+    const rateCache = new Map<string, number | null>();
+    const rows = await Promise.all(
+      rejections.map(async (r) => {
+        const countryId = r.order.pickupAddress?.delegation?.governorate?.country?.id as string | undefined;
+        let rate: number | null = null;
+        if (countryId) {
+          if (!rateCache.has(countryId)) {
+            rateCache.set(countryId, await this.coinConfig.getActiveCoinsPerFiatUnit(countryId));
+          }
+          rate = rateCache.get(countryId) ?? null;
+        }
+        return {
+          rejectionId: r.id,
+          rejectedAt: r.createdAt,
+          reason: r.reason,
+          driverResponse: r.driverResponse ?? null,
+          driverRespondedAt: r.driverRespondedAt ?? null,
+          order: this.mapOrderToResponse(r.order, rate),
+        };
+      }),
+    );
+    return rows;
   }
 
 }

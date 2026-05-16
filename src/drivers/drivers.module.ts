@@ -16,11 +16,13 @@ import { DocumentsModule } from '../documents/documents.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { RedisModule } from '@nestjs-modules/ioredis';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   imports: [
     PrismaModule,
     DocumentsModule,
+    WalletModule,
     ConfigModule,
     RedisModule.forRootAsync({
       imports: [ConfigModule],

@@ -32,6 +32,9 @@ export class DriverProfileDto {
   };
   account?: {
     balance: number;
+    balanceUnit?: 'COINS';
+    balanceAsLocalFiat?: number | null;
+    currencySymbol?: string;
     currency: string;
     completedDeliveries: number;
     negativeBalanceSince?: Date;

@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { CustomersService } from './customers.service';
 import { UpdateCustomerDto } from './dto/customer.dto';
+import { UpdateNotificationPreferencesDto } from './dto/notification-preferences.dto';
 import { SetupCustomerDto } from './dto/setup-customer.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, JwtSuperUserGuard, CustomerGuard, AdminGuard } from '../auth/guards/auth.guards';
@@ -47,6 +48,21 @@ export class CustomersController {
    * POST /customers/me/setup
    * Choose country (creates wallet) + optional address. Status: CREATED → VERIFIED.
    */
+  @UseGuards(JwtUserGuard, CustomerGuard)
+  @Get('me/notification-preferences')
+  async getNotificationPreferences(@CurrentUser() user: AuthenticatedUser) {
+    return this.customersService.getNotificationPreferences(user.id);
+  }
+
+  @UseGuards(JwtUserGuard, CustomerGuard)
+  @Patch('me/notification-preferences')
+  async updateNotificationPreferences(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateNotificationPreferencesDto,
+  ) {
+    return this.customersService.updateNotificationPreferences(user.id, dto);
+  }
+
   @UseGuards(JwtUserGuard, CustomerGuard)
   @Post('me/setup')
   async setupCustomer(

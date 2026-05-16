@@ -29,6 +29,7 @@ import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CreateDriverWithdrawalDto } from './dto/driver-withdrawal.dto';
+import { CountryCoinConfigService } from '../wallet/country-coin-config.service';
 
 @Injectable()
 export class DriversService {
@@ -38,6 +39,7 @@ export class DriversService {
     private readonly jwtService: JwtService,
     private readonly mlVerificationService: MlVerificationService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly coinConfig: CountryCoinConfigService,
     @InjectRedis() private readonly redis: Redis,
   ) {}
 
@@ -454,6 +456,18 @@ export class DriversService {
 
     const latestVerification = driver.driverVerifications[0] ?? null;
 
+    let balanceAsLocalFiat: number | null = null;
+    let accountCurrencySymbol: string | undefined;
+    const driverAddress = driver.user.addresses[0];
+    if (driver.driverAccount && driverAddress) {
+      const countryId = driverAddress.delegation.governorate.country.id;
+      accountCurrencySymbol = driverAddress.delegation.governorate.country.currencySymbol ?? undefined;
+      const rate = await this.coinConfig.getActiveCoinsPerFiatUnit(countryId);
+      if (rate) {
+        balanceAsLocalFiat = this.coinConfig.coinsToFiat(Number(driver.driverAccount.balance), rate);
+      }
+    }
+
     return {
       id: driver.id,
       userId: driver.userId,
@@ -494,6 +508,9 @@ export class DriversService {
       account: driver.driverAccount
         ? {
             balance: Number(driver.driverAccount.balance),
+            balanceUnit: 'COINS' as const,
+            balanceAsLocalFiat,
+            currencySymbol: accountCurrencySymbol,
             currency: driver.driverAccount.currency,
             completedDeliveries: driver.driverAccount.completedDeliveries,
             negativeBalanceSince: driver.driverAccount.negativeBalanceSince ?? undefined,
@@ -655,7 +672,8 @@ export class DriversService {
 
     return {
       balance: Number(driver.driverAccount.balance),
-      currency: driver.driverAccount.currency,
+      currency: 'Coins',
+      balanceUnit: 'COINS' as const,
       transactions: transactions.map(t => ({
         id: t.id,
         type: t.type,
