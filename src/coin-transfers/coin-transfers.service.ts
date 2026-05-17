@@ -666,6 +666,9 @@ export class CoinTransfersService {
         id: transferId,
         OR: [{ senderUserId: userId }, { recipientUserId: userId }],
       },
+      include: {
+        sender: { select: { firstName: true, secondName: true, phone: true } },
+      },
     });
     if (!t) throw new NotFoundException('Transfer not found');
     if (
@@ -675,7 +678,7 @@ export class CoinTransfersService {
     ) {
       throw new NotFoundException('Transfer not found');
     }
-    return this.serializeTransferForUser(t, userId);
+    return this.serializeTransferForUser(t, userId, t.sender);
   }
 
   async listMyTransfers(userId: string, page = 1, limit = 20) {
@@ -697,11 +700,14 @@ export class CoinTransfersService {
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
+        include: {
+          sender: { select: { firstName: true, secondName: true, phone: true } },
+        },
       }),
       this.prisma.coinTransfer.count({ where }),
     ]);
     return {
-      transfers: rows.map((r) => this.serializeTransferForUser(r, userId)),
+      transfers: rows.map((r) => this.serializeTransferForUser(r, userId, r.sender)),
       total,
       page,
       totalPages: Math.ceil(total / limit),
@@ -929,7 +935,7 @@ export class CoinTransfersService {
     if (done?.status === CoinTransferStatus.COMPLETED) {
       const sender = await this.prisma.user.findUnique({
         where: { id: done.senderUserId },
-        select: { firstName: true, secondName: true },
+        select: { firstName: true, secondName: true, phone: true },
       });
       const label = [sender?.firstName, sender?.secondName].filter(Boolean).join(' ') || 'Someone';
       await this.notifications.send({
@@ -939,6 +945,7 @@ export class CoinTransfersService {
         templateData: {
           amount: String(done.netCoins),
           senderName: label,
+          senderPhone: sender?.phone?.trim() ?? '',
           transferId,
           giftMessage: done.giftMessage ?? '',
         },
@@ -1020,6 +1027,19 @@ export class CoinTransfersService {
     };
   }
 
+  private senderPreviewForRecipient(
+    sender:
+      | { firstName: string | null; secondName: string | null; phone: string | null }
+      | null
+      | undefined,
+  ) {
+    if (!sender) return {};
+    const senderDisplayName =
+      [sender.firstName, sender.secondName].filter(Boolean).join(' ').trim() || null;
+    const senderPhone = sender.phone?.trim() || null;
+    return { senderDisplayName, senderPhone };
+  }
+
   /** List/detail: recipients must not infer platform fee from API fields; senders keep full breakdown. */
   private serializeTransferForUser(
     t: {
@@ -1040,6 +1060,9 @@ export class CoinTransfersService {
       failedReason: string | null;
     },
     viewerUserId: string,
+    sender?:
+      | { firstName: string | null; secondName: string | null; phone: string | null }
+      | null,
   ) {
     const base = this.serializeTransfer(t);
     const isRecipientOnly =
@@ -1055,6 +1078,7 @@ export class CoinTransfersService {
       feeBps: 0,
       netCoins: net,
       showFeeBreakdown: false,
+      ...this.senderPreviewForRecipient(sender),
     };
   }
 }
