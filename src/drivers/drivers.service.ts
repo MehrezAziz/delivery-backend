@@ -1201,4 +1201,27 @@ export class DriversService {
       throw new BadRequestException('Liveness evidence already used (replay blocked)');
     }
   }
+
+  async getNotificationPreferences(userId: string) {
+    const driver = await this.prisma.driver.findUnique({ where: { userId } });
+    if (!driver) throw new NotFoundException('Driver profile not found');
+    return { notifyGameEvents: driver.notifyGameEvents };
+  }
+
+  async updateNotificationPreferences(
+    userId: string,
+    dto: { notifyGameEvents?: boolean },
+  ) {
+    const driver = await this.prisma.driver.findUnique({ where: { userId } });
+    if (!driver) throw new NotFoundException('Driver profile not found');
+    const updated = await this.prisma.driver.update({
+      where: { userId },
+      data: {
+        ...(dto.notifyGameEvents !== undefined
+          ? { notifyGameEvents: dto.notifyGameEvents }
+          : {}),
+      },
+    });
+    return { notifyGameEvents: updated.notifyGameEvents };
+  }
 }

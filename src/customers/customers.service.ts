@@ -375,7 +375,10 @@ export class CustomersService {
   async getNotificationPreferences(userId: string): Promise<NotificationPreferencesDto> {
     const customer = await this.prisma.customer.findUnique({ where: { userId } });
     if (!customer) throw new NotFoundException('Customer profile not found');
-    return { notifyReferralCommission: customer.notifyReferralCommission };
+    return {
+      notifyReferralCommission: customer.notifyReferralCommission,
+      notifyGameEvents: customer.notifyGameEvents,
+    };
   }
 
   async updateNotificationPreferences(
@@ -386,9 +389,19 @@ export class CustomersService {
     if (!customer) throw new NotFoundException('Customer profile not found');
     const updated = await this.prisma.customer.update({
       where: { userId },
-      data: { notifyReferralCommission: dto.notifyReferralCommission },
+      data: {
+        ...(dto.notifyReferralCommission !== undefined
+          ? { notifyReferralCommission: dto.notifyReferralCommission }
+          : {}),
+        ...(dto.notifyGameEvents !== undefined
+          ? { notifyGameEvents: dto.notifyGameEvents }
+          : {}),
+      },
     });
-    return { notifyReferralCommission: updated.notifyReferralCommission };
+    return {
+      notifyReferralCommission: updated.notifyReferralCommission,
+      notifyGameEvents: updated.notifyGameEvents,
+    };
   }
 
   private mapToResponseDto(customer: any): CustomerResponseDto {

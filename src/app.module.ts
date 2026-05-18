@@ -23,6 +23,7 @@ import { ControlPanelModule } from './control-panel/control-panel.module';
 import { DeliveryCompanyModule } from './delivery-company/delivery-company.module';
 import { CoinTransfersModule } from './coin-transfers/coin-transfers.module';
 import { CoinTopupModule } from './coin-topup/coin-topup.module';
+import { GamesModule } from './games/games.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { CoinTopupModule } from './coin-topup/coin-topup.module';
     DeliveryCompanyModule,
     CoinTransfersModule,
     CoinTopupModule,
+    GamesModule,
   ],
   controllers: [AppController],
   providers: [

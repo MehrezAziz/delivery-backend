@@ -162,6 +162,7 @@ enum DriverTransactionType {
   DEPOSIT
   COIN_TRANSFER_SENT
   COIN_TRANSFER_RECEIVED
+  GAME_PRIZE
 }
 
 enum WalletTransactionType {
@@ -176,6 +177,7 @@ enum WalletTransactionType {
   ADJUSTMENT
   COIN_TRANSFER_SENT
   COIN_TRANSFER_RECEIVED
+  GAME_PRIZE
 }
 
 enum TransactionStatus {
@@ -190,6 +192,7 @@ enum ReferenceType {
   ORDER
   REFERRAL
   WITHDRAWAL
+  GAME_PRIZE
   ADMIN_ADJUSTMENT
   COIN_TRANSFER
 }
@@ -391,6 +394,10 @@ enum NotificationType {
   CUSTOMER_REJECTED_ARRIVED_DRIVER_CS
   CUSTOMER_REJECTED_ARRIVED_DRIVER_TO_DRIVER
   ARRIVAL_CONFLICT_DRIVER_FEEDBACK_CS
+  // Games
+  GAME_WINNER
+  GAME_DRAW_COMPLETED
+  GAME_REMINDER
 }
 
 enum NotificationPriority {
@@ -559,6 +566,7 @@ model Customer {
   referredByCodeId String?        @map("referred_by_code_id")
   termsAcceptedAt            DateTime? @map("terms_accepted_at")
   notifyReferralCommission   Boolean   @default(true) @map("notify_referral_commission")
+  notifyGameEvents           Boolean   @default(false) @map("notify_game_events")
 
   // Relations
   user                      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -584,6 +592,7 @@ model Driver {
   approvedAt  DateTime?    @map("approved_at")
   suspendedAt DateTime?    @map("suspended_at")
   description String?
+  notifyGameEvents             Boolean    @default(false) @map("notify_game_events")
 
   /// Saved liveness evidence (JSON) when driver completes challenge but not yet document submit; expires after 24h.
   pendingLivenessSession       Json?      @map("pending_liveness_session")
@@ -885,6 +894,7 @@ model Country {
   pricingPolicies CountryPricingPolicy[]
   digitalWallets  DigitalWallet[]
   coinConfigs     CountryCoinConfig[]
+  gameCountries   GameCountry[]
 
   @@map("countries")
 }
@@ -1881,6 +1891,316 @@ model Notification {
   @@index([groupKey])
   @@index([type])
   @@map("notifications")
+}
+
+// ============================================
+// GAMES (QUIZ & FUTURE TYPES)
+// ============================================
+
+enum GameType {
+  QUIZ
+}
+
+enum GameScheduleMode {
+  ALL_DAYS
+  CALENDAR_DAYS
+  WEEKDAYS
+}
+
+enum GamePeriodMode {
+  DAILY
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+enum GameCustomPeriodAnchor {
+  ROLLING
+  FIXED_BLOCKS
+}
+
+enum GameWinnerSelectionMode {
+  RANDOM
+  MANUAL
+  RANDOM_CONFIRM
+}
+
+enum GamePrizeType {
+  COINS
+  PHYSICAL
+}
+
+enum GameCoinCreditMode {
+  AUTO_ON_CONFIRM
+  MANUAL
+}
+
+enum GameWinnerPoolMode {
+  COMBINED
+  SEPARATE_BY_ROLE
+}
+
+enum GameButtonPlacement {
+  CUSTOMER_HOME
+  CUSTOMER_WALLET
+  CUSTOMER_ORDERS
+  CUSTOMER_PROFILE
+  CUSTOMER_SETTINGS
+  CUSTOMER_SUPPORT
+  DRIVER_HOME
+  DRIVER_EARNINGS
+  DRIVER_TRANSACTIONS
+  DRIVER_PROFILE
+  DRIVER_SETTINGS
+  DRIVER_SUPPORT
+  DRIVER_MY_ORDERS
+}
+
+enum GameDrawStatus {
+  OPEN
+  AWAITING_CONFIRM
+  CONFIRMED
+  CANCELLED
+}
+
+enum GameWinnerStatus {
+  PENDING_CONFIRM
+  CONFIRMED
+  PRIZE_CREDITED
+  REJECTED
+}
+
+enum GamePhysicalPrizeStatus {
+  PENDING_CONTACT
+  CLAIMED
+}
+
+model Game {
+  id                     String                  @id @default(uuid())
+  type                   GameType                @default(QUIZ)
+  name                   String
+  description            String?                 @db.Text
+  isActive               Boolean                 @default(false) @map("is_active")
+  scheduleMode           GameScheduleMode        @default(ALL_DAYS) @map("schedule_mode")
+  /// Days of month (1–31) when scheduleMode = CALENDAR_DAYS
+  calendarDays           Int[]                   @default([]) @map("calendar_days")
+  /// 0=Sunday … 6=Saturday when scheduleMode = WEEKDAYS
+  weekdays               Int[]                   @default([]) @map("weekdays")
+  periodMode             GamePeriodMode          @default(DAILY) @map("period_mode")
+  customPeriodDays       Int?                    @map("custom_period_days")
+  customPeriodAnchor     GameCustomPeriodAnchor? @map("custom_period_anchor")
+  questionsPerDay        Int                     @default(5) @map("questions_per_day")
+  accessCodeHash         String                  @map("access_code_hash")
+  /// Plain 6-digit code, kept so admins can view the current code at any time. Admin-only access.
+  accessCodePlain        String?                 @map("access_code_plain")
+  /// Previous plain code, kept so admins can still see the prior code after rotation.
+  previousAccessCodePlain String?                @map("previous_access_code_plain")
+  accessCodeVersion      Int                     @default(1) @map("access_code_version")
+  requireCompletedOrder  Boolean                 @default(false) @map("require_completed_order")
+  winnerSelectionMode    GameWinnerSelectionMode @default(RANDOM) @map("winner_selection_mode")
+  coinCreditMode         GameCoinCreditMode      @default(AUTO_ON_CONFIRM) @map("coin_credit_mode")
+  winnerPoolMode         GameWinnerPoolMode      @default(COMBINED) @map("winner_pool_mode")
+  customerButtonPlacement GameButtonPlacement    @map("customer_button_placement")
+  driverButtonPlacement   GameButtonPlacement    @map("driver_button_placement")
+  /// Gallery images shown on game landing (URLs)
+  bannerImageUrls        String[]                @default([]) @map("banner_image_urls")
+  showRecentWinners      Boolean                 @default(true) @map("show_recent_winners")
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
+
+  countries   GameCountry[]
+  prizeTiers  GamePrizeTier[]
+  categories  GameCategory[]
+  questions   GameQuestion[]
+  accessGrants GameAccess[]
+  codeAttempts GameCodeAttempt[]
+  answers     GameAnswer[]
+  dailyShown  GameDailyQuestionShown[]
+  draws       GameDraw[]
+  winners     GameWinner[]
+
+  @@map("games")
+}
+
+model GameCountry {
+  id        String @id @default(uuid())
+  gameId    String @map("game_id")
+  countryId String @map("country_id")
+
+  game    Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, countryId])
+  @@map("game_countries")
+}
+
+model GamePrizeTier {
+  id              String          @id @default(uuid())
+  gameId          String          @map("game_id")
+  rank            Int
+  prizeType       GamePrizeType   @map("prize_type")
+  coinAmount      Decimal?        @map("coin_amount") @db.Decimal(10, 2)
+  prizeLabel      String?         @map("prize_label")
+  prizeImageUrl   String?         @map("prize_image_url")
+  congratsImageUrl String?        @map("congrats_image_url")
+
+  game    Game         @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  winners GameWinner[]
+
+  @@unique([gameId, rank])
+  @@map("game_prize_tiers")
+}
+
+model GameCategory {
+  id        String   @id @default(uuid())
+  gameId    String   @map("game_id")
+  name      String
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  game      Game           @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  questions GameQuestion[]
+
+  @@map("game_categories")
+}
+
+model GameQuestion {
+  id         String   @id @default(uuid())
+  gameId     String   @map("game_id")
+  categoryId String   @map("category_id")
+  text       String?  @db.Text
+  imageUrl   String?  @map("image_url")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  game     Game              @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  category GameCategory      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  options  GameQuestionOption[]
+  answers  GameAnswer[]
+  dailyShown GameDailyQuestionShown[]
+
+  @@index([gameId, isActive])
+  @@map("game_questions")
+}
+
+model GameQuestionOption {
+  id         String  @id @default(uuid())
+  questionId String  @map("question_id")
+  text       String?
+  imageUrl   String? @map("image_url")
+  isCorrect  Boolean @default(false) @map("is_correct")
+  sortOrder  Int     @default(0) @map("sort_order")
+
+  question GameQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers  GameAnswer[]
+
+  @@map("game_question_options")
+}
+
+model GameAccess {
+  id                  String   @id @default(uuid())
+  gameId              String   @map("game_id")
+  userId              String   @map("user_id")
+  accessCodeVersion   Int      @map("access_code_version")
+  unlockedAt          DateTime @default(now()) @map("unlocked_at")
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, userId])
+  @@index([userId])
+  @@map("game_access")
+}
+
+model GameCodeAttempt {
+  id           String    @id @default(uuid())
+  gameId       String    @map("game_id")
+  userId       String    @map("user_id")
+  failedAttempts Int     @default(0) @map("failed_attempts")
+  lockedUntil  DateTime? @map("locked_until")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, userId])
+  @@map("game_code_attempts")
+}
+
+model GameAnswer {
+  id               String   @id @default(uuid())
+  gameId           String   @map("game_id")
+  userId           String   @map("user_id")
+  questionId       String   @map("question_id")
+  selectedOptionId String   @map("selected_option_id")
+  isCorrect        Boolean  @map("is_correct")
+  tunisiaDateKey   String   @map("tunisia_date_key")
+  answeredAt       DateTime @default(now()) @map("answered_at")
+
+  game           Game               @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  question       GameQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOption GameQuestionOption @relation(fields: [selectedOptionId], references: [id], onDelete: Cascade)
+
+  @@index([gameId, userId, tunisiaDateKey])
+  @@index([gameId, userId, answeredAt])
+  @@map("game_answers")
+}
+
+model GameDailyQuestionShown {
+  id             String @id @default(uuid())
+  gameId         String @map("game_id")
+  userId         String @map("user_id")
+  questionId     String @map("question_id")
+  tunisiaDateKey String @map("tunisia_date_key")
+
+  game     Game         @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  question GameQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, userId, questionId, tunisiaDateKey])
+  @@map("game_daily_question_shown")
+}
+
+model GameDraw {
+  id              String         @id @default(uuid())
+  gameId          String         @map("game_id")
+  periodStart     DateTime       @map("period_start")
+  periodEnd         DateTime       @map("period_end")
+  status          GameDrawStatus @default(OPEN)
+  /// COMBINED | CUSTOMER | DRIVER when winnerPoolMode = SEPARATE_BY_ROLE
+  poolScope       String         @default("COMBINED") @map("pool_scope")
+  confirmDeadline DateTime?      @map("confirm_deadline")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  closedAt        DateTime?      @map("closed_at")
+
+  game    Game         @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  winners GameWinner[]
+
+  @@index([gameId, periodEnd])
+  @@map("game_draws")
+}
+
+model GameWinner {
+  id                    String                   @id @default(uuid())
+  gameId                String                   @map("game_id")
+  drawId                String                   @map("draw_id")
+  userId                String                   @map("user_id")
+  userRole              UserRole                 @map("user_role")
+  prizeTierId           String                   @map("prize_tier_id")
+  status                GameWinnerStatus         @default(PENDING_CONFIRM)
+  physicalPrizeStatus   GamePhysicalPrizeStatus? @map("physical_prize_status")
+  correctCountInPeriod  Int                      @default(0) @map("correct_count_in_period")
+  congratsShownAt       DateTime?                @map("congrats_shown_at")
+  wonAt                 DateTime                 @default(now()) @map("won_at")
+  confirmedAt           DateTime?                @map("confirmed_at")
+  creditedAt            DateTime?                @map("credited_at")
+
+  game      Game          @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  draw      GameDraw      @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  prizeTier GamePrizeTier @relation(fields: [prizeTierId], references: [id], onDelete: Cascade)
+
+  @@index([gameId, userId])
+  @@index([drawId])
+  @@map("game_winners")
 }
 
 // ============================================

@@ -352,6 +352,18 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
     title: 'Transfer cancelled',
     body: `Your pending transfer (${d?.amount ?? ''} coins) was cancelled.`,
   }),
+  GAME_WINNER: (d) => ({
+    title: '🎉 You won!',
+    body: `Congratulations! You won ${d?.prize ?? 'a prize'} in ${d?.gameName ?? 'the game'}. Open the app to see details.`,
+  }),
+  GAME_DRAW_COMPLETED: (d) => ({
+    title: 'Game draw completed',
+    body: `The draw for ${d?.gameName ?? 'the game'} is complete. Check the game page for winners.`,
+  }),
+  GAME_REMINDER: (d) => ({
+    title: "Today's quiz is live",
+    body: `Join ${d?.gameName ?? 'the game'} today — enter the code from our social channels.`,
+  }),
 };
 
 export function getNotificationTemplate(

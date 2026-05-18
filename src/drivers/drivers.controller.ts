@@ -57,6 +57,19 @@ export class DriversController {
     return this.driversService.getDriverProfile(userId);
   }
 
+  @Get('me/notification-preferences')
+  async getNotificationPreferences(@UserId() userId: string) {
+    return this.driversService.getNotificationPreferences(userId);
+  }
+
+  @Patch('me/notification-preferences')
+  async updateNotificationPreferences(
+    @UserId() userId: string,
+    @Body() body: { notifyGameEvents?: boolean },
+  ) {
+    return this.driversService.updateNotificationPreferences(userId, body);
+  }
+
   /**
    * PATCH /drivers/me
    * Update driver profile (phone, vehicleType, description, gender)

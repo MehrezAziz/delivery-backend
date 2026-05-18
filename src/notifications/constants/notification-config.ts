@@ -101,4 +101,7 @@ export const DEFAULT_PRIORITY: Record<NotificationType, NotificationPriority> = 
   [NotificationType.COIN_TRANSFER_RECEIVED]: NotificationPriority.HIGH,
   [NotificationType.COIN_TRANSFER_OUTBOUND_COMPLETED]: NotificationPriority.MEDIUM,
   [NotificationType.COIN_TRANSFER_CANCELLED]: NotificationPriority.MEDIUM,
+  [NotificationType.GAME_WINNER]: NotificationPriority.HIGH,
+  [NotificationType.GAME_DRAW_COMPLETED]: NotificationPriority.LOW,
+  [NotificationType.GAME_REMINDER]: NotificationPriority.LOW,
 };
