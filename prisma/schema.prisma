@@ -2005,6 +2005,8 @@ model Game {
   /// Gallery images shown on game landing (URLs)
   bannerImageUrls        String[]                @default([]) @map("banner_image_urls")
   showRecentWinners      Boolean                 @default(true) @map("show_recent_winners")
+  /// Optional date after which the game stops accepting new participation and is hidden from users.
+  endsAt                 DateTime?               @map("ends_at")
   createdAt              DateTime                @default(now()) @map("created_at")
   updatedAt              DateTime                @updatedAt @map("updated_at")
 

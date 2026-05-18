@@ -61,6 +61,7 @@ export class GamesService {
       weekdays: number[];
       bannerImageUrls: string[];
       countries: { countryId: string }[];
+      endsAt?: Date | null;
     },
     userId: string,
     role: UserRole,
@@ -71,8 +72,9 @@ export class GamesService {
       game.calendarDays,
       game.weekdays,
     );
+    const hasEnded = !!game.endsAt && game.endsAt.getTime() <= Date.now();
     let status: 'COMING_SOON' | 'OPEN' | 'CLOSED_TODAY' = 'COMING_SOON';
-    if (game.isActive) {
+    if (game.isActive && !hasEnded) {
       status = openToday ? 'OPEN' : 'CLOSED_TODAY';
     }
     return {
@@ -125,6 +127,7 @@ export class GamesService {
       game.calendarDays,
       game.weekdays,
     );
+    const hasEnded = !!game.endsAt && game.endsAt.getTime() <= Date.now();
 
     const winners = game.showRecentWinners
       ? await this.getRecentWinners(gameId)
@@ -143,7 +146,8 @@ export class GamesService {
       description: game.description,
       bannerImageUrls: game.bannerImageUrls,
       isActive: game.isActive,
-      status: !game.isActive
+      endsAt: game.endsAt ?? null,
+      status: !game.isActive || hasEnded
         ? 'COMING_SOON'
         : openToday
           ? 'OPEN'
@@ -448,9 +452,12 @@ export class GamesService {
   private async assertCanPlay(
     gameId: string,
     userId: string,
-    game: { isActive: boolean; accessCodeVersion: number; scheduleMode: string; calendarDays: number[]; weekdays: number[] },
+    game: { isActive: boolean; accessCodeVersion: number; scheduleMode: string; calendarDays: number[]; weekdays: number[]; endsAt?: Date | null },
   ) {
     if (!game.isActive) throw new BadRequestException('Game is not active');
+    if (game.endsAt && game.endsAt.getTime() <= Date.now()) {
+      throw new BadRequestException('This game has ended');
+    }
     if (
       !isGameOpenOnDate(game.scheduleMode, game.calendarDays, game.weekdays)
     ) {
@@ -475,6 +482,7 @@ export class GamesService {
     });
     if (!game) return 'COMING_SOON';
     if (!game.isActive) return 'COMING_SOON';
+    if (game.endsAt && game.endsAt.getTime() <= Date.now()) return 'COMING_SOON';
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
