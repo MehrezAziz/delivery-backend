@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { SanitizePipe } from './common/pipes/sanitize.pipe';
 import helmet from 'helmet';
+import { join } from 'path';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -12,6 +13,16 @@ async function bootstrap() {
   // Increase body size limit for base64 image uploads
   app.use(require('express').json({ limit: '10mb' }));
   app.use(require('express').urlencoded({ limit: '10mb', extended: true }));
+
+  // Serve uploaded images (game banners, prizes, question images, etc.)
+  // at /uploads/<filename> for direct consumption by mobile clients.
+  app.use(
+    '/uploads',
+    require('express').static(join(process.cwd(), 'uploads'), {
+      maxAge: '1y',
+      immutable: true,
+    }),
+  );
 
   // Security: HTTP headers (XSS, clickjacking, MIME sniffing protection)
   app.use(helmet({

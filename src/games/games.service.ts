@@ -428,6 +428,8 @@ export class GamesService {
       prizeImageUrl: winner.prizeTier.prizeImageUrl,
       prizeType: winner.prizeTier.prizeType,
       physicalPrizeStatus: winner.physicalPrizeStatus,
+      wonAt: winner.wonAt,
+      announcedAt: winner.confirmedAt ?? winner.wonAt,
     };
   }
 
