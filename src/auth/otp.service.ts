@@ -8,14 +8,12 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
-import { Twilio } from 'twilio';
 import { UserRole } from '@prisma/client';
 import { OtpData } from './dto/jwt-payload.interface';
 
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
-  private readonly twilioClient: Twilio | undefined;
 
   // Redis key prefixes
   private readonly OTP_PREFIX = 'otp:';
@@ -33,23 +31,6 @@ export class OtpService {
     @InjectRedis() private readonly redis: Redis,
   ) {
     this.isDev = configService.get<string>('NODE_ENV') !== 'production';
-
-    const accountSid = configService.get<string>('TWILIO_ACCOUNT_SID');
-    const authToken = configService.get<string>('TWILIO_AUTH_TOKEN');
-
-    // Only initialize Twilio if valid credentials are provided
-    if (accountSid && authToken && accountSid.startsWith('AC')) {
-      this.twilioClient = new Twilio(accountSid, authToken);
-      this.logger.log('Twilio client initialized');
-    } else if (this.isDev) {
-      this.twilioClient = undefined;
-      this.logger.warn('Twilio not configured - OTP will be logged to console (dev mode only)');
-    } else {
-      this.twilioClient = undefined;
-      this.logger.warn(
-        'Twilio not configured in production: SMS OTP will fail until TWILIO_ACCOUNT_SID (AC…), TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER are set.',
-      );
-    }
   }
 
   /**
@@ -79,7 +60,6 @@ export class OtpService {
     await this.redis.incr(rateKey);
     await this.redis.expire(rateKey, this.RATE_LIMIT_WINDOW);
 
-    // Send via Twilio (or log in dev)
     await this.deliverOtp(phone, otp);
 
     this.logger.log(`OTP sent to ${phone} for role ${role}`);
@@ -157,21 +137,8 @@ export class OtpService {
       return;
     }
 
-    if (!this.twilioClient) {
-      this.logger.error('Twilio client not initialized');
-      throw new BadRequestException('SMS service not configured');
-    }
-
-    try {
-      const from = this.configService.get<string>('TWILIO_PHONE_NUMBER');
-      await this.twilioClient.messages.create({
-        body: `Your delivery app verification code is: ${otp}. Valid for 5 minutes.`,
-        from,
-        to: phone,
-      });
-    } catch (error) {
-      this.logger.error(`Failed to send OTP via Twilio to ${phone}`, error);
-      throw new BadRequestException('Failed to send OTP. Please check your phone number.');
-    }
+    this.logger.warn(
+      `OTP stored for ${phone}; SMS delivery is handled by Firebase Authentication on the mobile client.`,
+    );
   }
 }

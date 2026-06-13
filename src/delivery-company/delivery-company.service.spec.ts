@@ -10,7 +10,22 @@ describe('DeliveryCompanyService', () => {
       create: jest.fn(),
     },
     deliveryCompanyAddress: {
+      findFirst: jest.fn(),
       updateMany: jest.fn(),
+      create: jest.fn(),
+    },
+    country: {
+      findFirst: jest.fn(),
+    },
+    governorate: {
+      findFirst: jest.fn(),
+    },
+    delegation: {
+      findFirst: jest.fn(),
+    },
+    address: {
+      findFirst: jest.fn(),
+      findUnique: jest.fn(),
       create: jest.fn(),
     },
     deliveryCompanyTransaction: {
@@ -83,6 +98,14 @@ describe('DeliveryCompanyService', () => {
   });
 
   it('throws when available capacity is insufficient on createOrder', async () => {
+    const departmentFixture = {
+      id: 'a1',
+      country: 'Tunisia',
+      city: 'Tunis',
+      street: 'Main',
+      latitude: 36.8,
+      longitude: 10.18,
+    };
     mockPrisma.deliveryCompany.findUnique.mockResolvedValue({
       id: 'c1',
       proxyCustomerId: 'cust1',
@@ -92,8 +115,29 @@ describe('DeliveryCompanyService', () => {
       lockedCoins: 0,
       defaultDiscountPercent: null,
     });
+    mockPrisma.deliveryCompanyAddress.findFirst.mockResolvedValue(departmentFixture);
+    mockPrisma.country.findFirst.mockResolvedValue({ id: 'country-1' });
+    mockPrisma.governorate.findFirst.mockResolvedValue({ id: 'gov-1' });
+    mockPrisma.delegation.findFirst.mockResolvedValue({ id: 'del-1' });
+    mockPrisma.address.findFirst.mockResolvedValue({ id: 'addr-pickup-1' });
+    mockPrisma.address.findUnique.mockResolvedValue({
+      id: 'addr-pickup-1',
+      latitude: 36.8,
+      longitude: 10.18,
+      delegation: { governorate: { country: { id: 'country-1' } } },
+    });
     mockPrisma.systemConfig.findUnique.mockResolvedValue({ value: '-10' });
-    mockPriceCalc.calculatePrice.mockResolvedValue({ totalPrice: 200 });
+    mockPriceCalc.calculatePrice.mockResolvedValue({
+      totalPrice: 200,
+      baseFee: 10,
+      distanceFee: 190,
+      distanceKm: 5,
+      billingDistanceKm: 5,
+      pricePerKm: 2,
+      nightFee: 0,
+      extraWeightFee: 0,
+      pricingPolicyId: 'policy-1',
+    });
 
     await expect(
       service.createOrder('c1', {
@@ -101,7 +145,7 @@ describe('DeliveryCompanyService', () => {
         dropoffAddressId: 'a2',
         weight: 3,
       } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).rejects.toThrow('Insufficient company balance capacity');
   });
 
   it('creates refund request and ledger transaction', async () => {

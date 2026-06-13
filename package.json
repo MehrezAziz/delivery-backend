@@ -61,7 +61,6 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
     "stripe": "^20.3.1",
-    "twilio": "^5.12.2",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
@@ -109,6 +108,9 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "setupFiles": [
+      "<rootDir>/../test/jest-setup.ts"
+    ]
   }
 }
