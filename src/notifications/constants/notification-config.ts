@@ -104,4 +104,7 @@ export const DEFAULT_PRIORITY: Record<NotificationType, NotificationPriority> = 
   [NotificationType.GAME_WINNER]: NotificationPriority.HIGH,
   [NotificationType.GAME_DRAW_COMPLETED]: NotificationPriority.LOW,
   [NotificationType.GAME_REMINDER]: NotificationPriority.LOW,
+  [NotificationType.LOCATION_SHARE_REQUEST]: NotificationPriority.HIGH,
+  [NotificationType.LOCATION_SHARE_FULFILLED]: NotificationPriority.HIGH,
+  [NotificationType.LOCATION_SHARE_DECLINED]: NotificationPriority.MEDIUM,
 };

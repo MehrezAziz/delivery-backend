@@ -24,6 +24,7 @@ import { DeliveryCompanyModule } from './delivery-company/delivery-company.modul
 import { CoinTransfersModule } from './coin-transfers/coin-transfers.module';
 import { CoinTopupModule } from './coin-topup/coin-topup.module';
 import { GamesModule } from './games/games.module';
+import { LocationRequestsModule } from './location-requests/location-requests.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { GamesModule } from './games/games.module';
     CoinTransfersModule,
     CoinTopupModule,
     GamesModule,
+    LocationRequestsModule,
   ],
   controllers: [AppController],
   providers: [

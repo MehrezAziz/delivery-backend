@@ -290,6 +290,19 @@ export class NotificationsService {
         }
       }
 
+      const locationShareTemplateData: Record<string, string> = {};
+      if (
+        (dto.type === 'LOCATION_SHARE_REQUEST' ||
+          dto.type === 'LOCATION_SHARE_FULFILLED' ||
+          dto.type === 'LOCATION_SHARE_DECLINED') &&
+        dto.templateData
+      ) {
+        for (const [k, v] of Object.entries(dto.templateData)) {
+          if (v === undefined || v === null) continue;
+          locationShareTemplateData[k] = typeof v === 'string' ? v : String(v);
+        }
+      }
+
       const result = await this.firebaseService.sendPush({
         token: fcmToken,
         title,
@@ -305,6 +318,7 @@ export class NotificationsService {
           ...chatTemplateData,
           ...coinTransferTemplateData,
           ...referralBonusTemplateData,
+          ...locationShareTemplateData,
           // Pass orderStatus so the frontend dedup map stays in sync
           ...(orderStatus ? { orderStatus } : {}),
           ...(dto.trackingAudience ? { trackingAudience: dto.trackingAudience } : {}),

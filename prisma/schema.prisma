@@ -398,6 +398,23 @@ enum NotificationType {
   GAME_WINNER
   GAME_DRAW_COMPLETED
   GAME_REMINDER
+  // Peer location share (New Order)
+  LOCATION_SHARE_REQUEST
+  LOCATION_SHARE_FULFILLED
+  LOCATION_SHARE_DECLINED
+}
+
+enum LocationShareStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum LocationShareSlot {
+  PICKUP
+  DROPOFF
 }
 
 enum NotificationPriority {
@@ -500,6 +517,8 @@ model User {
   coinTransfersSent      CoinTransfer[] @relation("CoinTransferSender")
   coinTransfersReceived   CoinTransfer[] @relation("CoinTransferRecipient")
   coinTopupSessions      CoinTopupSession[]
+  locationShareRequestsSent     LocationShareRequest[] @relation("LocationShareRequester")
+  locationShareRequestsReceived LocationShareRequest[] @relation("LocationShareTarget")
 
   @@map("users")
 }
@@ -941,8 +960,39 @@ model Address {
   user            User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
   ordersAsPickup  Order[]    @relation("PickupAddress")
   ordersAsDropoff Order[]    @relation("DropoffAddress")
+  locationShareResults LocationShareRequest[] @relation("LocationShareResultAddress")
 
   @@map("addresses")
+}
+
+model LocationShareRequest {
+  id              String              @id @default(uuid())
+
+  requesterId     String              @map("requester_id")
+  requester       User                @relation("LocationShareRequester", fields: [requesterId], references: [id])
+
+  targetUserId    String              @map("target_user_id")
+  targetUser      User                @relation("LocationShareTarget", fields: [targetUserId], references: [id])
+
+  slot            LocationShareSlot
+  status          LocationShareStatus @default(PENDING)
+
+  clientRequestId String?             @map("client_request_id")
+
+  resultAddressId String?             @map("result_address_id")
+  resultAddress   Address?            @relation("LocationShareResultAddress", fields: [resultAddressId], references: [id])
+  resultLat       Float?              @map("result_lat")
+  resultLng       Float?              @map("result_lng")
+  acceptedAt      DateTime?           @map("accepted_at")
+  declinedAt      DateTime?           @map("declined_at")
+
+  expiresAt       DateTime            @map("expires_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  @@index([targetUserId, status])
+  @@index([requesterId, status])
+  @@map("location_share_requests")
 }
 
 // ============================================

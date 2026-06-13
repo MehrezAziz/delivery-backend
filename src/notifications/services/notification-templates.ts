@@ -364,6 +364,18 @@ const templates: Record<NotificationType, (data?: TemplateData) => NotificationT
     title: "Today's quiz is live",
     body: `Join ${d?.gameName ?? 'the game'} today — enter the code from our social channels.`,
   }),
+  LOCATION_SHARE_REQUEST: (d) => ({
+    title: `${d?.requesterName || 'Someone'} wants to send you a package`,
+    body: `Share your exact ${d?.slot || 'delivery'} location so they can complete the order.`,
+  }),
+  LOCATION_SHARE_FULFILLED: (d) => ({
+    title: 'Location shared',
+    body: `${d?.targetName || 'Your contact'} shared their ${d?.slot || 'address'} location.`,
+  }),
+  LOCATION_SHARE_DECLINED: (d) => ({
+    title: 'Location request declined',
+    body: `${d?.targetName || 'Your contact'} declined to share their location for now.`,
+  }),
 };
 
 export function getNotificationTemplate(
