@@ -19,7 +19,7 @@ export class AddressService {
     });
     if (!customer) return;
 
-    const existingWallet = await tx.digitalWallet.findUnique({
+    const existingWallet = await tx.digitalWallet.findFirst({
       where: { customerId: customer.id },
       select: { id: true },
     });
@@ -55,6 +55,27 @@ export class AddressService {
         discount: 0,
       },
     });
+
+    const createdWallet = await tx.digitalWallet.findUnique({
+      where: {
+        customerId_countryId: {
+          customerId: customer.id,
+          countryId: delegation.governorate.countryId,
+        },
+      },
+    });
+    if (createdWallet) {
+      const cust = await tx.customer.findUnique({
+        where: { id: customer.id },
+        select: { primaryWalletId: true },
+      });
+      if (!cust?.primaryWalletId) {
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { primaryWalletId: createdWallet.id },
+        });
+      }
+    }
 
     if (customer.customerStatus === CustomerStatus.CREATED) {
       await tx.customer.update({

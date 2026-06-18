@@ -7,7 +7,9 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { FiatPayoutMethod, ResponseType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CountryCoinConfigService } from './country-coin-config.service';
-import { CreateWithdrawalRequestDto } from './dto/wallet.dto';
+import { CreateWithdrawalRequestDto, CreateCountryWalletDto } from './dto/wallet.dto';
+
+type WalletLookup = { walletId?: string; countryId?: string };
 
 @Injectable()
 export class WalletService {
@@ -18,8 +20,7 @@ export class WalletService {
   ) {}
 
   /**
-   * Create a DigitalWallet for a newly registered customer.
-   * Called automatically on customer registration when status is ACTIVE.
+   * Create a DigitalWallet for a newly registered customer (first / onboarding wallet).
    */
   async createWalletForCustomer(
     customerId: string,
@@ -27,23 +28,152 @@ export class WalletService {
     tx?: any,
   ) {
     const db = tx ?? this.prisma;
-    return db.digitalWallet.create({
+    const country = await db.country.findUnique({ where: { id: countryId } });
+    if (!country) {
+      throw new BadRequestException('Country not found');
+    }
+    const existing = await db.digitalWallet.findUnique({
+      where: { customerId_countryId: { customerId, countryId } },
+    });
+    if (existing) {
+      const cust = await db.customer.findUnique({
+        where: { id: customerId },
+        select: { primaryWalletId: true },
+      });
+      if (!cust?.primaryWalletId) {
+        await db.customer.update({
+          where: { id: customerId },
+          data: { primaryWalletId: existing.id },
+        });
+      }
+      return existing;
+    }
+    const wallet = await db.digitalWallet.create({
       data: {
         customerId,
         countryId,
         balance: 0,
-        currency: 'TND',
+        currency: country.currencyCode,
         discount: 0,
       },
     });
+    const customer = await db.customer.findUnique({
+      where: { id: customerId },
+      select: { primaryWalletId: true },
+    });
+    if (!customer?.primaryWalletId) {
+      await db.customer.update({
+        where: { id: customerId },
+        data: { primaryWalletId: wallet.id },
+      });
+    }
+    return wallet;
+  }
+
+  /** Create (or return) a wallet for an additional country. */
+  async createWalletForCountry(userId: string, dto: CreateCountryWalletDto) {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) throw new NotFoundException('Customer not found');
+
+    const country = await this.prisma.country.findUnique({ where: { id: dto.countryId } });
+    if (!country || !country.isActive) {
+      throw new BadRequestException('Country not found or inactive');
+    }
+
+    const wallet = await this.createWalletForCustomer(customer.id, dto.countryId);
+
+    await this.prisma.customerCountryPreference.upsert({
+      where: {
+        customerId_countryId: { customerId: customer.id, countryId: dto.countryId },
+      },
+      create: { customerId: customer.id, countryId: dto.countryId, codOnly: false },
+      update: { codOnly: false },
+    });
+
+    return this.serializeWalletView(wallet.id);
+  }
+
+  async getWalletsSummary(userId: string) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { userId },
+      include: {
+        wallets: {
+          include: {
+            country: { select: { id: true, name: true, isoCode: true, currencyCode: true, currencySymbol: true } },
+          },
+          orderBy: { updatedAt: 'asc' },
+        },
+        countryPreferences: true,
+      },
+    });
+    if (!customer) throw new NotFoundException('Customer not found');
+
+    const wallets = await Promise.all(
+      customer.wallets.map((w) => this.serializeWalletView(w.id)),
+    );
+
+    return {
+      primaryWalletId: customer.primaryWalletId,
+      wallets,
+      countryPreferences: customer.countryPreferences.map((p) => ({
+        countryId: p.countryId,
+        codOnly: p.codOnly,
+      })),
+    };
   }
 
   /**
-   * Get the wallet of the authenticated customer.
+   * Get one wallet (primary by default, or by countryId / walletId).
    */
-  async getMyWallet(userId: string) {
-    const wallet = await this.prisma.digitalWallet.findFirst({
-      where: { customer: { userId } },
+  async getMyWallet(userId: string, lookup?: WalletLookup) {
+    const wallet = await this.resolveWalletRecord(userId, lookup);
+    return this.serializeWalletView(wallet.id);
+  }
+
+  async getWalletForCountry(userId: string, countryId: string) {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) return null;
+    const wallet = await this.prisma.digitalWallet.findUnique({
+      where: { customerId_countryId: { customerId: customer.id, countryId } },
+    });
+    return wallet;
+  }
+
+  async getPrimaryWalletRecord(userId: string) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { userId },
+      include: { primaryWallet: true },
+    });
+    if (!customer?.primaryWallet) {
+      const fallback = await this.prisma.digitalWallet.findFirst({
+        where: { customerId: customer?.id },
+        orderBy: { updatedAt: 'asc' },
+      });
+      return fallback;
+    }
+    return customer.primaryWallet;
+  }
+
+  /** Payment context for order preview/create. */
+  async getOrderWalletContext(userId: string, orderCountryId: string) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { userId },
+      include: {
+        countryPreferences: { where: { countryId: orderCountryId } },
+      },
+    });
+    if (!customer) return { wallet: null, codOnly: false };
+
+    const wallet = await this.prisma.digitalWallet.findUnique({
+      where: { customerId_countryId: { customerId: customer.id, countryId: orderCountryId } },
+    });
+    const codOnly = customer.countryPreferences[0]?.codOnly ?? false;
+    return { wallet, codOnly };
+  }
+
+  async serializeWalletView(walletId: string) {
+    const wallet = await this.prisma.digitalWallet.findUnique({
+      where: { id: walletId },
       select: {
         id: true,
         customerId: true,
@@ -54,56 +184,42 @@ export class WalletService {
         discount: true,
         updatedAt: true,
         country: {
-          select: { currencyCode: true, currencySymbol: true, name: true },
+          select: { currencyCode: true, currencySymbol: true, name: true, isoCode: true },
         },
       },
     });
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+    if (!wallet) throw new NotFoundException('Wallet not found');
 
     const balanceCoins = Number(wallet.balance);
     const lockedCoins = Number(wallet.lockedForTransfers ?? 0);
-    const spendableCoins =
-      Math.round((balanceCoins - lockedCoins) * 100) / 100;
-
-    const coinRow = await this.coinConfig.getActiveConfig(wallet.countryId);
-    const rate = coinRow ? Number(coinRow.coinsPerFiatUnit) : NaN;
-    const withdrawalFeeBps = coinRow?.withdrawalFeeBps ?? 0;
-    let coinsToLocalFiat: {
-      coinsPerFiatUnit: number;
-      currencyCode: string;
-      currencySymbol: string;
-      balanceAsLocalFiat: number;
-      spendableAsLocalFiat: number;
-      withdrawalFeeBps: number;
-    } | null = null;
-    if (Number.isFinite(rate) && rate > 0) {
-      coinsToLocalFiat = {
-        coinsPerFiatUnit: rate,
-        currencyCode: wallet.country.currencyCode,
-        currencySymbol: wallet.country.currencySymbol,
-        balanceAsLocalFiat: Math.round((balanceCoins / rate) * 100) / 100,
-        spendableAsLocalFiat: Math.round((spendableCoins / rate) * 100) / 100,
-        withdrawalFeeBps,
-      };
-    }
+    const spendableCoins = Math.round((balanceCoins - lockedCoins) * 100) / 100;
+    const rate = (await this.coinConfig.getActiveCoinsPerFiatUnit(wallet.countryId)) ?? 1;
+    const withdrawalFeeBps = (await this.coinConfig.getActiveConfig(wallet.countryId))?.withdrawalFeeBps ?? 0;
 
     return {
       id: wallet.id,
       customerId: wallet.customerId,
       countryId: wallet.countryId,
+      countryName: wallet.country.name,
+      countryIsoCode: wallet.country.isoCode,
       balance: balanceCoins,
       lockedForTransfers: lockedCoins,
       spendable: spendableCoins,
       discount: Number(wallet.discount),
       currency: wallet.currency,
+      currencyCode: wallet.country.currencyCode,
+      currencySymbol: wallet.country.currencySymbol,
       updatedAt: wallet.updatedAt,
-      /** Wallet balance is denominated in platform coins (not fiat labels). */
       balanceUnit: 'COINS' as const,
-      /** Optional: estimated local fiat equivalent using active `CountryCoinConfig.coinsPerFiatUnit` (coins per 1.00 fiat unit). */
-      coinsToLocalFiat,
+      coinsPerFiatUnit: rate,
+      coinsToLocalFiat: {
+        coinsPerFiatUnit: rate,
+        currencyCode: wallet.country.currencyCode,
+        currencySymbol: wallet.country.currencySymbol,
+        balanceAsLocalFiat: this.coinConfig.coinsToFiat(balanceCoins, rate),
+        spendableAsLocalFiat: this.coinConfig.coinsToFiat(spendableCoins, rate),
+        withdrawalFeeBps,
+      },
     };
   }
 
@@ -114,8 +230,9 @@ export class WalletService {
     userId: string,
     page: number = 1,
     limit: number = 20,
+    lookup?: WalletLookup,
   ) {
-    const wallet = await this.findWalletByUserId(userId);
+    const wallet = await this.resolveWalletRecord(userId, lookup);
     const skip = (page - 1) * limit;
 
     const [transactions, total] = await Promise.all([
@@ -159,8 +276,9 @@ export class WalletService {
     userId: string,
     page: number = 1,
     limit: number = 20,
+    lookup?: WalletLookup,
   ) {
-    const wallet = await this.findWalletByUserId(userId);
+    const wallet = await this.resolveWalletRecord(userId, lookup);
     const skip = (page - 1) * limit;
 
     const [requests, total] = await Promise.all([
@@ -235,8 +353,8 @@ export class WalletService {
     return { ok: true };
   }
 
-  async cancelWithdrawalRequest(userId: string, requestId: string) {
-    const wallet = await this.findWalletByUserId(userId);
+  async cancelWithdrawalRequest(userId: string, requestId: string, lookup?: WalletLookup) {
+    const wallet = await this.resolveWalletRecord(userId, lookup);
     const row = await this.prisma.withdrawalRequest.findFirst({
       where: { id: requestId, walletId: wallet.id },
     });
@@ -271,8 +389,8 @@ export class WalletService {
     return row ?? null;
   }
 
-  async getWithdrawalQuote(userId: string, amount: number) {
-    const wallet = await this.findWalletByUserId(userId);
+  async getWithdrawalQuote(userId: string, amount: number, lookup?: WalletLookup) {
+    const wallet = await this.resolveWalletRecord(userId, lookup);
     const gross = Math.round(amount * 100) / 100;
     if (!gross || gross <= 0) {
       throw new BadRequestException('Invalid amount');
@@ -320,7 +438,10 @@ export class WalletService {
     userId: string,
     dto: CreateWithdrawalRequestDto,
   ) {
-    const wallet = await this.findWalletByUserId(userId);
+    const wallet = await this.resolveWalletRecord(userId, {
+      walletId: dto.walletId,
+      countryId: dto.countryId,
+    });
     const bal = Number(wallet.balance);
     const locked = Number(wallet.lockedForTransfers ?? 0);
     const spendable = Math.round((bal - locked) * 100) / 100;
@@ -413,18 +534,46 @@ export class WalletService {
     };
   }
 
-  // ─── Internal helper ───────────────────────────────────────────────────────
+  // ─── Internal helpers ───────────────────────────────────────────────────────
 
-  private async findWalletByUserId(userId: string) {
-    const wallet = await this.prisma.digitalWallet.findFirst({
-      where: { customer: { userId } },
-    });
+  async resolveWalletRecord(userId: string, lookup?: WalletLookup) {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) throw new NotFoundException('Customer not found');
 
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
+    if (lookup?.walletId) {
+      const wallet = await this.prisma.digitalWallet.findFirst({
+        where: { id: lookup.walletId, customerId: customer.id },
+      });
+      if (!wallet) throw new NotFoundException('Wallet not found');
+      return wallet;
     }
 
+    if (lookup?.countryId) {
+      const wallet = await this.prisma.digitalWallet.findUnique({
+        where: { customerId_countryId: { customerId: customer.id, countryId: lookup.countryId } },
+      });
+      if (!wallet) throw new NotFoundException('Wallet not found for this country');
+      return wallet;
+    }
+
+    if (customer.primaryWalletId) {
+      const wallet = await this.prisma.digitalWallet.findUnique({
+        where: { id: customer.primaryWalletId },
+      });
+      if (wallet) return wallet;
+    }
+
+    const wallet = await this.prisma.digitalWallet.findFirst({
+      where: { customerId: customer.id },
+      orderBy: { updatedAt: 'asc' },
+    });
+    if (!wallet) throw new NotFoundException('Wallet not found');
     return wallet;
+  }
+
+  /** @deprecated use resolveWalletRecord */
+  private async findWalletByUserId(userId: string) {
+    return this.resolveWalletRecord(userId);
   }
 }
 

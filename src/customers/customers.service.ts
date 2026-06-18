@@ -6,11 +6,16 @@ import {
   UpdateNotificationPreferencesDto,
 } from './dto/notification-preferences.dto';
 import { SetupCustomerDto } from './dto/setup-customer.dto';
+import { UpsertCountryPreferenceDto } from './dto/country-preference.dto';
 import { CustomerStatus } from '@prisma/client';
+import { WalletService } from '../wallet/wallet.service';
 
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly walletService: WalletService,
+  ) {}
 
   /**
    * Get customer by ID (for authenticated customer to view their own profile)
@@ -336,27 +341,14 @@ export class CustomersService {
     if (!delegation) throw new NotFoundException('Delegation not found');
 
     return this.prisma.$transaction(async (tx) => {
-      // Create wallet only if not already set up
       if (customer.customerStatus === CustomerStatus.CREATED) {
-        const existingWallet = await tx.digitalWallet.findUnique({ where: { customerId: customer.id } });
-        if (!existingWallet) {
-          await tx.digitalWallet.create({
-            data: {
-              customerId: customer.id,
-              countryId: dto.countryId,
-              balance: 0,
-              currency: country.currencyCode,
-              discount: 0,
-            },
-          });
-        }
+        await this.walletService.createWalletForCustomer(customer.id, dto.countryId, tx);
         await tx.customer.update({
           where: { id: customer.id },
           data: { customerStatus: CustomerStatus.ACTIVE },
         });
       }
 
-      // Always create the address record
       await tx.address.create({
         data: {
           latitude: null,
@@ -370,6 +362,36 @@ export class CustomersService {
 
       return { message: 'Setup completed. Wallet and address saved successfully.' };
     });
+  }
+
+  async getCountryPreferences(userId: string) {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) throw new NotFoundException('Customer not found');
+    const prefs = await this.prisma.customerCountryPreference.findMany({
+      where: { customerId: customer.id },
+      include: { country: { select: { id: true, name: true, isoCode: true, currencyCode: true } } },
+    });
+    return prefs.map((p) => ({
+      countryId: p.countryId,
+      countryName: p.country.name,
+      isoCode: p.country.isoCode,
+      currencyCode: p.country.currencyCode,
+      codOnly: p.codOnly,
+    }));
+  }
+
+  async upsertCountryPreference(userId: string, countryId: string, dto: UpsertCountryPreferenceDto) {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) throw new NotFoundException('Customer not found');
+    const country = await this.prisma.country.findUnique({ where: { id: countryId } });
+    if (!country) throw new NotFoundException('Country not found');
+
+    const pref = await this.prisma.customerCountryPreference.upsert({
+      where: { customerId_countryId: { customerId: customer.id, countryId } },
+      create: { customerId: customer.id, countryId, codOnly: dto.codOnly },
+      update: { codOnly: dto.codOnly },
+    });
+    return { countryId: pref.countryId, codOnly: pref.codOnly };
   }
 
   async getNotificationPreferences(userId: string): Promise<NotificationPreferencesDto> {

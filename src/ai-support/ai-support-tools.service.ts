@@ -352,14 +352,20 @@ export class AiSupportToolsService {
       where: { id: ctx.userId },
       select: {
         role: true,
-        customer: { select: { id: true, wallet: true } },
+        customer: { select: { id: true, primaryWalletId: true } },
         driver: { select: { id: true, driverAccount: true } },
       },
     });
     if (!user) return { error: 'USER_NOT_FOUND' };
 
-    if (user.role === UserRole.CUSTOMER && user.customer?.wallet) {
-      const w = user.customer.wallet;
+    if (user.role === UserRole.CUSTOMER && user.customer) {
+      const w = user.customer.primaryWalletId
+        ? await this.prisma.digitalWallet.findUnique({ where: { id: user.customer.primaryWalletId } })
+        : await this.prisma.digitalWallet.findFirst({
+            where: { customerId: user.customer.id },
+            orderBy: { updatedAt: 'asc' },
+          });
+      if (!w) return { error: 'NO_WALLET' };
       const txs = await this.prisma.walletTransaction.findMany({
         where: { walletId: w.id },
         orderBy: { createdAt: 'desc' },

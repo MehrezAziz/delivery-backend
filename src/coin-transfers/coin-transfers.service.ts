@@ -97,13 +97,26 @@ export class CoinTransfersService {
     return parseInt(m.small_transfer_delay_minutes ?? '2', 10) || 2;
   }
 
+  private async getCustomerPrimaryWallet(customer: { id: string; primaryWalletId: string | null }) {
+    if (customer.primaryWalletId) {
+      return this.prisma.digitalWallet.findUnique({ where: { id: customer.primaryWalletId } });
+    }
+    return this.prisma.digitalWallet.findFirst({
+      where: { customerId: customer.id },
+      orderBy: { updatedAt: 'asc' },
+    });
+  }
+
   async resolveCountryIdForUser(userId: string): Promise<string | null> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { customer: { include: { wallet: true } }, driver: true },
+      include: { customer: { select: { id: true, primaryWalletId: true } }, driver: true },
     });
     if (!user) return null;
-    if (user.customer?.wallet) return user.customer.wallet.countryId;
+    if (user.customer) {
+      const w = await this.getCustomerPrimaryWallet(user.customer);
+      if (w) return w.countryId;
+    }
     if (user.driver) {
       const addr = await this.prisma.address.findFirst({
         where: { userId },
@@ -170,7 +183,27 @@ export class CoinTransfersService {
     throw new ForbiddenException('Invalid user role for coin transfers');
   }
 
-  private async loadCoinLedger(userId: string): Promise<{
+  private async getCustomerWalletForLedger(
+    customer: { id: string; primaryWalletId: string | null },
+    lookup?: { walletId?: string; countryId?: string },
+  ) {
+    if (lookup?.walletId) {
+      return this.prisma.digitalWallet.findFirst({
+        where: { id: lookup.walletId, customerId: customer.id },
+      });
+    }
+    if (lookup?.countryId) {
+      return this.prisma.digitalWallet.findUnique({
+        where: { customerId_countryId: { customerId: customer.id, countryId: lookup.countryId } },
+      });
+    }
+    return this.getCustomerPrimaryWallet(customer);
+  }
+
+  private async loadCoinLedger(
+    userId: string,
+    lookup?: { walletId?: string; countryId?: string },
+  ): Promise<{
     kind: 'CUSTOMER' | 'DRIVER';
     walletId?: string;
     accountId?: string;
@@ -182,13 +215,14 @@ export class CoinTransfersService {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
-        customer: { include: { wallet: true } },
+        customer: { select: { id: true, primaryWalletId: true } },
         driver: { include: { driverAccount: true } },
       },
     });
     if (!user) return null;
-    if (user.role === 'CUSTOMER' && user.customer?.wallet) {
-      const w = user.customer.wallet;
+    if (user.role === 'CUSTOMER' && user.customer) {
+      const w = await this.getCustomerWalletForLedger(user.customer, lookup);
+      if (!w) return null;
       const b = Number(w.balance);
       const l = Number(w.lockedForTransfers ?? 0);
       return {
@@ -397,7 +431,12 @@ export class CoinTransfersService {
     return recipient.id;
   }
 
-  async previewTransfer(senderUserId: string, recipientUserId: string, grossCoins: number) {
+  async previewTransfer(
+    senderUserId: string,
+    recipientUserId: string,
+    grossCoins: number,
+    senderLookup?: { walletId?: string; countryId?: string },
+  ) {
     await this.assertP2pEnabled();
     await this.assertUserEligibleForCoinTransfer(senderUserId);
     await this.assertUserEligibleForCoinTransfer(recipientUserId);
@@ -408,10 +447,11 @@ export class CoinTransfersService {
     if (grossCoins < min) {
       throw new BadRequestException(`Minimum transfer is ${min} coins (gross)`);
     }
-    const senderCountry = await this.resolveCountryIdForUser(senderUserId);
-    if (!senderCountry) {
+    const senderLedger = await this.loadCoinLedger(senderUserId, senderLookup);
+    if (!senderLedger?.countryId) {
       throw new BadRequestException('Sender country could not be resolved; complete wallet setup first.');
     }
+    const senderCountry = senderLedger.countryId;
     const feeBps = await this.getActiveTransferFeeBps(senderCountry);
     const { feeCoins, netCoins } = splitGrossIntoFeeAndNet(grossCoins, feeBps);
     const delayMin = await this.getDelayMinutes(grossCoins);
@@ -440,6 +480,8 @@ export class CoinTransfersService {
       challengeToken: string;
       giftMessage?: string;
       scheduledAt?: Date;
+      walletId?: string;
+      countryId?: string;
     },
     opts?: { idempotencyKey?: string | null; clientIp?: string | null; deviceId?: string | null },
   ) {
@@ -459,13 +501,19 @@ export class CoinTransfersService {
     if (dto.grossCoins < min) {
       throw new BadRequestException(`Minimum transfer is ${min} coins (gross)`);
     }
-    const senderLedger = await this.loadCoinLedger(senderUserId);
+    const senderLedger = await this.loadCoinLedger(senderUserId, {
+      walletId: dto.walletId,
+      countryId: dto.countryId,
+    });
     const recipientLedger = await this.loadCoinLedger(dto.recipientUserId);
     if (!senderLedger || !recipientLedger) {
       throw new BadRequestException('Wallet or driver account is not available for one of the users');
     }
     if (senderLedger.available < dto.grossCoins) {
       throw new BadRequestException('Insufficient available balance (coins reserved for other pending transfers?)');
+    }
+    if (senderLedger.countryId !== recipientLedger.countryId) {
+      throw new BadRequestException('Transfers are only allowed between users in the same country wallet');
     }
     const feeBps = await this.getActiveTransferFeeBps(senderLedger.countryId);
     const { feeCoins, netCoins } = splitGrossIntoFeeAndNet(dto.grossCoins, feeBps);
@@ -588,17 +636,53 @@ export class CoinTransfersService {
     return this.serializeTransferForUser(updated, senderUserId);
   }
 
-  private async loadCoinLedgerTx(tx: Prisma.TransactionClient, userId: string) {
+  private async getCustomerPrimaryWalletTx(
+    tx: Prisma.TransactionClient,
+    customer: { id: string; primaryWalletId: string | null },
+  ) {
+    if (customer.primaryWalletId) {
+      return tx.digitalWallet.findUnique({ where: { id: customer.primaryWalletId } });
+    }
+    return tx.digitalWallet.findFirst({
+      where: { customerId: customer.id },
+      orderBy: { updatedAt: 'asc' },
+    });
+  }
+
+  private async getCustomerWalletForLedgerTx(
+    tx: Prisma.TransactionClient,
+    customer: { id: string; primaryWalletId: string | null },
+    lookup?: { walletId?: string; countryId?: string },
+  ) {
+    if (lookup?.walletId) {
+      return tx.digitalWallet.findFirst({
+        where: { id: lookup.walletId, customerId: customer.id },
+      });
+    }
+    if (lookup?.countryId) {
+      return tx.digitalWallet.findUnique({
+        where: { customerId_countryId: { customerId: customer.id, countryId: lookup.countryId } },
+      });
+    }
+    return this.getCustomerPrimaryWalletTx(tx, customer);
+  }
+
+  private async loadCoinLedgerTx(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    lookup?: { walletId?: string; countryId?: string },
+  ) {
     const user = await tx.user.findUnique({
       where: { id: userId },
       include: {
-        customer: { include: { wallet: true } },
+        customer: { select: { id: true, primaryWalletId: true } },
         driver: { include: { driverAccount: true } },
       },
     });
     if (!user) return null;
-    if (user.role === 'CUSTOMER' && user.customer?.wallet) {
-      const w = user.customer.wallet;
+    if (user.role === 'CUSTOMER' && user.customer) {
+      const w = await this.getCustomerWalletForLedgerTx(tx, user.customer, lookup);
+      if (!w) return null;
       const b = Number(w.balance);
       const l = Number(w.lockedForTransfers ?? 0);
       return {
@@ -631,9 +715,12 @@ export class CoinTransfersService {
   private async resolveCountryIdForUserTx(tx: Prisma.TransactionClient, userId: string): Promise<string | null> {
     const user = await tx.user.findUnique({
       where: { id: userId },
-      include: { customer: { include: { wallet: true } } },
+      include: { customer: { select: { id: true, primaryWalletId: true } } },
     });
-    if (user?.customer?.wallet) return user.customer.wallet.countryId;
+    if (user?.customer) {
+      const w = await this.getCustomerPrimaryWalletTx(tx, user.customer);
+      if (w) return w.countryId;
+    }
     const addr = await tx.address.findFirst({
       where: { userId },
       include: { delegation: { include: { governorate: true } } },
@@ -772,8 +859,12 @@ export class CoinTransfersService {
       });
       if (!t) return;
       const gross = Number(t.grossCoins);
-      const senderLedger = await this.loadCoinLedgerTx(tx, t.senderUserId);
-      const recipientLedger = await this.loadCoinLedgerTx(tx, t.recipientUserId);
+      const senderLedger = await this.loadCoinLedgerTx(tx, t.senderUserId, {
+        countryId: t.senderCountryId,
+      });
+      const recipientLedger = await this.loadCoinLedgerTx(tx, t.recipientUserId, {
+        countryId: t.recipientCountryId,
+      });
       if (!senderLedger || !recipientLedger) {
         await tx.coinTransfer.update({
           where: { id: transferId },
@@ -819,8 +910,12 @@ export class CoinTransfersService {
       if (!t || !t.pendingUntil || t.pendingUntil > new Date()) return;
       const gross = Number(t.grossCoins);
       const net = Number(t.netCoins);
-      const senderLedger = await this.loadCoinLedgerTx(tx, t.senderUserId);
-      const recipientLedger = await this.loadCoinLedgerTx(tx, t.recipientUserId);
+      const senderLedger = await this.loadCoinLedgerTx(tx, t.senderUserId, {
+        countryId: t.senderCountryId,
+      });
+      const recipientLedger = await this.loadCoinLedgerTx(tx, t.recipientUserId, {
+        countryId: t.recipientCountryId,
+      });
       if (!senderLedger || !recipientLedger) {
         await tx.coinTransfer.update({
           where: { id: transferId },

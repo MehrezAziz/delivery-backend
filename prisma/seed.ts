@@ -177,9 +177,10 @@ async function main() {
     },
   });
 
-  // Create wallet for customer
-  await prisma.digitalWallet.upsert({
-    where: { customerId: customer.id },
+  const wallet = await prisma.digitalWallet.upsert({
+    where: {
+      customerId_countryId: { customerId: customer.id, countryId: tunisia.id },
+    },
     update: {},
     create: {
       customerId: customer.id,
@@ -188,6 +189,10 @@ async function main() {
       countryId: tunisia.id,
       discount: 0,
     },
+  });
+  await prisma.customer.update({
+    where: { id: customer.id },
+    data: { primaryWalletId: wallet.id },
   });
 
   // Test Driver

@@ -50,15 +50,22 @@ export class CoinTopupController {
   constructor(private readonly coinTopupService: CoinTopupService) {}
 
   @Get('quote')
-  getQuote(@CurrentUser() user: AuthenticatedUser) {
-    return this.coinTopupService.getQuote(user.id, user.role);
+  getQuote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('walletId') walletId?: string,
+    @Query('countryId') countryId?: string,
+  ) {
+    return this.coinTopupService.getQuote(user.id, user.role, { walletId, countryId });
   }
 
   /** Start card checkout (Flouci). */
   @Post('flouci/init')
   @Throttle({ default: { limit: 8, ttl: 60_000 } })
   init(@CurrentUser() user: AuthenticatedUser, @Body() dto: InitFlouciTopUpDto) {
-    return this.coinTopupService.initFlouciSession(user.id, user.role, dto.coinsAmount);
+    return this.coinTopupService.initFlouciSession(user.id, user.role, dto.coinsAmount, {
+      walletId: dto.walletId,
+      countryId: dto.countryId,
+    });
   }
 
   @Post('flouci/verify')

@@ -76,7 +76,10 @@ export class CoinTransfersController {
   @Throttle({ default: { ttl: 60_000, limit: 60 } })
   async preview(@CurrentUser() user: AuthenticatedUser, @Body() dto: PreviewCoinTransferDto) {
     const recipientUserId = await this.coinTransfers.resolveRecipientUserIdOrThrow(user.id, dto);
-    return this.coinTransfers.previewTransfer(user.id, recipientUserId, dto.grossCoins);
+    return this.coinTransfers.previewTransfer(user.id, recipientUserId, dto.grossCoins, {
+      walletId: dto.walletId,
+      countryId: dto.countryId,
+    });
   }
 
   @Post('transfers')
@@ -99,6 +102,8 @@ export class CoinTransfersController {
         challengeToken: dto.challengeToken,
         giftMessage: dto.giftMessage,
         scheduledAt,
+        walletId: dto.walletId,
+        countryId: dto.countryId,
       },
       { idempotencyKey: idempotencyKey?.trim() || null, clientIp: ip || null, deviceId },
     );

@@ -162,12 +162,13 @@ export class GamesService {
       completedToday,
       nextDayResetUtc,
       periodEnd: period.periodEnd,
-      participationCertificate: answeredToday > 0
-        ? {
-            message: `You are entered in the draw for this period (${correctInPeriod} correct answer${correctInPeriod === 1 ? '' : 's'} so far).`,
-            periodEnd: period.periodEnd,
-          }
-        : null,
+      participationCertificate:
+        correctInPeriod > 0
+          ? {
+              message: `You are entered in the draw for this period (${correctInPeriod} correct answer${correctInPeriod === 1 ? '' : 's'} so far).`,
+              periodEnd: period.periodEnd,
+            }
+          : null,
       prizeTiers: game.prizeTiers.map((t) => ({
         rank: t.rank,
         prizeType: t.prizeType,
@@ -452,7 +453,15 @@ export class GamesService {
   private async assertCanPlay(
     gameId: string,
     userId: string,
-    game: { isActive: boolean; accessCodeVersion: number; scheduleMode: string; calendarDays: number[]; weekdays: number[]; endsAt?: Date | null },
+    game: {
+      isActive: boolean;
+      accessCodeVersion: number;
+      scheduleMode: string;
+      calendarDays: number[];
+      weekdays: number[];
+      endsAt?: Date | null;
+      requireCompletedOrder?: boolean;
+    },
   ) {
     if (!game.isActive) throw new BadRequestException('Game is not active');
     if (game.endsAt && game.endsAt.getTime() <= Date.now()) {
@@ -468,6 +477,29 @@ export class GamesService {
     });
     if (!access || access.accessCodeVersion !== game.accessCodeVersion) {
       throw new ForbiddenException('Enter the access code first');
+    }
+    if (game.requireCompletedOrder) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          customer: { select: { completedOrders: true } },
+          driver: { select: { id: true } },
+        },
+      });
+      if (user?.role === UserRole.CUSTOMER) {
+        if (!user.customer || user.customer.completedOrders < 1) {
+          throw new ForbiddenException('Complete at least one order to play');
+        }
+      } else if (user?.role === UserRole.DRIVER) {
+        const account = user.driver
+          ? await this.prisma.driverAccount.findUnique({
+              where: { driverId: user.driver.id },
+            })
+          : null;
+        if (!account || account.completedDeliveries < 1) {
+          throw new ForbiddenException('Complete at least one delivery to play');
+        }
+      }
     }
   }
 
@@ -487,7 +519,7 @@ export class GamesService {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
-        customer: { include: { wallet: true } },
+        customer: { select: { id: true, customerStatus: true, completedOrders: true, primaryWalletId: true } },
         driver: true,
         addresses: {
           take: 1,
@@ -503,7 +535,13 @@ export class GamesService {
       if (!user.customer || !isCustomerEligibleStatus(user.customer.customerStatus)) {
         return 'NOT_ACTIVE_USER';
       }
-      const countryId = user.customer.wallet?.countryId;
+      const primaryWallet = user.customer.primaryWalletId
+        ? await this.prisma.digitalWallet.findUnique({ where: { id: user.customer.primaryWalletId } })
+        : await this.prisma.digitalWallet.findFirst({
+            where: { customerId: user.customer.id },
+            orderBy: { updatedAt: 'asc' },
+          });
+      const countryId = primaryWallet?.countryId;
       if (!countryId || !game.countries.some((c) => c.countryId === countryId)) {
         return 'COUNTRY_NOT_ELIGIBLE';
       }

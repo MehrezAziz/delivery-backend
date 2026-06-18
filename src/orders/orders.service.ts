@@ -25,6 +25,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { rollbackDeliveryCompanyOrderFundsInTx } from '../delivery-company/company-order-budget.util';
 import { CountryCoinConfigService } from '../wallet/country-coin-config.service';
+import { WalletService } from '../wallet/wallet.service';
 
 @Injectable()
 export class OrdersService {
@@ -36,6 +37,7 @@ export class OrdersService {
     private readonly notificationsGateway: NotificationsGateway,
     private readonly eventEmitter: EventEmitter2,
     private readonly coinConfig: CountryCoinConfigService,
+    private readonly walletService: WalletService,
   ) {}
 
   // ISO code → IANA timezone mapping for night delivery auto-detection
@@ -61,6 +63,21 @@ export class OrdersService {
   }
 
   private static readonly MAX_CUSTOMER_EXTRA = 10000;
+
+  private assertSameCountryPickupDropoff(
+    pickupCountryId: string,
+    dropoffCountryId: string | undefined,
+    localPickup: boolean,
+  ): void {
+    if (localPickup || !dropoffCountryId) return;
+    if (pickupCountryId !== dropoffCountryId) {
+      throw new BadRequestException('Pickup and delivery must be in the same country');
+    }
+  }
+
+  private walletSpendable(w: { balance: unknown; lockedForTransfers?: unknown | null }): number {
+    return Math.round((Number(w.balance) - Number(w.lockedForTransfers ?? 0)) * 100) / 100;
+  }
 
   /** Optional extra on top of calculated price (errand / long service). Same unit as order price. */
   private normalizeCustomerExtraAmount(raw: unknown): number {
@@ -92,7 +109,6 @@ export class OrdersService {
   async previewOrder(userId: string, dto: PreviewOrderDto) {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-      include: { wallet: true },
     });
     if (!customer) throw new NotFoundException('Customer profile not found');
 
@@ -111,6 +127,7 @@ export class OrdersService {
     if (!pickupAddr) throw new NotFoundException('Address not found');
 
     const country = pickupAddr.delegation.governorate.country;
+    const orderCountryId = country.id;
     const isNight = this.isNightInCountry(country.isoCode);
 
     let priceCalc: Awaited<ReturnType<PriceCalculationService['calculatePrice']>>;
@@ -129,6 +146,11 @@ export class OrdersService {
         include: { delegation: { include: { governorate: { include: { country: true } } } } },
       });
       if (!dropoffAddr) throw new NotFoundException('Address not found');
+      this.assertSameCountryPickupDropoff(
+        orderCountryId,
+        dropoffAddr.delegation.governorate.countryId,
+        false,
+      );
       priceCalc = await this.priceCalculationService.calculatePrice(
         dto.pickupAddressId,
         dto.dropoffAddressId!,
@@ -143,17 +165,23 @@ export class OrdersService {
       );
     }
 
-    const walletBalance = customer.wallet
-      ? Math.round(
-          (Number(customer.wallet.balance) - Number(customer.wallet.lockedForTransfers ?? 0)) * 100,
-        ) / 100
-      : null;
+    const { wallet: orderWallet, codOnly } = await this.walletService.getOrderWalletContext(userId, orderCountryId);
+    const walletBalance = orderWallet ? this.walletSpendable(orderWallet) : null;
+    const allowedPaymentTypes: Array<'COD' | 'WALLET'> = ['COD'];
+    if (orderWallet && !codOnly) allowedPaymentTypes.push('WALLET');
 
     const extra = this.normalizeCustomerExtraAmount(dto.customerExtraAmount);
     const calculatedPrice = priceCalc.totalPrice;
     const totalPrice = Math.round((calculatedPrice + extra) * 100) / 100;
     const coinsPerFiatUnit = await this.coinConfig.getActiveCoinsPerFiatUnit(country.id);
     const totalPriceCoins = this.coinConfig.fiatToCoins(totalPrice, coinsPerFiatUnit);
+
+    let walletUnavailableReason: 'NO_WALLET' | 'COD_ONLY_PREFERENCE' | 'INSUFFICIENT_BALANCE' | undefined;
+    if (!orderWallet) walletUnavailableReason = 'NO_WALLET';
+    else if (codOnly) walletUnavailableReason = 'COD_ONLY_PREFERENCE';
+    else if (walletBalance !== null && walletBalance < totalPriceCoins) {
+      walletUnavailableReason = 'INSUFFICIENT_BALANCE';
+    }
 
     return {
       isNightDelivery: isNight,
@@ -171,7 +199,18 @@ export class OrdersService {
       coinsPerFiatUnit,
       currency: country.currencyCode,
       currencySymbol: country.currencySymbol,
+      orderCountryId,
       walletBalance,
+      wallet: orderWallet
+        ? {
+            walletId: orderWallet.id,
+            countryId: orderWallet.countryId,
+            spendable: walletBalance ?? 0,
+            currencyCode: country.currencyCode,
+          }
+        : null,
+      allowedPaymentTypes,
+      walletUnavailableReason,
       paymentType: dto.paymentType,
     };
   }
@@ -179,7 +218,6 @@ export class OrdersService {
   async createOrder(userId: string, dto: CreateOrderDto): Promise<OrderResponseDto> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-      include: { wallet: true },
     });
     if (!customer) throw new NotFoundException('Customer profile not found');
     if (customer.customerStatus !== CustomerStatus.ACTIVE) {
@@ -200,16 +238,31 @@ export class OrdersService {
     });
     if (!pickupAddr) throw new NotFoundException('Address not found');
 
-    let dropoffAddr: { id: string; latitude: number | null; longitude: number | null } | null = null;
+    const orderCountryId = pickupAddr.delegation.governorate.countryId;
+
+    let dropoffAddr: { id: string; latitude: number | null; longitude: number | null; delegation?: { governorate: { countryId: string } } } | null = null;
     if (!localPickup) {
       dropoffAddr = await this.prisma.address.findUnique({
         where: { id: dto.dropoffAddressId! },
+        include: { delegation: { include: { governorate: true } } },
       });
       if (!dropoffAddr) throw new NotFoundException('Address not found');
+      this.assertSameCountryPickupDropoff(
+        orderCountryId,
+        dropoffAddr.delegation?.governorate.countryId,
+        false,
+      );
     }
 
-    if (dto.paymentType === PaymentType.WALLET && !customer.wallet) {
-      throw new BadRequestException('You do not have a digital wallet');
+    const { wallet: orderWallet, codOnly } = await this.walletService.getOrderWalletContext(userId, orderCountryId);
+
+    if (dto.paymentType === PaymentType.WALLET) {
+      if (codOnly) {
+        throw new BadRequestException('Wallet payment is not available for this country (cash only)');
+      }
+      if (!orderWallet) {
+        throw new BadRequestException('You do not have a digital wallet for this country');
+      }
     }
 
     const isNight = this.isNightInCountry(pickupAddr.delegation.governorate.country.isoCode);
@@ -277,13 +330,12 @@ export class OrdersService {
       isScheduled = true;
     }
 
-    const coinsPerFiatUnit = await this.coinConfig.getActiveCoinsPerFiatUnit(
-      pickupAddr.delegation.governorate.country.id,
-    );
+    const coinsPerFiatUnit = await this.coinConfig.getActiveCoinsPerFiatUnit(orderCountryId);
+    let paymentWalletId: string | null = null;
     if (dto.paymentType === PaymentType.WALLET) {
-      const w = customer.wallet!;
-      const spendable =
-        Math.round((Number(w.balance) - Number(w.lockedForTransfers ?? 0)) * 100) / 100;
+      const w = orderWallet!;
+      paymentWalletId = w.id;
+      const spendable = this.walletSpendable(w);
       const priceInCoins = this.coinConfig.fiatToCoins(finalPrice, coinsPerFiatUnit);
       if (spendable < priceInCoins) {
         throw new BadRequestException('Insufficient wallet balance');
@@ -297,6 +349,8 @@ export class OrdersService {
         pickupAddressId: dto.pickupAddressId,
         dropoffAddressId: localPickup ? null : dto.dropoffAddressId,
         localPickupOnly: localPickup,
+        orderCountryId,
+        paymentWalletId,
         status: shouldAutoCancelImmediately
           ? ('AUTO_CANCELLED' as OrderStatus)
           : isScheduled
@@ -346,7 +400,7 @@ export class OrdersService {
   async changePaymentMethod(orderId: string, userId: string, dto: ChangePaymentMethodDto): Promise<OrderResponseDto> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { customer: { include: { wallet: true } } },
+      include: { customer: true, paymentWallet: true },
     }) as any;
     if (!order) throw new NotFoundException('Order not found');
     if (order.customer.userId !== userId) throw new ForbiddenException('Not your order');
@@ -358,22 +412,29 @@ export class OrdersService {
       OrderStatus.DRIVER_ARRIVED,
     ];
     if (!allowed.includes(order.status)) throw new BadRequestException('Cannot change payment method after pickup');
+    let paymentWalletId: string | null = order.paymentWalletId;
     if (dto.paymentType === PaymentType.WALLET) {
-      if (!order.customer.wallet) throw new BadRequestException('No digital wallet');
-      const w = order.customer.wallet;
-      const spendable =
-        Math.round((Number(w.balance) - Number(w.lockedForTransfers ?? 0)) * 100) / 100;
       const pickupAddr = await this.prisma.address.findUnique({
         where: { id: order.pickupAddressId },
         include: { delegation: { include: { governorate: true } } },
       });
-      const coinsPerFiatUnit = pickupAddr
-        ? await this.coinConfig.getActiveCoinsPerFiatUnit(pickupAddr.delegation.governorate.countryId)
-        : null;
+      const orderCountryId = order.orderCountryId ?? pickupAddr?.delegation.governorate.countryId;
+      if (!orderCountryId) throw new BadRequestException('Order country unknown');
+      const { wallet: orderWallet, codOnly } = await this.walletService.getOrderWalletContext(userId, orderCountryId);
+      if (codOnly || !orderWallet) throw new BadRequestException('No digital wallet for this order country');
+      paymentWalletId = orderWallet.id;
+      const spendable = this.walletSpendable(orderWallet);
+      const coinsPerFiatUnit = await this.coinConfig.getActiveCoinsPerFiatUnit(orderCountryId);
       const priceInCoins = this.coinConfig.fiatToCoins(Number(order.price), coinsPerFiatUnit);
       if (spendable < priceInCoins) throw new BadRequestException('Insufficient wallet balance');
+    } else {
+      paymentWalletId = null;
     }
-    const updated = await this.prisma.order.update({ where: { id: orderId }, data: { paymentType: dto.paymentType }, include: this.orderInclude() });
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { paymentType: dto.paymentType, paymentWalletId },
+      include: this.orderInclude(),
+    });
     return this.mapToResponseDto(updated, { viewerIsCustomer: true });
   }
 
@@ -598,7 +659,7 @@ export class OrdersService {
 
     const referrerCustomer = await tx.customer.findUnique({
       where: { id: order.customer.referredByCode.ownerId },
-      select: { userId: true },
+      select: { userId: true, primaryWalletId: true },
     });
     if (!referrerCustomer) return { paid: false };
 
@@ -613,9 +674,12 @@ export class OrdersService {
       },
     });
 
-    const rw = await tx.digitalWallet.findUnique({
-      where: { customerId: order.customer.referredByCode.ownerId },
-    });
+    const rw = referrerCustomer.primaryWalletId
+      ? await tx.digitalWallet.findUnique({ where: { id: referrerCustomer.primaryWalletId } })
+      : await tx.digitalWallet.findFirst({
+          where: { customerId: order.customer.referredByCode.ownerId },
+          orderBy: { updatedAt: 'asc' },
+        });
     if (rw) {
       const nbl = Number(rw.balance) + commissionCoins;
       await tx.digitalWallet.update({ where: { id: rw.id }, data: { balance: nbl } });
@@ -760,7 +824,8 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        customer: { include: { wallet: true, referredByCode: true, user: true } },
+        customer: { include: { referredByCode: true, user: true } },
+        paymentWallet: true,
         driverAssignment: {
           include: {
             driver: {
@@ -845,13 +910,27 @@ export class OrdersService {
             },
           });
         }
-      } else if (order.customer.wallet && order.sourceType !== OrderSourceType.DELIVERY_COMPANY) {
+      } else if (order.paymentType === PaymentType.WALLET && order.sourceType !== OrderSourceType.DELIVERY_COMPANY) {
+        let payWallet = order.paymentWallet as { id: string; balance: unknown } | null;
+        if (!payWallet && order.paymentWalletId) {
+          payWallet = await tx.digitalWallet.findUnique({ where: { id: order.paymentWalletId } });
+        }
+        if (!payWallet && order.orderCountryId) {
+          payWallet = await tx.digitalWallet.findUnique({
+            where: {
+              customerId_countryId: { customerId: order.customerId, countryId: order.orderCountryId },
+            },
+          });
+        }
+        if (!payWallet) {
+          throw new BadRequestException('Payment wallet not found for this order');
+        }
         const priceCoins = this.coinConfig.fiatToCoins(Number(order.price), coinsPerFiatUnit);
-        const nb = Number(order.customer.wallet.balance) - priceCoins;
-        await tx.digitalWallet.update({ where: { id: order.customer.wallet.id }, data: { balance: nb } });
+        const nb = Number(payWallet.balance) - priceCoins;
+        await tx.digitalWallet.update({ where: { id: payWallet.id }, data: { balance: nb } });
         await tx.walletTransaction.create({
           data: {
-            walletId: order.customer.wallet.id,
+            walletId: payWallet.id,
             orderId,
             type: WalletTransactionType.ORDER_PAYMENT,
             amount: -priceCoins,

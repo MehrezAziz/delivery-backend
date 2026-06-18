@@ -1,6 +1,7 @@
 import {
   IsBoolean,
   IsIn,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -13,7 +14,6 @@ export class CreateWithdrawalRequestDto {
   @Min(0.01)
   amount: number;
 
-  /** How the customer wants to receive fiat after staff sends money manually */
   @IsOptional()
   @IsIn(['CASH', 'BANK_TRANSFER'])
   payoutMethod?: 'CASH' | 'BANK_TRANSFER';
@@ -22,7 +22,6 @@ export class CreateWithdrawalRequestDto {
   @IsString()
   descriptionOfCustomer?: string;
 
-  /** Required when payoutMethod is BANK_TRANSFER */
   @IsOptional()
   @IsString()
   @MaxLength(200)
@@ -33,7 +32,6 @@ export class CreateWithdrawalRequestDto {
   @MaxLength(200)
   payoutBankName?: string;
 
-  /** IBAN, RIB, or account number */
   @IsOptional()
   @IsString()
   @MaxLength(120)
@@ -42,6 +40,20 @@ export class CreateWithdrawalRequestDto {
   @IsOptional()
   @IsBoolean()
   saveBankDetailsToProfile?: boolean;
+
+  @IsOptional()
+  @IsString()
+  walletId?: string;
+
+  @IsOptional()
+  @IsString()
+  countryId?: string;
+}
+
+export class CreateCountryWalletDto {
+  @IsString()
+  @IsNotEmpty()
+  countryId: string;
 }
 
 export class WalletResponseDto {

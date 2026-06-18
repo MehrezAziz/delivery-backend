@@ -592,7 +592,10 @@ model Customer {
   myReferralCode            ReferralCode?        @relation("CustomerOwnedCode")
   referredByCode            ReferralCode?        @relation("CustomerReferredBy", fields: [referredByCodeId], references: [id])
   orders                    Order[]
-  wallet                    DigitalWallet?
+  primaryWalletId           String?              @unique @map("primary_wallet_id")
+  primaryWallet             DigitalWallet?       @relation("CustomerPrimaryWallet", fields: [primaryWalletId], references: [id], onDelete: SetNull)
+  wallets                   DigitalWallet[]      @relation("CustomerWallets")
+  countryPreferences        CustomerCountryPreference[]
   ratingsGiven              Rating[]             @relation("CustomerRatings")
   commissionsAsReferrer     ReferralCommission[] @relation("ReferrerCommissions")
   commissionsAsReferred     ReferralCommission[] @relation("ReferredCommissions")
@@ -914,6 +917,8 @@ model Country {
   digitalWallets  DigitalWallet[]
   coinConfigs     CountryCoinConfig[]
   gameCountries   GameCountry[]
+  customerCountryPreferences CustomerCountryPreference[]
+  ordersInCountry Order[] @relation("OrderCountry")
 
   @@map("countries")
 }
@@ -1068,9 +1073,13 @@ model Order {
   urgentNotifyCycleId         String?   @map("urgent_notify_cycle_id")
   /// When status is PENDING_PUBLISH, drivers become eligible at this instant (UTC).
   scheduledPublishAt DateTime? @map("scheduled_publish_at")
+  orderCountryId     String?   @map("order_country_id")
+  paymentWalletId    String?   @map("payment_wallet_id")
 
   // Relations
   customer            Customer              @relation(fields: [customerId], references: [id])
+  orderCountry        Country?              @relation("OrderCountry", fields: [orderCountryId], references: [id])
+  paymentWallet       DigitalWallet?        @relation("OrderPaymentWallet", fields: [paymentWalletId], references: [id], onDelete: SetNull)
   deliveryCompany     DeliveryCompany?      @relation(fields: [deliveryCompanyId], references: [id])
   deliveryCompanyDepartment DeliveryCompanyAddress? @relation(fields: [deliveryCompanyDepartmentId], references: [id], onDelete: SetNull)
   createdByDepartmentAccount DeliveryCompanyDepartmentAccount? @relation(fields: [deliveryCompanyDepartmentAccountId], references: [id], onDelete: SetNull)
@@ -1509,7 +1518,7 @@ model CashTransaction {
 
 model DigitalWallet {
   id         String  @id @default(uuid())
-  customerId String  @unique @map("customer_id")
+  customerId String  @map("customer_id")
   balance    Decimal @default(0) @db.Decimal(10, 2)
   /// Coins reserved for outbound P2P transfers in PENDING / until settlement
   lockedForTransfers Decimal @default(0) @map("locked_for_transfers") @db.Decimal(10, 2)
@@ -1519,12 +1528,31 @@ model DigitalWallet {
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   // Relations
-  customer            Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customer            Customer             @relation("CustomerWallets", fields: [customerId], references: [id], onDelete: Cascade)
+  primaryFor          Customer?            @relation("CustomerPrimaryWallet")
   country             Country              @relation(fields: [countryId], references: [id])
   transactions        WalletTransaction[]
   withdrawalRequests  WithdrawalRequest[]
+  ordersPaid          Order[]              @relation("OrderPaymentWallet")
 
+  @@unique([customerId, countryId])
+  @@index([customerId])
   @@map("digital_wallets")
+}
+
+model CustomerCountryPreference {
+  id         String   @id @default(uuid())
+  customerId String   @map("customer_id")
+  countryId  String   @map("country_id")
+  codOnly    Boolean  @default(false) @map("cod_only")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  country  Country  @relation(fields: [countryId], references: [id])
+
+  @@unique([customerId, countryId])
+  @@map("customer_country_preferences")
 }
 
 model WalletTransaction {

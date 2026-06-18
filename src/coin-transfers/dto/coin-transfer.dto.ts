@@ -76,6 +76,15 @@ export class PreviewCoinTransferDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   grossCoins!: number;
+
+  /** Customer multi-wallet: debit this wallet (must belong to sender). */
+  @IsOptional()
+  @IsUUID()
+  walletId?: string;
+
+  @IsOptional()
+  @IsString()
+  countryId?: string;
 }
 
 export class CreateCoinTransferDto {
@@ -107,6 +116,15 @@ export class CreateCoinTransferDto {
   @IsOptional()
   @IsISO8601()
   scheduledAt?: string;
+
+  /** Customer multi-wallet: debit this wallet (must belong to sender). */
+  @IsOptional()
+  @IsUUID()
+  walletId?: string;
+
+  @IsOptional()
+  @IsString()
+  countryId?: string;
 }
 
 export class ReportCoinTransferDto {

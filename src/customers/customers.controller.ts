@@ -3,6 +3,7 @@ import {
   Get,
   Patch,
   Post,
+  Put,
   Delete,
   Body,
   Param,
@@ -15,6 +16,7 @@ import { CustomersService } from './customers.service';
 import { UpdateCustomerDto } from './dto/customer.dto';
 import { UpdateNotificationPreferencesDto } from './dto/notification-preferences.dto';
 import { SetupCustomerDto } from './dto/setup-customer.dto';
+import { UpsertCountryPreferenceDto } from './dto/country-preference.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, JwtSuperUserGuard, CustomerGuard, AdminGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
@@ -61,6 +63,22 @@ export class CustomersController {
     @Body() dto: UpdateNotificationPreferencesDto,
   ) {
     return this.customersService.updateNotificationPreferences(user.id, dto);
+  }
+
+  @UseGuards(JwtUserGuard, CustomerGuard)
+  @Get('me/country-preferences')
+  async getCountryPreferences(@CurrentUser() user: AuthenticatedUser) {
+    return this.customersService.getCountryPreferences(user.id);
+  }
+
+  @UseGuards(JwtUserGuard, CustomerGuard)
+  @Put('me/country-preferences/:countryId')
+  async upsertCountryPreference(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('countryId') countryId: string,
+    @Body() dto: UpsertCountryPreferenceDto,
+  ) {
+    return this.customersService.upsertCountryPreference(user.id, countryId, dto);
   }
 
   @UseGuards(JwtUserGuard, CustomerGuard)

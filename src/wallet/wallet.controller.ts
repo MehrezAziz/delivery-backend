@@ -12,7 +12,7 @@ import {
   DefaultValuePipe,
 } from '@nestjs/common';
 import { WalletService } from './wallet.service';
-import { CreateWithdrawalRequestDto, UpdatePayoutBankDetailsDto } from './dto/wallet.dto';
+import { CreateWithdrawalRequestDto, CreateCountryWalletDto, UpdatePayoutBankDetailsDto } from './dto/wallet.dto';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import { JwtUserGuard, CustomerGuard } from '../auth/guards/auth.guards';
 import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
@@ -22,13 +22,29 @@ import type { AuthenticatedUser } from '../auth/dto/jwt-payload.interface';
 export class WalletController {
   constructor(private readonly walletService: WalletService) {}
 
+  @Get('me/summary')
+  async getWalletsSummary(@CurrentUser() user: AuthenticatedUser) {
+    return this.walletService.getWalletsSummary(user.id);
+  }
+
+  @Post('countries')
+  async createCountryWallet(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateCountryWalletDto,
+  ) {
+    return this.walletService.createWalletForCountry(user.id, dto);
+  }
+
   /**
-   * GET /wallet/me
-   * Returns the authenticated customer's wallet info.
+   * GET /wallet/me — primary wallet, or ?countryId= / ?walletId=
    */
   @Get('me')
-  async getMyWallet(@CurrentUser() user: AuthenticatedUser) {
-    return this.walletService.getMyWallet(user.id);
+  async getMyWallet(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('countryId') countryId?: string,
+    @Query('walletId') walletId?: string,
+  ) {
+    return this.walletService.getMyWallet(user.id, { countryId, walletId });
   }
 
   /**
@@ -40,8 +56,10 @@ export class WalletController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('walletId') walletId?: string,
+    @Query('countryId') countryId?: string,
   ) {
-    return this.walletService.getMyTransactions(user.id, page, limit);
+    return this.walletService.getMyTransactions(user.id, page, limit, { walletId, countryId });
   }
 
   /**
@@ -62,8 +80,10 @@ export class WalletController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('walletId') walletId?: string,
+    @Query('countryId') countryId?: string,
   ) {
-    return this.walletService.getMyWithdrawalRequests(user.id, page, limit);
+    return this.walletService.getMyWithdrawalRequests(user.id, page, limit, { walletId, countryId });
   }
 
   /**
@@ -104,9 +124,11 @@ export class WalletController {
   async getWithdrawalQuote(
     @CurrentUser() user: AuthenticatedUser,
     @Query('amount') amountStr: string,
+    @Query('walletId') walletId?: string,
+    @Query('countryId') countryId?: string,
   ) {
     const amount = Number(amountStr);
-    return this.walletService.getWithdrawalQuote(user.id, amount);
+    return this.walletService.getWithdrawalQuote(user.id, amount, { walletId, countryId });
   }
 
   /**

@@ -29,6 +29,8 @@ type ResolvedCoinContext = {
   coinsPerFiatUnit: number;
 };
 
+type WalletLookup = { walletId?: string; countryId?: string };
+
 /** Flouci Tunisian amount is in millimes (1.000 TND = 1000 millimes). */
 function toTndMillimes(fiatMajor: number): number {
   if (!Number.isFinite(fiatMajor) || fiatMajor <= 0) return 0;
@@ -59,8 +61,8 @@ export class CoinTopupService {
     private readonly events: EventEmitter2,
   ) {}
 
-  async getQuote(userId: string, role: UserRole) {
-    const ctx = await this.resolveContext(userId, role);
+  async getQuote(userId: string, role: UserRole, lookup?: WalletLookup) {
+    const ctx = await this.resolveContext(userId, role, lookup);
 
     const minCoins = this.config.get<number>('COIN_TOPUP_MIN_COINS', 50);
     const maxCoins = this.config.get<number>('COIN_TOPUP_SLIDER_MAX_COINS', 5_000);
@@ -95,8 +97,13 @@ export class CoinTopupService {
     };
   }
 
-  async initFlouciSession(userId: string, role: UserRole, rawCoinsAmount: number) {
-    const ctx = await this.resolveContext(userId, role);
+  async initFlouciSession(
+    userId: string,
+    role: UserRole,
+    rawCoinsAmount: number,
+    lookup?: WalletLookup,
+  ) {
+    const ctx = await this.resolveContext(userId, role, lookup);
     if (ctx.currencyCode !== 'TND') {
       throw new BadRequestException(
         'Coin purchase by card via Flouci is only available for Tunisia (TND) wallets.',
@@ -459,7 +466,7 @@ export class CoinTopupService {
 
         if (lock.payerRole === CoinTopupPayerRole.CUSTOMER) {
           const wallet = await tx.digitalWallet.findFirst({
-            where: { customer: { userId: lock.userId } },
+            where: { customer: { userId: lock.userId }, countryId: lock.countryId },
             select: { id: true },
           });
           if (!wallet) {
@@ -547,7 +554,11 @@ export class CoinTopupService {
       .catch(() => undefined);
   }
 
-  private async resolveContext(userId: string, role: UserRole): Promise<ResolvedCoinContext> {
+  private async resolveContext(
+    userId: string,
+    role: UserRole,
+    lookup?: WalletLookup,
+  ): Promise<ResolvedCoinContext> {
     const now = new Date();
 
     const activeCfg = async (countryId: string) =>
@@ -562,10 +573,7 @@ export class CoinTopupService {
       });
 
     if (role === UserRole.CUSTOMER) {
-      const wallet = await this.prisma.digitalWallet.findFirst({
-        where: { customer: { userId } },
-        select: { countryId: true, country: { select: { currencyCode: true, currencySymbol: true } } },
-      });
+      const wallet = await this.resolveCustomerWallet(userId, lookup);
       if (!wallet) throw new NotFoundException('Wallet not found');
 
       const cfg = await activeCfg(wallet.countryId);
@@ -619,6 +627,51 @@ export class CoinTopupService {
     }
 
     throw new ForbiddenException('Unsupported role');
+  }
+
+  private async resolveCustomerWallet(userId: string, lookup?: WalletLookup) {
+    const customer = await this.prisma.customer.findUnique({ where: { userId } });
+    if (!customer) return null;
+
+    if (lookup?.walletId) {
+      return this.prisma.digitalWallet.findFirst({
+        where: { id: lookup.walletId, customerId: customer.id },
+        select: {
+          countryId: true,
+          country: { select: { currencyCode: true, currencySymbol: true } },
+        },
+      });
+    }
+
+    if (lookup?.countryId) {
+      return this.prisma.digitalWallet.findUnique({
+        where: { customerId_countryId: { customerId: customer.id, countryId: lookup.countryId } },
+        select: {
+          countryId: true,
+          country: { select: { currencyCode: true, currencySymbol: true } },
+        },
+      });
+    }
+
+    if (customer.primaryWalletId) {
+      const primary = await this.prisma.digitalWallet.findUnique({
+        where: { id: customer.primaryWalletId },
+        select: {
+          countryId: true,
+          country: { select: { currencyCode: true, currencySymbol: true } },
+        },
+      });
+      if (primary) return primary;
+    }
+
+    return this.prisma.digitalWallet.findFirst({
+      where: { customerId: customer.id },
+      orderBy: { updatedAt: 'asc' },
+      select: {
+        countryId: true,
+        country: { select: { currencyCode: true, currencySymbol: true } },
+      },
+    });
   }
 
   private flouciAuthorization(): string | null {

@@ -19,6 +19,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+// getCurrentPeriod is used when endsAt closes an in-progress period early
 import {
   getCurrentPeriod,
   getPreviousPeriod,
@@ -38,10 +39,15 @@ export class GamesDrawService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  @Cron('*/15 * * * *')
+  @Cron('* * * * *')
   async processDrawsCron() {
     const games = await this.prisma.game.findMany({
-      where: { isActive: true },
+      where: {
+        OR: [
+          { isActive: true },
+          { draws: { some: { status: GameDrawStatus.OPEN } } },
+        ],
+      },
       include: {
         prizeTiers: { orderBy: { rank: 'asc' } },
       },
@@ -75,34 +81,53 @@ export class GamesDrawService {
       }[];
     },
   ) {
-    const prev = getPreviousPeriod(game);
+    const now = new Date();
+    const periods = new Map<string, GamePeriodBounds>();
+    const prev = getPreviousPeriod(game, now);
+    periods.set(prev.periodKey, prev);
+
+    if (game.endsAt && game.endsAt.getTime() <= now.getTime()) {
+      const current = getCurrentPeriod(game, now);
+      periods.set(current.periodKey, current);
+    }
+
     const scopes =
       game.winnerPoolMode === GameWinnerPoolMode.SEPARATE_BY_ROLE
         ? ['CUSTOMER', 'DRIVER']
         : ['COMBINED'];
 
-    for (const poolScope of scopes) {
-      let draw = await this.prisma.gameDraw.findFirst({
-        where: {
-          gameId: game.id,
-          periodStart: prev.periodStart,
-          periodEnd: prev.periodEnd,
-          poolScope,
-        },
-      });
-      if (!draw) {
-        draw = await this.prisma.gameDraw.create({
-          data: {
+    for (const period of periods.values()) {
+      const periodEnded = period.periodEnd.getTime() <= now.getTime();
+      const current = getCurrentPeriod(game, now);
+      const forceEarlyClose =
+        !!game.endsAt &&
+        game.endsAt.getTime() <= now.getTime() &&
+        period.periodKey === current.periodKey;
+      if (!periodEnded && !forceEarlyClose) continue;
+
+      for (const poolScope of scopes) {
+        let draw = await this.prisma.gameDraw.findFirst({
+          where: {
             gameId: game.id,
-            periodStart: prev.periodStart,
-            periodEnd: prev.periodEnd,
+            periodStart: period.periodStart,
+            periodEnd: period.periodEnd,
             poolScope,
-            status: GameDrawStatus.OPEN,
           },
         });
+        if (!draw) {
+          draw = await this.prisma.gameDraw.create({
+            data: {
+              gameId: game.id,
+              periodStart: period.periodStart,
+              periodEnd: period.periodEnd,
+              poolScope,
+              status: GameDrawStatus.OPEN,
+            },
+          });
+        }
+        if (draw.status !== GameDrawStatus.OPEN) continue;
+        await this.runDrawForScope(game, draw.id, period, poolScope);
       }
-      if (draw.status !== GameDrawStatus.OPEN) continue;
-      await this.runDrawForScope(game, draw.id, prev, poolScope);
     }
   }
 
@@ -127,6 +152,12 @@ export class GamesDrawService {
     }
 
     const tiers = game.prizeTiers;
+    if (tiers.length === 0) {
+      this.logger.warn(
+        `Draw ${drawId} for game ${game.id} has eligible players but no prize tiers configured`,
+      );
+      return;
+    }
     const picks: EligibleUser[] = [];
     const pool = [...eligible];
 
@@ -221,7 +252,16 @@ export class GamesDrawService {
     });
     const blocked = new Set(recentWinners.map((w) => w.userId));
 
-    const answers = await this.prisma.gameAnswer.groupBy({
+    const allAnswers = await this.prisma.gameAnswer.groupBy({
+      by: ['userId'],
+      where: {
+        gameId: game.id,
+        answeredAt: { gte: periodStart, lt: periodEnd },
+      },
+      _count: { _all: true },
+    });
+
+    const correctAnswers = await this.prisma.gameAnswer.groupBy({
       by: ['userId'],
       where: {
         gameId: game.id,
@@ -230,10 +270,20 @@ export class GamesDrawService {
       },
       _count: { _all: true },
     });
+    const correctByUser = new Map(
+      correctAnswers.map((row) => [row.userId, row._count._all]),
+    );
+    const soleParticipant = allAnswers.length === 1 ? allAnswers[0].userId : null;
 
     const result: EligibleUser[] = [];
-    for (const row of answers) {
+    for (const row of allAnswers) {
       if (blocked.has(row.userId)) continue;
+
+      let weight = correctByUser.get(row.userId) ?? 0;
+      if (weight === 0 && row.userId === soleParticipant) {
+        weight = 1;
+      }
+      if (weight === 0) continue;
       const user = await this.prisma.user.findUnique({
         where: { id: row.userId },
         include: {
@@ -260,7 +310,7 @@ export class GamesDrawService {
       result.push({
         userId: user.id,
         userRole: user.role,
-        weight: row._count._all,
+        weight,
       });
     }
     return result;
@@ -360,9 +410,18 @@ export class GamesDrawService {
   ) {
     if (amount <= 0) return;
     if (role === UserRole.CUSTOMER) {
-      const wallet = await this.prisma.digitalWallet.findFirst({
-        where: { customer: { userId } },
+      const customer = await this.prisma.customer.findUnique({
+        where: { userId },
+        select: { id: true, primaryWalletId: true },
       });
+      const wallet = customer?.primaryWalletId
+        ? await this.prisma.digitalWallet.findUnique({ where: { id: customer.primaryWalletId } })
+        : customer
+          ? await this.prisma.digitalWallet.findFirst({
+              where: { customerId: customer.id },
+              orderBy: { updatedAt: 'asc' },
+            })
+          : null;
       if (!wallet) return;
       await this.prisma.$transaction(async (tx) => {
         const updated = await tx.digitalWallet.update({
@@ -464,7 +523,7 @@ export class GamesDrawService {
       where: {
         notifyGameEvents: true,
         customerStatus: { in: ['ACTIVE', 'VERIFIED'] },
-        wallet: { countryId: { in: countryIds } },
+        wallets: { some: { countryId: { in: countryIds } } },
       },
       select: { userId: true },
     });

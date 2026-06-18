@@ -7,6 +7,14 @@ export class InitFlouciTopUpDto {
   @Max(100_000)
   @Type(() => Number)
   coinsAmount!: number;
+
+  @IsOptional()
+  @IsString()
+  walletId?: string;
+
+  @IsOptional()
+  @IsString()
+  countryId?: string;
 }
 
 export class VerifyFlouciTopUpDto {
